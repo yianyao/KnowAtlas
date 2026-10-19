@@ -1,7 +1,8 @@
 """classify_coarse 三级流水线（完整方案 §9.1）。
 
-M0.5 实现 L1 先验 + L2 规则；L3（embedding 聚类 + LLM 命名）在 M4 接入——
-ctx.llm / ctx.embedder 为 None 时该级跳过，绝不硬猜（无结果 = 进暂存区）。
+L1 先验 + L2 规则 + L3 LLM（0.2.0 提前接入，classify_deep）：
+- ctx.llm 为 None（未启用 / key 未设）时 L3 跳过，未命中进暂存区，绝不硬猜；
+- L1/L2 命中不消耗 LLM 调用（成本纪律）。
 """
 
 from __future__ import annotations
@@ -10,13 +11,14 @@ from ...registry.capability import CapabilitySpec
 from ..base import Classification, SemanticInput, SemanticOutput, TaskContext
 from ..priors import match_prior
 from ..rules import match_rule
+from .classify_deep import run as run_deep
 
 SPEC = CapabilitySpec(
     name="classify_coarse",
     input_contract={"SemanticInput": "list（title/body/native_path/meta.source_type）"},
     output_contract={"SemanticOutput": "list；classifications 为空 = 无法归类"},
-    version="1.0.0",
-    description="三级流水线：L1 先验（native_path）→ L2 规则（关键词）→ L3 embedding+LLM（M4）",
+    version="1.1.0",
+    description="三级流水线：L1 先验（native_path）→ L2 规则（关键词）→ L3 LLM（classify_deep）",
 )
 
 
@@ -33,6 +35,14 @@ def run(inputs: list[SemanticInput], ctx: TaskContext) -> list[SemanticOutput]:
             if rule:
                 classifications.append(Classification(rule, 0.8, "rule"))
 
-        # L3（embedding + LLM）占位：M4 接入；ctx.llm/ctx.embedder 为 None 时跳过
         outputs.append(SemanticOutput(classifications=classifications))
+
+    # L3：对 L1/L2 未命中的条目批量走 LLM（llm 不可用时 run_deep 原样返回空）
+    pending = [i for i, (inp, out) in enumerate(zip(inputs, outputs))
+               if not out.classifications]
+    if pending and ctx.llm is not None:
+        deep = run_deep([inputs[i] for i in pending], ctx)
+        for i, out in zip(pending, deep):
+            if out.classifications:
+                outputs[i] = out
     return outputs

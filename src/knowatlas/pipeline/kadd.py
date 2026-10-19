@@ -95,16 +95,20 @@ def ingest_url(cfg: Any, dl: Any, locators: LocatorRegistry, semantics: Semantic
                 {"url": url, "canonical": canon, "fetched": fetched,
                  **({"fetch_error": fetch_error} if fetch_error else {})})
 
-    # ---- 分类（L1/L2；未命中 → 未分类暂存区）----
+    # ---- 分类（L1/L2/L3；未命中 → 未分类暂存区）----
     categorized = False
     if text or entry.inline_content:
         _, classify = semantics.resolve_task("classify_coarse")
+        from ..semantic.llm import LlmClient
+
         known = frozenset(dl.all_category_paths())
         outputs = classify(
             [SemanticInput(entry_id=entry.id, title=entry.title,
                            body=text or entry.inline_content,
-                           native_path=entry.native_path, meta=entry.meta)],
-            TaskContext(run_id=run_id, known_paths=known),
+                           native_path=entry.native_path,
+                           meta={**entry.meta, "locator": url})],
+            TaskContext(run_id=run_id, known_paths=known,
+                        llm=LlmClient.from_config(cfg), config=cfg),
         )
         for classification in outputs[0].classifications:
             cid = ensure_category_path(dl, classification.category_path, classification.origin)

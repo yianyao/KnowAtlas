@@ -25,4 +25,4 @@ def test_unknown_scheme_rejected(registries):
 def test_builtin_specs_present(registries):
     locators, semantics = registries
     assert {"http", "https", "file"} == {s.name for s in locators.specs()}
-    assert {"classify_coarse", "tag_keywords"} == {s.name for s in semantics.specs()}
+    assert {"classify_coarse", "classify_deep", "tag_keywords"} == {s.name for s in semantics.specs()}

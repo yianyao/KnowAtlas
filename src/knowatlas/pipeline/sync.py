@@ -51,24 +51,29 @@ _SOURCE_FIELDS = ("title", "locator", "locator_canonical", "native_path",
                   "inline_content", "content_hash")
 
 
-def _categorize(dl: Any, semantics: Any, entries: list[Entry], new_ids: set[str],
+def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids: set[str],
                 updated_ids: set[str], run_id: str) -> dict[str, int]:
     """对本次新建/更新条目批量跑 classify_coarse；未命中进暂存区（不挂分类）。
 
     更新条目（书签移动文件夹、标题变化等）先 detach 机器来源（origin != manual）
     的旧挂接再重挂——人工校正（origin=manual）永不覆盖（H3）。
+    L3 LLM：cfg 的 [llm] 启用且 key 已设时自动生效，否则静默跳过。
     """
     targets = [e for e in entries if e.id in new_ids or e.id in updated_ids]
     if not targets:
         return {"classified": 0, "staged": 0, "reclassified": 0}
     _, classify = semantics.resolve_task("classify_coarse")
+    from ..semantic.llm import LlmClient
+
     known = frozenset(dl.all_category_paths())
     inputs = [
         SemanticInput(entry_id=e.id, title=e.title, body=e.inline_content,
-                      native_path=e.native_path, meta=e.meta)
+                      native_path=e.native_path,
+                      meta={**e.meta, "locator": e.locator})
         for e in targets
     ]
-    outputs = classify(inputs, TaskContext(run_id=run_id, known_paths=known))
+    outputs = classify(inputs, TaskContext(run_id=run_id, known_paths=known,
+                                           llm=LlmClient.from_config(cfg), config=cfg))
     classified = staged = 0
     for entry, out in zip(targets, outputs):
         if entry.id in updated_ids:
@@ -144,14 +149,69 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
     return {"fetched": done, "fetch_failed": failed}
 
 
+def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str, Any]:
+    """全量重分类：active 条目重跑 classify_coarse 三级流水线。
+
+    - 含人工校正（origin=manual）挂接的条目整条跳过——人工结论优先于机器（H3）；
+    - 其余条目先 detach 全部机器分类再重挂（先验/规则/L3 按当前版本重新评估）；
+    - [llm] 未启用 / key 未设时 L3 静默跳过，结果 = 先验+规则（stats.llm_used=false）。
+    """
+    from ..semantic.base import SemanticInput, TaskContext
+    from ..semantic.llm import LlmClient
+
+    llm = LlmClient.from_config(cfg)
+    _, classify = semantics.resolve_task("classify_coarse")
+    known = frozenset(dl.all_category_paths())
+    entries = dl.list_entries(status="active", limit=10000)
+    targets = [e for e in entries
+               if not any(l["origin"] == "manual" for l in dl.get_entry_categories(e.id))]
+    classified = staged = 0
+    max_batch = int(cfg.get("llm.max_batch", 20) or 20)
+    for i in range(0, len(targets), max_batch):
+        chunk = targets[i:i + max_batch]
+        for e in chunk:
+            for link in dl.get_entry_categories(e.id):
+                if link["origin"] != "manual":
+                    dl.detach_category(e.id, link["category_id"])
+        outputs = classify(
+            [SemanticInput(entry_id=e.id, title=e.title, body=e.inline_content,
+                           native_path=e.native_path,
+                           meta={**e.meta, "locator": e.locator}) for e in chunk],
+            TaskContext(run_id=run_id, known_paths=known, llm=llm, config=cfg),
+        )
+        for e, out in zip(chunk, outputs):
+            if not out.classifications:
+                staged += 1
+                continue
+            for classification in out.classifications:
+                cid = ensure_category_path(dl, classification.category_path,
+                                           classification.origin)
+                dl.attach_category(e.id, cid, classification.confidence,
+                                   classification.origin, run_id)
+            classified += 1
+    stats = {"reclassify_total": len(targets), "classified": classified,
+             "staged": staged, "llm_used": llm is not None}
+    dl.log_task(_now_iso(), "sync", "reclassify", "all",
+                {k: v for k, v in stats.items()})
+    return stats
+
+
 def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              full: bool = False, source: str | None = None, dry_run: bool = False,
-             limit: int | None = None, fetch_limit: int | None = None) -> dict[str, Any]:
-    """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。"""
+             limit: int | None = None, fetch_limit: int | None = None,
+             reclassify: bool = False) -> dict[str, Any]:
+    """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
+
+    reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
+    """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
     dl.start_run(run_id, kind)
     stats: dict[str, Any] = {"sources": {}}
+    if reclassify:
+        stats["reclassify"] = _reclassify_all(cfg, dl, semantics, run_id)
+        dl.finish_run(run_id, stats)
+        return {"run_id": run_id, **stats}
 
     for name, collector in _BATCH_COLLECTORS.items():
         if source is not None and source != name:
@@ -190,7 +250,7 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
                         {"count": len(revived_ids), "source_type": "bookmark"})
-        cat = _categorize(dl, semantics, entries, new_ids, updated_ids, run_id)
+        cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id)
 
         src_stats: dict[str, Any] = {
             "entries": len(entries),

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from ..fetchers import file_reader, http_simple
-from ..semantic.tasks import classify_coarse, tag_keywords
+from ..semantic.tasks import classify_coarse, classify_deep, tag_keywords
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
 
@@ -32,5 +32,6 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
 
     semantics = SemanticRegistry()
     semantics.register(classify_coarse.SPEC, classify_coarse.run)
+    semantics.register(classify_deep.SPEC, classify_deep.run)
     semantics.register(tag_keywords.SPEC, tag_keywords.run)
     return locators, semantics

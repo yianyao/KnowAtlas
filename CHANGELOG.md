@@ -96,3 +96,24 @@
   task_log 记录前后值）；UI 条目卡片悬停出「⇄改分类」按钮。
 - **测试**：`tests/test_web_api.py` 4 项（分类 CRUD 流、recategorize 人工覆盖语义、
   图数据形状、写守卫 403）；全量 42 项通过。
+
+### 新增（0.2.0 第四批：先验收敛 + L3 LLM 语义分类提前落，用户定调"分类树由内容决定，不由文件夹决定"）
+
+- **先验映射收敛**（`semantic/priors.py`）：「软件开发」并入「技术开发」（RULES 同步）；
+  「工具站/自学/综合/other」等随手命名的碎片文件夹**取消映射**——放行给 L2 规则与
+  L3 LLM 语义分类。真实数据重评（`ksync --reclassify`）：顶层类 7 → 5
+  （技术开发 169 / 人工智能 130 / 华为云 13 / 软件与ERP 5 / 文学创作 3），71 条弱信号
+  条目进暂存区等待语义分类。
+- **L3 LLM 语义分类**（`semantic/llm.py` + `semantic/tasks/classify_deep.py`，原计划 M4 提前）：
+  classify_coarse 升级为三级流水线 L1 先验 → L2 规则 → L3 LLM（classify_coarse SPEC 升 1.1.0）；
+  DeepSeek 兼容 Chat API，批量（llm.max_batch）控成本，候选路径优先归并、允许提议新路径；
+  key 未设 → L3 静默跳过（行为同 0.1.0）；单批失败降级暂存区不中断；
+  **L1/L2 命中不消耗 LLM 调用**（成本纪律）。
+- **`ksync --reclassify`**：对库中全部 active 条目重跑三级流水线——含人工校正（manual）
+  挂接的条目整条跳过；`DataLayer.list_entries`（接口扩展）。**设好
+  `KNOWATLAS_LLM_API_KEY` 后执行一次即可让全库条目按内容语义重新归类**。
+- **TaskContext** 契约扩展：新增 `config` 字段（任务读取自身参数）；`llm` 字段启用。
+- **契约面更新（有意变更，canary 重录）**：capabilities 新增 classify_deep@1.0.0
+  （canary capabilities 摘要 c94f8aba17ad → 3c9e3746e55a）；test_contract 能力白名单同步。
+- **测试**：`tests/test_classify_deep.py` 6 项（JSON 容错提取、llm=None 跳过、批量解析与
+  故障隔离、L1 命中不调 LLM、L3 兜底、reclassify 跳过 manual）；全量 48 项通过。

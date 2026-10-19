@@ -470,6 +470,14 @@ class DataLayer:
             for r in rows
         ]
 
+    def list_entries(self, status: str = "active", limit: int = 2000) -> list[Entry]:
+        """按状态列出条目（reclassify 等全量遍历场景用；默认上限 2000 防失控）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status=? ORDER BY rowid LIMIT ?",
+            (status, limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     def get_graph_data(self, max_entries: int = 400) -> dict[str, Any]:
         """关系图数据（结构关系 v0）：分类节点 + 条目节点 + 域名节点。
 

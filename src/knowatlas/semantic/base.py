@@ -32,6 +32,7 @@ class SemanticOutput:
 @dataclass(frozen=True)
 class TaskContext:
     run_id: str
-    llm: Any | None = None       # llm.enabled=false 时为 None
+    llm: Any | None = None       # llm.enabled=false 或 key 未设时为 None（L3 跳过）
     embedder: Any | None = None  # optional 依赖缺失时为 None
     known_paths: frozenset[str] = frozenset()  # 现有分类路径（任务须优先归并）
+    config: Any | None = None    # Config 访问器（任务读取自身参数如 llm.max_batch）
