@@ -64,6 +64,21 @@ def test_collect_missing_root_raises(cfg, tmp_path):
         collect_folders(cfg)
 
 
+def test_collect_filters(cfg, folder_tree, tmp_path):
+    """过滤规则：exclude_globs 黑名单 + include_exts 白名单；被排除文件不进删除检测。"""
+    (folder_tree / "cj_session1abc").write_bytes(b"junk")      # 无扩展名会话数据
+    _enable(cfg, folder_tree)
+    cfg._data["sources"]["folders"].update({
+        "exclude_globs": ["cj_session*", "README*"],
+        "include_exts": [".txt", ".pdf", ".xlsx"],
+    })
+    out = collect_folders(cfg)
+    keys = {e.locator.removeprefix("file://") for e in out.entries}    # include_exts 白名单：txt/pdf/xlsx 保留，md 被排除
+    assert keys == {"笔记.txt", "ERP/进销存.xlsx", "ERP/报表/2026年报.pdf"}
+    assert out.stats["skipped_excluded"] == 2   # cj_session1abc + README.md
+    assert out.stats["skipped_ext"] == 1        # 无后缀文件
+
+
 def test_sync_folders_end_to_end(cfg, dl, registries, tmp_path, folder_tree):
     """首跑入库 + 分类；二跑幂等；full 删除检测（文件删除 → archived）。"""
     _enable(cfg, folder_tree)

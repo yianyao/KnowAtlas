@@ -10,12 +10,16 @@
 - meta.file_kind = document / pdf / office / other（TODO Phase 1：文档/PDF/其他分类标记）；
 - 隐藏文件（. 开头）、Office 临时文件（~$ 开头）、符号链接跳过并计数。
 
-多个 roots 下出现相同相对路径时：各建条目（source_key 相同 → 后者覆盖前者 upsert），
-stats.duplicate_rel 计数警告——个人库场景 roots 内容不应重叠。
+过滤（0.2.0 补充，用户反馈：roots 里混入会话数据等非知识文件不该进条目）：
+- exclude_globs：fnmatch 黑名单（匹配文件名或相对路径，如 "cj_session*"）；
+- include_exts：扩展名白名单（如 [".txt", ".md", ".pdf"]）——设置后白名单外直接排除；
+- 被排除文件不建条目、不计入 seen_rel，不参与 archive_missing 删除检测；
+- 排除动作统计进 stats（skipped_excluded / skipped_ext）。
 """
 
 from __future__ import annotations
 
+import fnmatch
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -51,10 +55,12 @@ def collect_folders(config: Any) -> AdapterOutput:
     if not roots:
         raise AdapterError("[sources.folders].roots 为空",
                            hint="在 config/knowatlas.toml 填写要收录的根目录（绝对路径）")
+    exclude_globs = [str(g) for g in (config.get("sources.folders.exclude_globs") or [])]
+    include_exts = {str(x).lower() for x in (config.get("sources.folders.include_exts") or [])}
     entries: list[Entry] = []
     stats: dict[str, Any] = {
-        "skipped_hidden": 0, "skipped_symlink": 0, "duplicate_rel": 0,
-        "roots_ok": [], "seen_rel": set(),
+        "skipped_hidden": 0, "skipped_symlink": 0, "skipped_excluded": 0,
+        "skipped_ext": 0, "duplicate_rel": 0, "roots_ok": [], "seen_rel": set(),
     }
     over = 0
     for root_str in roots:
@@ -73,13 +79,20 @@ def collect_folders(config: Any) -> AdapterOutput:
                 stats["skipped_hidden"] += 1
                 continue
             rel = p.relative_to(root).as_posix()
+            suffix = p.suffix.lower()
+            if any(fnmatch.fnmatch(p.name, g) or fnmatch.fnmatch(rel, g)
+                   for g in exclude_globs):
+                stats["skipped_excluded"] += 1
+                continue
+            if include_exts and suffix not in include_exts:
+                stats["skipped_ext"] += 1
+                continue
             if rel in stats["seen_rel"]:
                 stats["duplicate_rel"] += 1
             stats["seen_rel"].add(rel)
             if len(entries) >= _MAX_FILES:
                 over += 1
                 continue
-            suffix = p.suffix.lower()
             entries.append(Entry.build(
                 source_type="folder",
                 source_key=rel,

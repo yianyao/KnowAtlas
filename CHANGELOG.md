@@ -215,3 +215,13 @@
   （http_proxy 环境变量）对本地 fixture 请求的转发不稳定，导致 kadd 端到端在多文件
   组合跑时偶发假挂（与 uv 验证期踩坑同源：httpx trust_env 读代理）。
 - **测试**：全量 64 项通过（含组合跑回归验证）。
+
+### 新增（0.2.0 第十一批：文件夹源过滤规则，用户截图反馈"会话数据文件混进条目"）
+
+- **[sources.folders] 过滤**：`exclude_globs`（fnmatch 黑名单，匹配文件名或相对路径）
+  + `include_exts`（扩展名白名单，设置后白名单外直接排除）。被排除文件不建条目、
+  不参与 archive_missing 删除检测，排除计数进 stats（skipped_excluded / skipped_ext）。
+  真实 dry-run：roots=D:/Data/百卓，**966 条候选入清单、8706 个非知识文件被白名单排除**。
+- 用户本地 config 已回写过滤规则（include_exts 六类文档 + cj_session* 黑名单），
+  并修正无效写法 `meta.file_kind`（非配置项）。
+- **测试**：过滤规则用例 1 项；全量 65 项通过。
