@@ -607,6 +607,25 @@ class DataLayer:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def merge_meta(self, entry_id: str, patch: dict[str, Any]) -> None:
+        """合并写入条目 meta（浅合并 patch；条目不存在时静默跳过）。"""
+        with self.transaction() as conn:
+            row = conn.execute("SELECT meta FROM entries WHERE id=?", (entry_id,)).fetchone()
+            if row is None:
+                return
+            meta = json.loads(row["meta"])
+            meta.update(patch)
+            conn.execute("UPDATE entries SET meta=? WHERE id=?", (_meta_json(meta), entry_id))
+
+    def list_by_value_flag(self, value_flag: str, limit: int = 500) -> list[Entry]:
+        """按价值标记列出条目（meta.value_flag；not_knowledge = LLM 判非知识，待用户清理）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status='active'"
+            "   AND json_extract(meta, '$.value_flag')=? ORDER BY rowid LIMIT ?",
+            (value_flag, limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""
         cats = {r["id"]: dict(r) for r in

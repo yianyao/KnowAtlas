@@ -76,6 +76,9 @@ def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids
                                            llm=LlmClient.from_config(cfg), config=cfg))
     classified = staged = 0
     for entry, out in zip(targets, outputs):
+        if "not_knowledge" in out.tags and entry.meta.get("value_flag") != "ok":
+            # LLM 判非知识 → 待清理候选；用户已否决（value_flag=ok）的不再标记
+            dl.merge_meta(entry.id, {"value_flag": "not_knowledge"})
         if entry.id in updated_ids:
             # 旧机器分类清理：书签换文件夹等场景下避免新旧分类并存
             for link in dl.get_entry_categories(entry.id):
@@ -197,6 +200,9 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
             TaskContext(run_id=run_id, known_paths=known, llm=llm, config=cfg),
         )
         for e, out in zip(chunk, outputs):
+            if "not_knowledge" in out.tags and e.meta.get("value_flag") != "ok":
+                # LLM 判非知识 → 待清理候选；用户已否决的不再标记
+                dl.merge_meta(e.id, {"value_flag": "not_knowledge"})
             if not out.classifications:
                 staged += 1
                 continue

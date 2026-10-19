@@ -167,3 +167,20 @@
 - **测试**：`tests/test_health.py` 2 项（mock 检测函数，meta 写入与分级查询）；全量 54 项通过。
 - 后续（M2 正文层）：folder 源的乱码/不可读文件走既有 `DegradedParseError` 降级标记；
   死链重测多次仍失败可升级处理策略（未实现，先观察误报率）。
+
+### 新增（0.2.0 第八批：非知识判定 + 写令牌体验，用户定调"非具体知识的条目没有保留价值"）
+
+- **LLM 非知识判定**（classify_deep 同一次调用附带，零额外成本）：prompt 增加 kind 字段
+  （knowledge = 具体自洽的知识内容 / non = 站点门户、导航首页、资源列表、纯资源文件）；
+  判 non 的条目写 `meta.value_flag="not_knowledge"`，**不自动舍弃**——保留决定权在用户。
+- **待清理候选视图**：`GET /api/not-knowledge` + 侧栏「🔬 待清理候选」——单条 🚫舍弃 /
+  「↩是知识，保留」（`POST /api/entries/{id}/unflag` 清标记）；**用户否决被后续重评尊重**
+  （value_flag=ok 的条目不再标记，防 LLM 反复骚扰）。
+- **`DataLayer.merge_meta` / `list_by_value_flag`**（接口扩展）；health.py 体检改用
+  merge_meta（同款模式简化）。
+- **写令牌体验**：serve 启动时 KNOWATLAS_WEB_TOKEN 未设 → 自动生成本次会话令牌并打印
+  （安全不降级——token 仍必填，仅由工具代生成，H5 第 3 条不变）；UI 弹窗文案说明
+  「与 LLM 无关，是防冒充写操作的安全措施，值在 serve 启动日志」。
+- **测试**：kind 解析、否决尊重等 2 项；全量 56 项通过。
+- **真实数据验证**：391 条重评 13 秒，LLM 判出 30 条非知识候选——全部命中门户/素材站/
+  自学平台首页/Your Repositories 类型（正是用户点名的"要来也没用"的条目）。

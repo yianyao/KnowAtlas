@@ -55,32 +55,19 @@ def check_link(url: str, timeout: float = 10.0) -> tuple[str, int]:
 
 def run_health_check(cfg: Any, dl: Any, *, limit: int = 100,
                      qps: float = 4.0) -> dict[str, Any]:
-    """体检入口：逐条检测、写 meta（人工键 manual_* 保留）。返回统计。"""
+    """体检入口：逐条检测、merge_meta 写结果。返回统计。"""
     entries = [e for e in dl.list_entries(status="active", limit=10000)
                if e.locator_canonical is not None]  # 仅 http(s)
     entries = entries[:limit]
     counts = {"ok": 0, "dead": 0, "blocked": 0, "error": 0}
     checked_at = _now_iso()
-    updates: list[Entry] = []
     for i, e in enumerate(entries):
         status, code = check_link(e.locator)
         counts[status] += 1
-        meta = dict(e.meta)
-        meta["link_status"] = status
-        meta["link_code"] = code
-        meta["link_checked_at"] = checked_at
-        # _apply_content 同款：人工键保留由 upsert 负责；此处重建 entry 走 upsert 更新
-        updates.append(Entry(
-            id=e.id, source_type=e.source_type, title=e.title,
-            locator=e.locator, locator_canonical=e.locator_canonical,
-            native_path=e.native_path, inline_content=e.inline_content,
-            content_hash=e.content_hash, meta=meta, created_at=e.created_at,
-            exported_at=e.exported_at, status=e.status,
-        ))
+        dl.merge_meta(e.id, {"link_status": status, "link_code": code,
+                             "link_checked_at": checked_at})
         if i < len(entries) - 1:
             time.sleep(1.0 / qps)
-    if updates:
-        dl.upsert_entries(updates)
     dl.log_task(_now_iso(), "kcheck", "health_check", "batch",
                 {"checked": len(entries), **counts})
     return {"checked": len(entries), **counts}

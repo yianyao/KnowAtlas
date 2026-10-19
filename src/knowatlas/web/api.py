@@ -157,6 +157,29 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                       for e in dl.list_by_link_status("error")],
         }
 
+    @app.get("/api/not-knowledge")
+    def not_knowledge():
+        """待清理候选：LLM 判为「非具体知识」（站点门户/资源列表/纯资源）的条目。
+
+        仅标记不自动舍弃——保留决定权在用户。
+        """
+        return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
+                             "source_type": e.source_type}
+                            for e in dl.list_by_value_flag("not_knowledge")]}
+
+    @app.post("/api/entries/{entry_id}/unflag")
+    async def unflag_entry(entry_id: str, request: Request):
+        """用户否决 LLM 的非知识判定：清除 value_flag（保留决定权在用户）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        if dl.get_entry(entry_id) is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        dl.merge_meta(entry_id, {"value_flag": "ok"})
+        dl.log_task(_now_iso(), "web", "unflag_not_knowledge", entry_id, {})
+        return {"entry_id": entry_id, "value_flag": "ok"}
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。"""

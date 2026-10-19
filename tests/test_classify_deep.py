@@ -88,6 +88,30 @@ def test_coarse_falls_through_to_llm():
     assert len(llm.calls) == 1
 
 
+def test_classify_deep_kind_not_knowledge():
+    """LLM 判非知识 → tags 带 not_knowledge（sync 据此写 value_flag）。"""
+    class NonKLlm:
+        def chat(self, system: str, user: str) -> str:
+            return json.dumps([{"i": 1, "path": "?", "conf": 0.8, "kind": "non"},
+                               {"i": 2, "path": "技术开发", "conf": 0.7, "kind": "knowledge"}],
+                              ensure_ascii=False)
+    inputs = [SemanticInput(entry_id=f"e{i}", title=f"页{i}", body=None, native_path=None,
+                            meta={"source_type": "bookmark"}) for i in (1, 2)]
+    outs = classify_deep.classify_batch(inputs, frozenset({"技术开发"}), NonKLlm())
+    assert outs[0].tags == ["not_knowledge"] and not outs[0].classifications
+    assert outs[1].tags == [] and outs[1].classifications[0].category_path == "技术开发"
+
+
+def test_unflag_respects_user_verdict(dl):
+    """value_flag=ok（用户否决）后，重评不再标记 not_knowledge。"""
+    e = Entry.build(source_type="bookmark", source_key="edge:nk1", title="门户页",
+                    locator="https://portal.example/", locator_canonical="https://portal.example/",
+                    meta={"source_type": "bookmark", "value_flag": "ok"})
+    dl.upsert_entries([e])
+    dl.merge_meta(e.id, {"value_flag": "ok"})  # 用户否决
+    assert dl.get_entry(e.id).meta["value_flag"] == "ok"
+
+
 def test_reclassify_skips_manual_and_reruns_rest(cfg, dl, registries):
     """reclassify：manual 挂接条目跳过；机器挂接按当前流水线重评。"""
     locators, semantics = registries

@@ -27,15 +27,19 @@ SPEC = CapabilitySpec(
 )
 
 _SYSTEM_PROMPT = (
-    "你是个人知识库的分类器。根据条目的标题、URL 域名和文件夹路径判断它属于哪个分类。\n"
+    "你是个人知识库的分类器。根据条目的标题、URL 域名和文件夹路径判断它属于哪个分类，"
+    "并判断它是否一条具体的知识内容。\n"
     "规则：\n"
     "1. 一级分类必须从【候选分类路径】的一级中选，不得自造一级。\n"
     "2. 二级分类按内容判断：优先逐字使用候选中的完整路径；都不贴切时提议新的二级，"
     "格式「一级/二级」。不要把不相关的条目塞进宽泛的「杂项/工具/综合」类——"
     "按条目实际内容给出最贴切的技术或领域类目。\n"
-    "3. 无法判断时 path 输出 \"?\"。\n"
-    "4. conf 为 0 到 1 的置信度。\n"
-    '只输出 JSON 数组，格式：[{"i":1,"path":"技术开发/数据库","conf":0.9}]，不要输出任何其他文字。'
+    "3. kind 判断条目性质：knowledge = 指向具体、自洽的知识内容（文章/教程/文档页/工具）；"
+    "non = 只是指向站点门户/导航首页/资源列表/纯资源文件本身（音乐、安装包）等，"
+    "作为知识条目没有保留价值。\n"
+    "4. path 无法判断时输出 \"?\"；conf 为 0 到 1 的置信度。\n"
+    '只输出 JSON 数组，格式：[{"i":1,"path":"技术开发/数据库","conf":0.9,"kind":"knowledge"}]，'
+    "不要输出任何其他文字。"
 )
 
 
@@ -79,9 +83,13 @@ def classify_batch(inputs: list[SemanticInput], known_paths: frozenset[str],
                 conf = min(1.0, max(0.0, float(conf)))
             except (TypeError, ValueError):
                 conf = 0.6
+            tags = ["not_knowledge"] if str(hit.get("kind", "knowledge")) == "non" else []
             if path and path != "?":
                 outputs[b * max_batch + i] = SemanticOutput(
-                    classifications=[Classification(path, conf, "llm")])
+                    classifications=[Classification(path, conf, "llm")], tags=tags)
+            elif tags:
+                # 非知识但无类目：也把性质结论带出（进暂存区 + 待清理候选）
+                outputs[b * max_batch + i] = SemanticOutput(classifications=[], tags=tags)
     return outputs
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import uuid
 from typing import Sequence
@@ -130,18 +131,35 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
+    import secrets
+
     cfg = load_config()
     setup_logging(cfg.log_level)
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     from .web.app import create_app
 
+    # 写令牌：未设时自动生成本次会话令牌（体验优化 0.2.0：免用户自造密码；
+    # 安全不降级——token 仍必填，仅由工具代生成。H5 第 3 条约束不变）
+    token_env = str(cfg.get("web.token_env", "KNOWATLAS_WEB_TOKEN"))
+    token = os.environ.get(token_env, "")
+    auto_generated = False
+    if not token:
+        token = secrets.token_urlsafe(16)
+        os.environ[token_env] = token
+        auto_generated = True
+
     app = create_app(cfg, dl, locators, semantics)
     host = args.host or str(cfg.get("general.server_host", "127.0.0.1"))
     port = int(args.port or cfg.get("general.server_port", 8420))
     import uvicorn
 
-    print(f"KnowAtlas 服务：http://{host}:{port}（写操作需 KNOWATLAS_WEB_TOKEN）")
+    print(f"KnowAtlas 服务：http://{host}:{port}")
+    if auto_generated:
+        print(f"本次会话写令牌（写操作时在网页弹窗粘贴一次即可）：{token}")
+        print(f"如需固定令牌，请设置环境变量 {token_env} 后重启 serve")
+    else:
+        print(f"写令牌：来自环境变量 {token_env}")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:
