@@ -31,6 +31,10 @@
   .entry a { font-weight: 600; }
   .badge { display: inline-block; font-size: 11px; border: 1px solid #8886;
            border-radius: 4px; padding: 0 4px; margin-left: 6px; color: #888; }
+  .move-btn { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+              background: transparent; color: inherit; font-size: 11px;
+              padding: 0 6px; margin-left: 6px; display: none; }
+  .entry:hover .move-btn { display: inline-block; }
   #filter { margin: 8px 0; }
 </style>
 </head>
@@ -40,6 +44,7 @@
   <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
   <input id="search" placeholder="全文检索（≥3 字走 FTS，两字词自动兜底）">
   <button id="staged-btn">📥 暂存区（未分类条目）</button>
+  <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（结构关系 v0）</a>
   <div id="tree">加载中…</div>
 </aside>
 <main>
@@ -140,11 +145,26 @@ async function opMerge(n) {
 
 function entryHTML(e) {
   return `<div class="entry"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
-       + `<span class="badge">${e.source_type}</span></div>`;
+       + `<span class="badge">${e.source_type}</span>`
+       + `<button class="move-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">⇄改分类</button></div>`;
+}
+function bindMoveButtons() {
+  document.querySelectorAll(".move-btn").forEach(b => b.onclick = () => opRecategorize(b.dataset.id, b.dataset.title));
+}
+async function opRecategorize(entryId, title) {
+  const p = prompt(`把「${title.slice(0, 50)}」移到分类（输入完整路径如 技术开发/前端；目标不存在会自动创建）：`);
+  if (!p) return;
+  const res = await writeJSON(`/api/entries/${entryId}/recategorize`, { target_path: p.trim() });
+  if (res.__aborted) return;
+  if (res.error) { alert("失败：" + res.error.message); return; }
+  alert(`已移至「${res.category_path}」（人工校正，机器分类不再覆盖它）`);
+  // 刷新当前视图
+  document.getElementById("staged-btn").click();
 }
 function renderEntries(list) {
   const box = document.getElementById("hits");
   box.innerHTML = list.length ? list.map(entryHTML).join("") : "<small>该分类下暂无条目。</small>";
+  bindMoveButtons();
 }
 
 async function showCategory(catId) {

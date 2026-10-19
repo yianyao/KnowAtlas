@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>关系图 · 知道 KnowAtlas</title>
+<script src="/vendor/echarts.min.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
+         display: flex; flex-direction: column; height: 100vh; }
+  header { padding: 8px 16px; display: flex; gap: 16px; align-items: center; }
+  header a { color: #4a9eff; text-decoration: none; }
+  #tip { color: #888; font-size: 12px; }
+  #chart { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <a href="/index.html">← 返回分类树</a>
+  <strong>知识关系图（v0：结构关系）</strong>
+  <span id="tip">加载中…</span>
+</header>
+<div id="chart"></div>
+<script>
+fetch("/api/graph").then(r => r.json()).then(data => {
+  const color = { category: "#4a9eff", entry: "#7ba7d7", domain: "#999" };
+  const size = { category: 26, entry: 7, domain: 10 };
+  const nodes = data.nodes.map(n => ({
+    id: n.id, name: n.name,
+    symbolSize: size[n.kind] || 7,
+    itemStyle: { color: color[n.kind] || "#7ba7d7" },
+    label: { show: n.kind !== "entry" || false, fontSize: n.kind === "category" ? 13 : 10 },
+    kind: n.kind,
+  }));
+  const links = data.links.map(l => ({
+    source: l.source, target: l.target,
+    lineStyle: { color: l.kind === "same_host" ? "rgba(160,160,160,.35)" : "rgba(74,158,255,.45)",
+                 width: l.kind === "same_host" ? 1 : 1.6, curveness: 0.1 },
+  }));
+  document.getElementById("tip").textContent =
+    `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length} / 条目 ${nodes.filter(n=>n.kind==="entry").length} / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}。语义级关系（正文引用、相似度）随 M2/M4 接入。`;
+  const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
+  chart.setOption({
+    tooltip: { formatter: p => p.dataType === "edge"
+        ? `${p.data.source} → ${p.data.target}` : `${p.data.name}（${p.data.kind}）` },
+    legend: { data: ["category", "entry", "domain"],
+              formatter: k => ({category: "分类", entry: "条目", domain: "域名"})[k] },
+    series: [{
+      type: "graph", layout: "force", roam: true, draggable: true,
+      force: { repulsion: 90, edgeLength: [30, 120], gravity: 0.08 },
+      data: nodes, links: links,
+      emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
+      label: { position: "right" },
+    }],
+  });
+  window.addEventListener("resize", () => chart.resize());
+});
+</script>
+</body>
+</html>

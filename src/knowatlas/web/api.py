@@ -77,7 +77,7 @@ def install_security_middleware(app: FastAPI, cfg: Any) -> None:
 
 
 def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: Any) -> None:
-    from ..pipeline.kadd import ingest_url
+    from ..pipeline.kadd import ensure_category_path, ingest_url
 
     @app.get("/api/stats")
     def stats() -> dict:
@@ -107,6 +107,43 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
                              "source_type": e.source_type, "native_path": e.native_path}
                             for e in entries]}
+
+    @app.get("/api/graph")
+    def graph(max_entries: int = 400):
+        """关系图数据（结构关系 v0：分类挂接 + 同域名）。"""
+        return dl.get_graph_data(max_entries=max_entries)
+
+    @app.post("/api/entries/{entry_id}/recategorize")
+    async def recategorize(entry_id: str, request: Request):
+        """人工校正：条目改挂目标分类（按路径，不存在则自动建，origin=manual）。
+
+        机器来源旧分类被摘除；人工校正（manual）永不覆盖（H3）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        target_path = str(body.get("target_path", "")).strip().strip("/")
+        if not target_path:
+            return JSONResponse({"error": {"code": "BAD_REQUEST",
+                                           "message": "缺少 target_path（如 技术开发/前端）"}},
+                                status_code=400)
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        old_links = dl.get_entry_categories(entry_id)
+        old_paths = [l["path"] for l in old_links if l["origin"] != "manual"]
+        cid = ensure_category_path(dl, target_path, "manual")
+        # 人工迁移语义：替换全部旧挂接（含旧 manual）——"manual 永不覆盖"约束的是
+        # 机器来源（H3），不约束人工自己的后续校正
+        for link in old_links:
+            if link["category_id"] != cid:
+                dl.detach_category(entry_id, link["category_id"])
+        dl.attach_category(entry_id, cid, 1.0, "manual", "web-recategorize")
+        dl.log_task(_now_iso(), "web", "recategorize", entry_id,
+                    {"old_paths": [l["path"] for l in old_links], "new_path": target_path})
+        return {"entry_id": entry_id, "category_path": target_path}
 
     @app.post("/api/categories")
     async def create_category(request: Request):

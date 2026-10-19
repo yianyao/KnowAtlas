@@ -470,6 +470,52 @@ class DataLayer:
             for r in rows
         ]
 
+    def get_graph_data(self, max_entries: int = 400) -> dict[str, Any]:
+        """关系图数据（结构关系 v0）：分类节点 + 条目节点 + 域名节点。
+
+        边的三类来源：条目↔分类（挂接，含 origin）、条目↔域名（locator host 归组，
+        星型防边爆炸）。语义级关系（引用/相似度）随 M2 正文与 M4 embedding 接入后扩展。
+        """
+        from urllib.parse import urlsplit
+
+        entries = self._conn.execute(
+            "SELECT id, title, locator FROM entries WHERE status='active' LIMIT ?",
+            (max_entries,),
+        ).fetchall()
+        ecat = self._conn.execute(
+            "SELECT entry_id, category_id, origin FROM entry_categories"
+        ).fetchall()
+        cats = {r["id"]: r["name"] for r in
+                self._conn.execute("SELECT id, name FROM categories").fetchall()}
+
+        nodes: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        seen_cids: set[str] = set()
+        host_members: dict[str, list[str]] = {}
+        for e in entries:
+            host = urlsplit(e["locator"]).hostname or ""
+            nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
+                          "kind": "entry", "host": host})
+            if host:
+                host_members.setdefault(host, []).append(f"e:{e['id']}")
+        for r in ecat:
+            cid = r["category_id"]
+            if cid not in cats:
+                continue
+            if cid not in seen_cids:
+                seen_cids.add(cid)
+                nodes.append({"id": f"c:{cid}", "name": cats[cid], "kind": "category"})
+            links.append({"source": f"e:{r['entry_id']}", "target": f"c:{cid}",
+                          "kind": r["origin"]})
+        for host, members in host_members.items():
+            if len(members) < 2:
+                continue
+            domain_id = f"d:{host}"
+            nodes.append({"id": domain_id, "name": host, "kind": "domain"})
+            for m in members:
+                links.append({"source": m, "target": domain_id, "kind": "same_host"})
+        return {"nodes": nodes, "links": links}
+
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""
         cats = {r["id"]: dict(r) for r in
