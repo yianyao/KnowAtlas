@@ -30,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     kadd = sub.add_parser("kadd", help="手动入口：贴 URL，自动 抓正文 → 归类 → 入树")
     kadd.add_argument("urls", nargs="+", metavar="URL")
 
-    ksync = sub.add_parser("ksync", help="同步编排（批量源 M1 起接入）")
+    ksync = sub.add_parser("ksync", help="同步编排：书签等批量源 → 幂等入库 → 分类")
     ksync.add_argument("--full", action="store_true", help="全量遍历型源全量拉取")
     ksync.add_argument("--incremental", action="store_true", help="游标型源增量")
     ksync.add_argument("--source", help="只同步指定源")

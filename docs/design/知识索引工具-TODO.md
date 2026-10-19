@@ -58,7 +58,7 @@ reader: 执行者（人与 agent）
 
 > Gate：书签、文件夹、万兴脑图三源接入；分类树可下钻、可双向联动；人工校正可用且进 task_log。（前置：M0.5 已跑通，10 大类经真实数据修订）
 
-- [ ] 浏览器收藏夹适配器（Chrome/Edge 先行；Firefox places.sqlite、Safari plist 排后）
+- [x] 浏览器收藏夹适配器（Chrome/Edge 先行；Firefox places.sqlite、Safari plist 排后）——2026-10-19 提前完成（M1 提期），adapters/bookmark.py + ksync 落地，390 条真实书签入库，探针全过（CHANGELOG 0.2.0）
       - 探针：fixture 书签 JSON → 条目数、native_path 与收藏夹层级一致
 - [ ] 文件夹适配器（遍历 + 文档/PDF/其他分类标记）
       - 探针：嵌套目录路径正确进入 native_path
