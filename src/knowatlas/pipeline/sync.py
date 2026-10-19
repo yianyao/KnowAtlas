@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from ..adapters.bookmark import collect_bookmarks
@@ -28,6 +29,10 @@ from ..registry.capability import FetchContext
 from ..semantic.base import SemanticInput, TaskContext
 from .kadd import ensure_category_path
 
+
+def _now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
 # 全量遍历型批量源注册：源配置名 → 收集函数（新批量源 = 一行 + 适配器文件）
 _BATCH_COLLECTORS: dict[str, Any] = {
     "bookmarks": collect_bookmarks,
@@ -37,12 +42,25 @@ _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000
 
 
-def _categorize(dl: Any, semantics: Any, entries: list[Entry], target_ids: set[str],
-                run_id: str) -> dict[str, int]:
-    """对本次新建条目批量跑 classify_coarse；未命中进暂存区（不挂分类）。"""
-    targets = [e for e in entries if e.id in target_ids]
+_INLINE_LIMIT = 4096
+_TRUNCATED_AT = 4000
+
+# 与 datalayer.db._SOURCE_FIELDS 保持一致（upsert 的 updated 判定字段）——
+# 改动任一处必须同步另一处并跑全量测试
+_SOURCE_FIELDS = ("title", "locator", "locator_canonical", "native_path",
+                  "inline_content", "content_hash")
+
+
+def _categorize(dl: Any, semantics: Any, entries: list[Entry], new_ids: set[str],
+                updated_ids: set[str], run_id: str) -> dict[str, int]:
+    """对本次新建/更新条目批量跑 classify_coarse；未命中进暂存区（不挂分类）。
+
+    更新条目（书签移动文件夹、标题变化等）先 detach 机器来源（origin != manual）
+    的旧挂接再重挂——人工校正（origin=manual）永不覆盖（H3）。
+    """
+    targets = [e for e in entries if e.id in new_ids or e.id in updated_ids]
     if not targets:
-        return {"classified": 0, "staged": 0}
+        return {"classified": 0, "staged": 0, "reclassified": 0}
     _, classify = semantics.resolve_task("classify_coarse")
     known = frozenset(dl.all_category_paths())
     inputs = [
@@ -53,6 +71,11 @@ def _categorize(dl: Any, semantics: Any, entries: list[Entry], target_ids: set[s
     outputs = classify(inputs, TaskContext(run_id=run_id, known_paths=known))
     classified = staged = 0
     for entry, out in zip(targets, outputs):
+        if entry.id in updated_ids:
+            # 旧机器分类清理：书签换文件夹等场景下避免新旧分类并存
+            for link in dl.get_entry_categories(entry.id):
+                if link["origin"] != "manual":
+                    dl.detach_category(entry.id, link["category_id"])
         if not out.classifications:
             staged += 1
             continue
@@ -61,7 +84,8 @@ def _categorize(dl: Any, semantics: Any, entries: list[Entry], target_ids: set[s
             dl.attach_category(entry.id, cid, classification.confidence,
                                classification.origin, run_id)
         classified += 1
-    return {"classified": classified, "staged": staged}
+    return {"classified": classified, "staged": staged,
+            "reclassified": sum(1 for e in targets if e.id in updated_ids)}
 
 
 def _apply_content(entry: Entry, text: str, content_hash_hex: str,
@@ -148,10 +172,25 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             stats["sources"][name] = {"reachable": True, "entry_count": len(entries), **out.stats}
             continue
 
-        # 预检新建 id（upsert 幂等；分类只挂新建条目，unchanged 不重复挂）
-        new_ids = {e.id for e in entries if dl.get_entry(e.id) is None}
+        # 预检：新建 id、更新 id（源字段有真实变化）、归档复活（曾 missing → 源里重新出现）
+        new_ids: set[str] = set()
+        updated_ids: set[str] = set()
+        revived_ids: list[str] = []
+        for e in entries:
+            old = dl.get_entry(e.id)
+            if old is None:
+                new_ids.add(e.id)
+                continue
+            if old.status == "archived":
+                revived_ids.append(e.id)
+            if any(getattr(old, f) != getattr(e, f) for f in _SOURCE_FIELDS):
+                updated_ids.add(e.id)
         result = dl.upsert_entries(entries)
-        cat = _categorize(dl, semantics, entries, new_ids, run_id)
+        if revived_ids:
+            dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
+            dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
+                        {"count": len(revived_ids), "source_type": "bookmark"})
+        cat = _categorize(dl, semantics, entries, new_ids, updated_ids, run_id)
 
         src_stats: dict[str, Any] = {
             "entries": len(entries),

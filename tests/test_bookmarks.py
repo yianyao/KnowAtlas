@@ -179,3 +179,50 @@ def test_sync_disabled_and_unknown_source(cfg, dl, registries, bookmarks_json, t
     assert "note" in stats
     stats2 = run_sync(cfg, dl, registries[0], registries[1], source="bilibili")
     assert stats2["sources"] == {}
+
+
+def test_sync_updated_entry_reclassify(cfg, dl, registries, tmp_path, bookmarks_json):
+    """更新闭环：书签移动文件夹 → native_path 变化 → 旧机器分类被替换为新先验分类。"""
+    _enable(cfg, _write(tmp_path, bookmarks_json))
+    locators, semantics = registries
+    run_sync(cfg, dl, locators, semantics)
+
+    # 「SQLite 官方文档」原在书签栏（无先验映射）→ 移入 技术开发/数据库 映射路径并改标题
+    data = json.loads(json.dumps(bookmarks_json))
+    bar_children = data["roots"]["bookmark_bar"]["children"]
+    moved = next(c for c in bar_children if c.get("id") == "10")
+    bar_children.remove(moved)
+    tech = next(c for c in bar_children if c.get("id") == "2")
+    db_folder = next(c for c in tech["children"] if c.get("id") == "3")
+    db_folder["children"].append(
+        {"type": "url", "id": "10", "name": "PostgreSQL 官方文档",
+         "url": "https://sqlite.org/docs.html", "date_added": "13350000000000000"})
+    _enable(cfg, _write(tmp_path, data))
+    stats = run_sync(cfg, dl, locators, semantics, full=True)
+    src = stats["sources"]["bookmarks"]
+    assert src["updated"] >= 1 and src["reclassified"] >= 1
+
+    entry = dl.find_by_canonical("https://sqlite.org/docs.html")
+    links = dl.get_entry_categories(entry.id)
+    assert any(l["path"] == "技术开发/数据库" for l in links), "新 native_path 先验应命中"
+    # 旧机器分类不残留（书签栏无映射，本来就没有挂接；若有也已被 detach）
+
+
+def test_sync_revives_archived_entry(cfg, dl, registries, tmp_path, bookmarks_json):
+    """老化后复活：归档条目重新出现在源里 → full 同步恢复 active。"""
+    _enable(cfg, _write(tmp_path, bookmarks_json))
+    locators, semantics = registries
+    run_sync(cfg, dl, locators, semantics)  # 首次入库（含 id=13）
+    # 删除 id=13 → archived
+    data = json.loads(json.dumps(bookmarks_json))
+    bar = data["roots"]["bookmark_bar"]["children"]
+    bar[:] = [c for c in bar if c.get("id") != "13"]
+    _enable(cfg, _write(tmp_path, data))
+    run_sync(cfg, dl, locators, semantics, full=True)
+    removed = dl.find_by_locator("https://sqlite.org/docs.html#top")
+    assert removed and removed[0].status == "archived"
+    # 重新出现 → 恢复 active
+    _enable(cfg, _write(tmp_path, bookmarks_json))
+    run_sync(cfg, dl, locators, semantics, full=True)
+    back = dl.find_by_locator("https://sqlite.org/docs.html#top")
+    assert back and back[0].status == "active"

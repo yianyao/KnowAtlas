@@ -310,6 +310,16 @@ class DataLayer:
         assert cat is not None
         return cat
 
+    def rename_category(self, category_id: str, new_name: str) -> None:
+        """重命名分类节点（path 为派生量，改名后子树路径自动随之派生，无需级联重写）。"""
+        if not new_name or "/" in new_name:
+            raise ContractError(f"分类名非法（不得含 / 或为空）：{new_name!r}")
+        with self.transaction() as conn:
+            row = conn.execute("SELECT id FROM categories WHERE id=?", (category_id,)).fetchone()
+            if row is None:
+                raise ContractError(f"分类不存在：{category_id}")
+            conn.execute("UPDATE categories SET name=? WHERE id=?", (new_name, category_id))
+
     def _all_paths(self) -> list[tuple[str, str]]:
         rows = self._conn.execute(_PATHS_CTE + " SELECT id, path FROM paths").fetchall()
         return [(r["id"], r["path"]) for r in rows]

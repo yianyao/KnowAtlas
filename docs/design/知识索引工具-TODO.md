@@ -48,7 +48,7 @@ reader: 执行者（人与 agent）
       - 探针：fixture 文章页提取出正文，导航/页脚等噪音被剔除
 - [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）
       - 探针：两字词（如"入库"）标题无命中、正文有命中时可检索到（会红的测试钉住）
-- [ ] 分类树 UI v0：点击下钻、面包屑、暂存区常驻
+- [x] 分类树 UI v0：点击下钻、面包屑、暂存区常驻——2026-10-19 完成（M0.5 提前）：点击分类右侧显示子树条目（含 source_type 筛选）、面包屑跳转、暂存区常驻按钮；另含分类节点管理（新建子类/重命名/移动/合并，写操作带 X-KnowAtlas-Token，全部写 task_log）
 - [ ] web 安全中间件：Host/Origin 校验 + 写操作 token（`X-KnowAtlas-Token`）+ content-type 白名单（H5）
       - 探针：伪造 Host 的请求 403；无 token 的 POST 403；非 JSON body 415；正常本机访问全绿
 - [ ] 回归测试集 v0：从 200 条真实链接人工确认 50-100 条（同时作为 LLM few-shot 底稿）
@@ -128,6 +128,9 @@ reader: 执行者（人与 agent）
       - 探针：WAL 开启状态下从快照恢复（含删 -wal/-shm）后条目数与快照时一致
 - [ ] MCP 只读查询端点（检索 + 树遍历，供 agent 查询）
       - 探针：只读校验——端点无任何写操作
+- [ ] 打包安装：任意目录可用（2026-10-19 用户需求）
+      - 内容：构建 wheel 发布（PyPI 或私有源）；数据目录策略——默认 `%USERPROFILE%/.knowatlas/`（db/config/data 均在此），环境变量 `KNOWATLAS_HOME` 覆盖；config 自动发现顺序 = `KNOWATLAS_HOME` → cwd → `~/.knowatlas`；路径推导禁硬编码用户名/盘符（项目可迁移铁律第 4 条）
+      - 探针：新机器 `pip install knowatlas` 后在任意目录跑 `knowatlas serve`，数据落在 `~/.knowatlas/`；换 `KNOWATLAS_HOME` 后数据落新目录
 
 ## Phase 6 — 高风险源（M6，可选，最后做）
 

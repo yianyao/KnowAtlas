@@ -7,62 +7,185 @@
   :root { color-scheme: light dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
          display: flex; height: 100vh; }
-  aside { width: 320px; overflow: auto; border-inline-end: 1px solid #8884;
+  aside { width: 340px; overflow: auto; border-inline-end: 1px solid #8884;
           padding: 12px; }
   main { flex: 1; overflow: auto; padding: 16px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   small { color: #888; }
   #search { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
+  #staged-btn { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 8px;
+                cursor: pointer; }
   .tree-node { margin: 2px 0 2px 12px; }
-  .tree-node > .name { cursor: pointer; }
-  .tree-node > .name:hover { text-decoration: underline; }
-  .hit { margin: 8px 0; padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
-  .hit a { font-weight: 600; }
+  .tree-node > .row { display: flex; align-items: center; gap: 6px; }
+  .tree-node > .row > .name { cursor: pointer; }
+  .tree-node > .row > .name:hover { text-decoration: underline; }
+  .tree-node > .row > .name.active { font-weight: 700; }
+  .tree-node > .row > .ops { display: none; gap: 2px; }
+  .tree-node > .row:hover > .ops { display: inline-flex; }
+  .ops button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                background: transparent; color: inherit; font-size: 11px;
+                padding: 0 4px; }
+  .crumb { margin-bottom: 10px; }
+  .crumb span { cursor: pointer; color: #4a9eff; }
+  .entry { margin: 8px 0; padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
+  .entry a { font-weight: 600; }
+  .badge { display: inline-block; font-size: 11px; border: 1px solid #8886;
+           border-radius: 4px; padding: 0 4px; margin-left: 6px; color: #888; }
+  #filter { margin: 8px 0; }
 </style>
 </head>
 <body>
 <aside>
   <h1>知道 KnowAtlas</h1>
-  <small>个人知识统一索引 · 分类树（M0.5 最小界面）</small>
+  <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
   <input id="search" placeholder="全文检索（≥3 字走 FTS，两字词自动兜底）">
+  <button id="staged-btn">📥 暂存区（未分类条目）</button>
   <div id="tree">加载中…</div>
 </aside>
 <main>
-  <div id="hits"><small>在左侧搜索；点击分类查看该分支暂无条目列表（M0.5 演进中）。</small></div>
+  <div id="crumb"></div>
+  <select id="filter" style="display:none">
+    <option value="">全部来源</option>
+    <option value="bookmark">书签</option>
+    <option value="manual">手动</option>
+  </select>
+  <div id="hits"><small>点击左侧分类查看条目；或输入关键词全文检索。</small></div>
 </main>
 <script>
+let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
+let currentCat = null; // 当前选中分类 id
+
+function token() { return localStorage.getItem("knowatlas_token") || ""; }
+async function writeJSON(url, body) {
+  if (!token()) {
+    const t = prompt("首次写操作：请输入 KNOWATLAS_WEB_TOKEN 的值（将保存在本浏览器）");
+    if (t === null) return { __aborted: true };
+    localStorage.setItem("knowatlas_token", t);
+  }
+  const r = await fetch(url, { method: "POST",
+    headers: { "Content-Type": "application/json", "X-KnowAtlas-Token": token() },
+    body: JSON.stringify(body) });
+  return r.json();
+}
+
 async function loadTree() {
-  const r = await fetch("/api/tree");
-  const data = await r.json();
+  const data = await (await fetch("/api/tree")).json();
+  pathToId = {};
+  const collect = (nodes) => { for (const n of nodes) { pathToId[n.path] = n.id; collect(n.children); } };
+  collect(data.tree);
   const box = document.getElementById("tree");
   box.textContent = "";
   const render = (nodes, parent) => {
     for (const n of nodes) {
       const div = document.createElement("div");
       div.className = "tree-node";
+      const row = document.createElement("div"); row.className = "row";
       const name = document.createElement("span");
-      name.className = "name";
+      name.className = "name" + (n.id === currentCat ? " active" : "");
       name.textContent = n.name;
-      div.appendChild(name);
+      name.onclick = () => showCategory(n.id);
+      const ops = document.createElement("span"); ops.className = "ops";
+      const mk = (label, title, fn) => {
+        const b = document.createElement("button");
+        b.textContent = label; b.title = title; b.onclick = (e) => { e.stopPropagation(); fn(n); };
+        return b;
+      };
+      ops.appendChild(mk("＋", "新建子分类", opAddChild));
+      ops.appendChild(mk("✎", "重命名", opRename));
+      ops.appendChild(mk("⇄", "移动到另一分类（输入目标路径）", opMove));
+      ops.appendChild(mk("⇒", "合并进另一分类（输入目标路径）", opMerge));
+      row.appendChild(name); row.appendChild(ops);
+      div.appendChild(row);
       parent.appendChild(div);
       render(n.children, div);
     }
   };
   render(data.tree, box);
-  if (!data.tree.length) box.innerHTML = "<small>暂无分类；用 kadd 收录第一批链接。</small>";
+  if (!data.tree.length) box.innerHTML = "<small>暂无分类；用 kadd / ksync 收录第一批条目。</small>";
 }
+
+async function opAddChild(n) {
+  const name = prompt(`在「${n.name}」下新建子分类，名称：`);
+  if (!name) return;
+  const res = await writeJSON("/api/categories", { name, parent_ids: [n.id] });
+  if (!res.__aborted && !res.error) loadTree();
+  else if (res.error) alert("失败：" + res.error.message);
+}
+async function opRename(n) {
+  const name = prompt(`重命名「${n.name}」为：`, n.name);
+  if (!name || name === n.name) return;
+  const res = await writeJSON(`/api/categories/${n.id}/rename`, { name });
+  if (!res.__aborted && !res.error) loadTree();
+  else if (res.error) alert("失败：" + res.error.message);
+}
+async function opMove(n) {
+  const p = prompt(`移动「${n.name}」到目标分类（输入其完整路径如 技术开发/前端；留空 = 移到顶层）：`);
+  if (p === null) return;
+  const pid = pathToId[p.trim()];
+  if (p.trim() && !pid) { alert("目标路径不存在：" + p); return; }
+  const res = await writeJSON(`/api/categories/${n.id}/move`, { parent_ids: pid ? [pid] : [] });
+  if (!res.__aborted && !res.error) loadTree();
+  else if (res.error) alert("失败：" + res.error.message);
+}
+async function opMerge(n) {
+  const p = prompt(`把「${n.name}」合并进目标分类（其条目与子树并入，本分类删除）。目标完整路径：`);
+  if (!p) return;
+  const tid = pathToId[p.trim()];
+  if (!tid) { alert("目标路径不存在：" + p); return; }
+  if (!confirm(`确认把「${n.name}」合并进「${p}」？该操作不可自动撤销。`)) return;
+  const res = await writeJSON(`/api/categories/${n.id}/merge`, { target_id: tid });
+  if (!res.__aborted && !res.error) { if (currentCat === n.id) currentCat = null; loadTree(); }
+  else if (res.error) alert("失败：" + res.error.message);
+}
+
+function entryHTML(e) {
+  return `<div class="entry"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+       + `<span class="badge">${e.source_type}</span></div>`;
+}
+function renderEntries(list) {
+  const box = document.getElementById("hits");
+  box.innerHTML = list.length ? list.map(entryHTML).join("") : "<small>该分类下暂无条目。</small>";
+}
+
+async function showCategory(catId) {
+  currentCat = catId;
+  document.getElementById("filter").style.display = "block";
+  const data = await (await fetch(`/api/categories/${catId}/entries`)).json();
+  if (data.error) { alert(data.error.message); return; }
+  const crumb = document.getElementById("crumb");
+  const parts = (data.paths[0] || "").split("/");
+  crumb.innerHTML = parts.map((p, i) =>
+    `<span data-p="${parts.slice(0, i + 1).join("/")}">${p}</span>`).join(" / ");
+  crumb.querySelectorAll("span").forEach(s =>
+    s.onclick = () => showCategory(pathToId[s.dataset.p]));
+  renderEntries(data.entries);
+  document.getElementById("filter").onchange = (e) => {
+    const v = e.target.value;
+    renderEntries(v ? data.entries.filter(x => x.source_type === v) : data.entries);
+  };
+  loadTree();  // 刷新选中态
+}
+
+document.getElementById("staged-btn").onclick = async () => {
+  currentCat = null;
+  document.getElementById("crumb").textContent = "📥 暂存区（未分类条目）";
+  document.getElementById("filter").style.display = "none";
+  const data = await (await fetch("/api/uncategorized?limit=500")).json();
+  renderEntries(data.entries);
+};
+
 document.getElementById("search").addEventListener("change", async (e) => {
   const q = e.target.value.trim();
   if (!q) return;
-  const r = await fetch("/api/search?q=" + encodeURIComponent(q));
-  const data = await r.json();
+  const data = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
   const box = document.getElementById("hits");
   box.innerHTML = data.hits.length
     ? data.hits.map(h =>
-        `<div class="hit"><a href="${h.locator}" target="_blank" rel="noopener">${h.title}</a><br><small>${h.snippet || ""}</small></div>`
+        `<div class="entry"><a href="${h.locator}" target="_blank" rel="noopener">${h.title}</a><br><small>${h.snippet || ""}</small></div>`
       ).join("")
     : "<small>无命中。</small>";
 });
+
 loadTree();
 </script>
 </body>
