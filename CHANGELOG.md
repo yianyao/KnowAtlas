@@ -248,3 +248,13 @@
 - **边界如实记录**：emmx 云端脑图（MindMaster 云文档）不在本地盘，适配器只能吃本地 .emmx
   文件——云端脑图需用户在 MindMaster 中另存为 .emmx 到 roots 目录；结构化条目标题未截断
   （副标题段落并入），展示层与分类输入侧自行截断。
+
+### 修正（0.2.0 第十三批：来源徽标中文化，用户截图反馈"右边怎么还是文件夹的"）
+
+- **来源徽标中文化**（`web/static/index.html`）：条目卡片 source_type 裸值（folder/bookmark/
+  manual/emmx）改为中文标签（文件/书签/手动/脑图）——用户把 folder 徽标误解为"条目是文件夹"，
+  实际这些条目本身就是文件（folder 是来源类型名）。未知类型回退显示原值。
+- **513 条暂存根因确认（真实验证）**：markitdown 在本机 venv 已装且能解析真实百卓文件
+  （PDF 说明书提取 17747 字符全文、docx 正常）——解析器是通的；暂存纯粹因 K1 默认不抓正文、
+  用户从未跑 --fetch-limit，分类只靠文件名。解法：`ksync --full --fetch-limit 500` 补正文后
+  `ksync --reclassify`。
