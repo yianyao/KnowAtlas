@@ -15,7 +15,12 @@
 ## 快速开始
 
 ```bash
-# 1. 环境（Windows Git Bash 示例；路径按本机 venv 调整）
+# 1. 环境——二选一：
+
+# A. uv（推荐）：依赖已声明在 pyproject.toml，一条命令装齐
+uv sync --extra dev
+
+# B. pip（Windows Git Bash 示例；路径按本机 venv 调整）
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements-core.txt
 .venv/Scripts/python -m pip install -e .
@@ -24,6 +29,7 @@ python -m venv .venv
 cp config/knowatlas.example.toml config/knowatlas.toml
 
 # 3. 初始化数据层（建表 + 注册内置能力 + 首条 run 记录）
+#    uv 用户把下面的 .venv/Scripts/python 换成 uv run python
 .venv/Scripts/python -m knowatlas kinit
 
 # 4. 手动入口：贴一个链接，自动 抓正文 → 归类 → 入树

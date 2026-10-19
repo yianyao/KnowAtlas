@@ -1,4 +1,6 @@
 # 完整方案 §1：默认安装 core；optional 仅在启用本地 embedding / PostgreSQL 源时安装
+# 注意（0.2.0 契约修订）：core 依赖同时声明在 pyproject.toml [project].dependencies
+# （uv 工具链只读 pyproject）——两处同步维护，勿只改其一。
 fastapi
 uvicorn
 httpx

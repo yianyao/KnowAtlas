@@ -4,12 +4,28 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "knowatlas"
-version = "0.1.0"
+version = "0.2.0"
 description = "知道 KnowAtlas —— 个人知识统一索引与分类导航工具"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-# 依赖不入 pyproject：以 requirements-core.txt / requirements-optional.txt 两份清单为准（完整方案 §1）
+# 依赖声明（0.2.0 契约修订：原"依赖不入 pyproject"与 uv 工具链冲突——uv run 只按
+# pyproject 装依赖，导致 fastapi 缺失）。core 运行依赖入 dependencies；
+# pytest 入 dev extra；sentence-transformers / psycopg 入 optional extra。
+# requirements-core.txt / requirements-optional.txt 保留给 pip 用户，两处同步维护。
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "jieba",
+    "readability-lxml",
+    "markitdown",
+    "pdfplumber",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+optional = ["sentence-transformers", "psycopg[binary]"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

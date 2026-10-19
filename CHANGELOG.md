@@ -53,3 +53,13 @@
 - **真实数据验证（M0.5 Gate 数据）**：Edge+Chrome 共 390 条书签 + 1 条 manual = 391 条 active，
   分类覆盖率 94.6%（origin=prior 361 / origin=rule 9 / 暂存区 21）；
   `/api/tree` 层级正确、`/api/search` 中文命中、重复 kadd 幂等。
+
+### 修订（0.2.0，用户 uv 工具链踩坑驱动）
+
+- **依赖声明入 pyproject**（原契约"依赖不入 pyproject、以 requirements 两份清单为准"作废）：
+  `uv run` 只按 pyproject 安装依赖，不读 requirements 文件——导致新环境 `uv run python -m knowatlas serve`
+  报 `ModuleNotFoundError: No module named 'fastapi'`。现 core 运行依赖入
+  `[project].dependencies`，pytest 入 `dev` extra，sentence-transformers/psycopg 入 `optional` extra；
+  requirements 两份文件保留给 pip 用户，文件头注明两处同步维护。README 快速开始补 uv 跑法
+  （`uv sync --extra dev`）。判据依据：项目可迁移铁律「新机器按文档能原样跑起来」。
+- pyproject version 0.1.0 → 0.2.0（与 CHANGELOG 对齐）。
