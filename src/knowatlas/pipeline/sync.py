@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any
 
 from ..adapters.bookmark import collect_bookmarks
+from ..adapters.folder import collect_folders
 from ..errors import AdapterError, DegradedParseError, FetchError
 from ..ids import content_hash
 from ..models import Entry, FetchResult
@@ -36,7 +37,10 @@ def _now_iso() -> str:
 # 全量遍历型批量源注册：源配置名 → 收集函数（新批量源 = 一行 + 适配器文件）
 _BATCH_COLLECTORS: dict[str, Any] = {
     "bookmarks": collect_bookmarks,
+    "folders": collect_folders,
 }
+# 配置名 → source_type（archive_missing 按条目来源类型做删除检测）
+_SOURCE_TYPE_BY_NAME: dict[str, str] = {"bookmarks": "bookmark", "folders": "folder"}
 
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000
@@ -130,14 +134,15 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
     for e in entries:
         if done >= limit:
             break
-        if e.locator_canonical is None:  # 非 http/https 条目无正文可抓
-            continue
+        is_file = e.locator.startswith("file://")
+        if e.locator_canonical is None and not is_file:
+            continue  # 非 http 且非 file，无正文可抓
         if e.content_hash and dl.get_content(e.content_hash) is not None:
             continue  # 正文已在 content_store（抓过一次不重复抓）
         try:
             text, title = fetch_with_fallback(e.locator, locators, ctx)
         except (FetchError, DegradedParseError):
-            failed += 1
+            failed += 1  # 不可读文件（乱码/解析失败）在此暴露——条目保留，可手动舍弃
             continue
         fhash = content_hash(text)
         dl.put_content(FetchResult(text=text, content_hash=fhash,
@@ -283,7 +288,8 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         if revived_ids:
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
-                        {"count": len(revived_ids), "source_type": "bookmark"})
+                        {"count": len(revived_ids),
+                         "source_type": _SOURCE_TYPE_BY_NAME.get(name, name)})
         cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id)
 
         src_stats: dict[str, Any] = {
@@ -292,8 +298,9 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             "unchanged": result.unchanged, **cat, **out.stats,
         }
         if full:
-            archived = dl.archive_missing(source_type="bookmark",
-                                          seen_ids={e.id for e in entries}, run_id=run_id)
+            archived = dl.archive_missing(
+                source_type=_SOURCE_TYPE_BY_NAME.get(name, name),
+                seen_ids={e.id for e in entries}, run_id=run_id)
             src_stats["archived"] = len(archived)
         if fetch_limit:
             src_stats.update(_fetch_missing(cfg, dl, locators, entries, fetch_limit, run_id))

@@ -184,3 +184,18 @@
 - **测试**：kind 解析、否决尊重等 2 项；全量 56 项通过。
 - **真实数据验证**：391 条重评 13 秒，LLM 判出 30 条非知识候选——全部命中门户/素材站/
   自学平台首页/Your Repositories 类型（正是用户点名的"要来也没用"的条目）。
+
+### 新增（0.2.0 第九批：文件夹适配器，M1 提期）
+
+- **文件夹适配器**（`adapters/folder.py`，source_type=folder）：遍历
+  `[sources.folders].roots` → 统一条目；source_key = 配置根相对路径（POSIX 风格）；
+  locator = `file://<相对路径>`（file_reader 按 roots 逐根解析，§5 语法不变）；
+  native_path = 根目录名/子目录层级（TODO 探针：嵌套层级正确）；隐藏文件/Office 临时文件/
+  符号链接跳过并计数；meta.file_kind 四类标记（document/pdf/office/other）；
+  2000 条防失控上限。多 root 重名相对路径计数警告（duplicate_rel）。
+- **sync 增强**：`_BATCH_COLLECTORS` 注册 folders；archive_missing/revive 的 source_type
+  按源映射（原硬编码 bookmark）；`--fetch-limit` 对 file:// 条目生效（txt/md 直读正文
+  入 content_store 参与分类；Office/PDF 解析失败计 fetch_failed——"不可读文件"在此暴露）。
+- **测试**：`tests/test_folders.py` 4 项（native_path 探针、根缺失报错、端到端幂等 +
+  删除检测、file 补抓正文）；全量 60 项通过。
+- 使用：config `[sources.folders]` 填 `roots = ["<本机文档目录>"]` 并 `enabled = true`。
