@@ -1,0 +1,9 @@
+# 完整方案 §1：默认安装 core；optional 仅在启用本地 embedding / PostgreSQL 源时安装
+fastapi
+uvicorn
+httpx
+jieba
+readability-lxml
+markitdown
+pdfplumber
+pytest

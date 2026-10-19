@@ -1,0 +1,90 @@
+# 知道 KnowAtlas 配置示例 —— 复制为 config/knowatlas.toml 后按本机填写
+# 铁律：凭证一律只存"环境变量名"（*_env），密钥本体永不入配置、不入仓库、不入日志
+# 校验规则：任何 enabled = true 的源必须有非空路径/凭证，否则启动报 ConfigError
+
+[general]
+db_path      = "data/knowledge.db"
+content_root = "data/content"        # 可选；大正文外置时启用
+backup_dir   = "data/backups"
+log_level    = "INFO"
+server_host  = "127.0.0.1"
+server_port  = 8420
+
+[web]                                  # 本地服务安全（H5 五条约束）
+token_env    = "KNOWATLAS_WEB_TOKEN"   # 写操作 token 的环境变量名；缺失时写端点 503 并提示
+
+[llm]                                  # 默认云端（可切本地：改 base_url 即可，代码不变）
+enabled        = true
+base_url       = "https://api.deepseek.com/v1"
+api_key_env    = "KNOWATLAS_LLM_API_KEY"
+model          = "deepseek-chat"
+temperature    = 0.2
+max_batch      = 20
+
+[embedding]                             # 可选级；依赖缺失自动降级
+enabled  = false
+provider = "local"
+model_path = ""
+
+[fetch]
+default_backend   = "simple"            # simple | deepseek
+fallback_backend  = "deepseek"          # simple 失败时的升级目标；置空则关闭升级
+timeout_seconds   = 20
+min_content_chars = 200
+rate_limit_qps    = 4
+max_retries       = 3
+on_sync           = false               # K1：同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
+max_fetch_per_run = 50
+
+# ---- 知识源（M0.5 阶段仅 manual 可用；其余源随 M1–M6 接入后开启）----
+[sources.bookmarks]
+enabled = false
+browsers = ["edge", "chrome"]
+paths = { edge = "", chrome = "" }      # 本机 Bookmarks 文件路径，填好后改 enabled = true
+
+[sources.folders]
+enabled = false
+roots = []                              # file:// 相对这些根
+
+[sources.emmx]
+enabled = false
+roots = []
+
+[sources.mail]
+enabled = false
+maildir_root = ""
+imap_host = ""
+
+[sources.db]
+enabled = false
+sqlite_paths = []
+postgres_dsn = ""                       # 凭证走环境变量 KNOWATLAS_PG_DSN
+
+[sources.ima]
+enabled = false
+client_id_env = "KNOWATLAS_IMA_CLIENT_ID"
+api_key_env   = "KNOWATLAS_IMA_API_KEY"
+
+[sources.txdoc]
+enabled = false
+app_id_env = "KNOWATLAS_TXDOC_APP_ID"
+
+[sources.session]
+enabled = false
+harvester_dirs = []                     # session-harvester 产物目录
+
+[sources.bilibili]
+enabled = false
+sessdata_env = "KNOWATLAS_BILI_SESSDATA"  # 获取：浏览器 F12 → 应用 → Cookies → SESSDATA
+up_mid = ""
+fav_folder_ids = []                     # 空 = 自动拉全部收藏夹
+qps = 2
+
+[sources.manual]
+enabled = true                          # kadd 常开
+
+[sources.wx]
+enabled = false
+fav_export_dir = ""
+chat_export_dir = ""
+article_export_dir = ""

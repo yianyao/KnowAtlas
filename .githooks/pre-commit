@@ -1,0 +1,24 @@
+#!/bin/sh
+# KnowAtlas 本地 pre-commit 门禁（轻量层）：CRLF / BOM 字节检查
+# CI 兜底层见 .github/workflows/ci.yml —— 本 hook 只能拦住"记得装且没 --no-verify"的提交，
+# 绕过 hook 的提交由 CI 拦截（判定分级语义：SKIP 永不伪装成通过，见实施约束规范 §2.1）
+files=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$files" ] && exit 0
+
+PY=python
+command -v python >/dev/null 2>&1 || { echo "[pre-commit] 未找到 python，跳过字节检查（SKIP，已计提示）"; exit 0; }
+
+bad=0
+for f in $files; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    *.bat|*.cmd) continue ;;   # Windows 批处理按约定必须 CRLF，见 .gitattributes
+  esac
+  if $PY - "$f" <<'PYEOF' 2>/dev/null
+import sys
+b = open(sys.argv[1], "rb").read()
+sys.exit(0 if (b[:3] != b"\xef\xbb\xbf" and b"\r\n" not in b) else 1)
+PYEOF
+  then :; else echo "[pre-commit] 字节不合格（BOM 或 CRLF）：$f"; bad=1; fi
+done
+exit $bad

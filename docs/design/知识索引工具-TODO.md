@@ -1,0 +1,162 @@
+---
+title: 个人知识统一索引与分类导航工具 · TODO
+summary: Phase 0 契约冻结到 Phase 6 高风险源的分阶段任务清单（2026-10-19 第二次定稿 + 契约返工：PostgreSQL/微信/词云三态/DeepSeek Fetch/手动链接入口/B站收藏夹源/M0.5 垂直切片），每项含验收探针，每阶段设 Gate
+date: 2026-10-19
+status: 定稿
+reader: 执行者（人与 agent）
+---
+
+# 个人知识统一索引与分类导航工具 · TODO
+
+使用说明：
+
+- 状态标记：`[ ]` 未开始 / `[~]` 进行中 / `[x]` 完成。
+- 每项任务自带验收探针；探针不过，该项不算完成。
+- 每个 Phase 设 Gate，Gate 不过不进入下一 Phase。
+- 配套文档：handoff/知识索引工具-设计方案.md（设计依据）、handoff/知识索引工具-完整方案.md（工程契约，编码直接依据）、handoff/知识索引工具-SOP.md（操作流程）。
+- 变更记录：handoff/变更工单-2026-10-19-第二次定稿.md、handoff/变更工单-2026-10-19-B站收藏夹.md、handoff/变更工单-2026-10-19-契约返工.md、handoff/变更工单-2026-10-19-安全与API修正.md。
+
+## Phase 0 — 契约冻结
+
+> Gate：契约测试全绿；改动任一字段名/scheme 名，canary 测试报警。
+
+- [ ] 建 git 仓库 + `docs/design/` + CHANGELOG（K3）：handoff 六份文档作为首批内容提交进 `docs/design/`，以仓库版本为准；此后变更工单不再新增文件、一律追加 CHANGELOG（当前契约跨文件拼的问题是历史包袱，从本项目起终止）
+      - 探针：git log 可见 `docs/design/` 首批提交；CHANGELOG 存在且已回填前两次定稿摘要
+- [ ] CI 工作流兜底（借鉴 specSkill：本地 pre-commit 只能拦住"记得装且没 --no-verify"的提交，CI 是不依赖记性的底线）：推 GitHub 触发 pytest + schema canary；判定分级 FAIL/WARN/SKIP/INFO 语义与 specSkill 一致（SKIP 计退出码，不伪装通过）
+      - 探针：故意提交一处契约破坏，CI 红并指名 canary 项；本地 --no-verify 绕过 hook 后 CI 仍拦截
+- [ ] 统一条目字段定稿（id / source_type / title / locator / native_path / inline_content / content_hash / meta / created_at / exported_at / status），含字段约束表；source_type 枚举含 manual / wxchat / wxarticle；meta 约定 seed_entry_id（公众号文章回溯收藏种子条目）
+      - 探针：fixture 构造一条缺必填字段的条目，写入被拒并报出字段名
+- [ ] locator scheme 命名规范定稿（http/https/file/mail/ima/txdoc/emmx/db/session/wxfav/bili；手动链接直接复用 https，不新增 scheme）
+      - 探针：未注册 scheme 的 locator 触发明确报错，而非静默跳过
+- [ ] 注册表接口签名定稿（Locator Handler / Semantic Task，含能力描述格式 name/input_contract/output_contract/version）
+- [ ] SQLite DDL 定稿（entries（含 locator_canonical）/ entry_locators / categories（path 不落库，CTE 派生）/ category_parents / entry_categories / content_store / content_fts / task_log / runs / entries_fts）
+      - 探针：一条条目挂两个分类成功；一个分类挂两个父分类成功（验证 DAG）
+- [ ] 时间戳纪律落地（ISO 8601；无法解析置 NULL 不臆造；epoch 秒/毫秒自动识别）
+- [ ] schema canary 测试（仿 session-harvester 做法：契约结构变化即时报警；覆盖 DDL / dataclass / scheme 清单 / CapabilitySpec version / source_type 白名单 / config schema 键集）
+
+## Phase 0.5 — 首个垂直切片（M0.5，K2 返工新增）
+
+> Gate：200 条真实链接经 kadd 跑通全链路（建条目 → 抓取 → 归类 → 检索 → 树 UI）；"10 大类"不用预设，先用真实数据检验。
+
+- [ ] 项目骨架：目录结构（设计方案 §9.3）、venv、依赖清单（core/optional 分组）、配置加载（env 覆盖）、README
+      - 探针：新机器按 README 从零跑通 `python -m knowatlas ksync --dry-run`
+- [ ] 数据层读写接口（唯一入口，禁其他模块直连 SQLite）
+      - 探针：grep 代码库，除 datalayer/ 外无直接 SQL
+- [ ] 手动链接入口 v0：CLI `kadd <url...>` + Web UI 输入框（bookmarklet 可选）
+      - 探针：粘贴一个 URL 后条目进"未分类"暂存区，task_log 有 manual 导入记录；重复粘贴同一 URL 不新建条目
+- [ ] http 内容获取器 · simple 后端（httpx + readability-lxml；GitHub 仓库页/release 特化分支）
+      - 探针：fixture 文章页提取出正文，导航/页脚等噪音被剔除
+- [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）
+      - 探针：两字词（如"入库"）标题无命中、正文有命中时可检索到（会红的测试钉住）
+- [ ] 分类树 UI v0：点击下钻、面包屑、暂存区常驻
+- [ ] web 安全中间件：Host/Origin 校验 + 写操作 token（`X-KnowAtlas-Token`）+ content-type 白名单（H5）
+      - 探针：伪造 Host 的请求 403；无 token 的 POST 403；非 JSON body 415；正常本机访问全绿
+- [ ] 回归测试集 v0：从 200 条真实链接人工确认 50-100 条（同时作为 LLM few-shot 底稿）
+      - 探针：跑完后回头核对 10 大类草案，该合并的合并、该拆的拆，结论落进 priors.py
+
+## Phase 1 — 最小可用闭环（M1）
+
+> Gate：书签、文件夹、万兴脑图三源接入；分类树可下钻、可双向联动；人工校正可用且进 task_log。（前置：M0.5 已跑通，10 大类经真实数据修订）
+
+- [ ] 浏览器收藏夹适配器（Chrome/Edge 先行；Firefox places.sqlite、Safari plist 排后）
+      - 探针：fixture 书签 JSON → 条目数、native_path 与收藏夹层级一致
+- [ ] 文件夹适配器（遍历 + 文档/PDF/其他分类标记）
+      - 探针：嵌套目录路径正确进入 native_path
+- [ ] 万兴脑图适配器（.emmx = ZIP + XML 解析节点树；page.bin 二进制情况下降级标题级并标记 degraded）
+      - 探针：至少一个真实 .emmx 文件解析出中心主题与主分支
+- [ ] 先验映射规则表（native_path → 分类分支，origin=prior, confidence=1.0）
+- [ ] 顶层大类定稿（10 类，已经 M0.5 真实数据修订）+ 未分类暂存区
+      - 探针：无法归类的条目进暂存区而非硬猜
+- [ ] 分类树 UI 完整版：点击下钻、面包屑、条目列表按 source_type 筛选、双向联动高亮；路径由 category_parents 递归 CTE 派生（不存 path）
+      - 探针：移动分类位置后，其子树路径派生正确（无级联重写）
+- [ ] 人工校正 UI：改类/合并/移动/多父挂接，全部写 task_log
+      - 探针：任意一次校正可在 task_log 复现前后值
+
+## Phase 2 — 内容层（M2）
+
+> Gate：DeepSeek Fetch 后端 + 邮件适配器跑通；同一 URL 跨源只抓一次正文并正确合并（attach_locator，双 locator 可跳转）；默认全量同步不触发任何抓取。
+
+- [ ] http 内容获取器 · DeepSeek Fetch 后端（可插拔：默认 simple，超时/正文过短/已知难站自动升级；429 指数退避；hash 缓存保证同一 URL 不重复计费）
+      - 探针：mock 一个 simple 失败的 URL，自动走 DeepSeek 且内容入 content store
+- [ ] kadd 联动补全：手动粘贴的 URL 自动抓正文并跑语义分类（M0.5 已建条目，此处补全链路）
+      - 探针：kadd 一个文章 URL，同步结束后该条目有正文且离开暂存区（或被明确标记无法抓取）
+- [ ] content store（正文按 content_hash 缓存，fetcher 只抓一次）
+- [ ] 跨源去重：canonical URL 规范化 + simhash + embedding 余弦 → canonical/hash 命中已有条目时走 attach_locator（双 locator 进 entry_locators 表）
+      - 探针：同一篇文章在书签与邮件中各出现一次，数据层合并为一条、两个 locator 均保留可跳转
+- [ ] 邮件适配器（IMAP 同步工具落 maildir → 本地解析；邮箱文件夹/发件人/时间入 meta）
+      - 探针：凭证错误的报错信息明确指向配置项
+
+## Phase 3 — 在线源（M3）
+
+> Gate：IMA、腾讯文档、AI 会话、B站收藏夹、数据文件接入；凭证过期与限流有明确处理并写入 SOP 故障表。
+
+- [ ] AI 会话适配器（映射 session-harvester 输出的 SessionRecord/Message 双结构）
+      - 探针：harvester 产物目录 → 条目含 title/session_id/created_at/turns 摘要
+- [ ] B站收藏夹适配器（官方 API：list-all 取收藏夹列表 + resource/list 分页内容；SESSDATA 走 KNOWATLAS_BILI_SESSDATA 环境变量；收藏夹名进 native_path；简介作 inline_content；WBI 签名可开关）
+      - 探针：SESSDATA 失效时报错含 F12 获取指引且旧条目保留；收藏夹名正确映射 native_path；同一视频进两个收藏夹只产一条且 meta.fav_folder_ids 含两个 id；下架视频看 attr 位保留标题级并记 meta.invalid
+- [ ] IMA 适配器（官方 OpenAPI：list_notebooks / list_notes / get_note_content；凭证走配置）
+      - 探针：token 失效时报错含"重新获取 Client ID/API Key"指引
+- [ ] 腾讯文档适配器（OpenAPI v2：文件夹列表 + async-export；429 队列降速；doc/slide 导 PDF 后二次解析）
+      - 探针：模拟 429 时间隔重试成功；PDF 解析失败降级标题级
+- [ ] 数据文件适配器（sqlite：schema 自省 + 采样；PostgreSQL：连接串走配置，psycopg 连接后同样 schema 自省 + 采样）
+      - 探针：连一个测试 PostgreSQL 实例（或 docker 起的），表清单与采样行正确进入条目
+
+## Phase 4 — 语义与视图（M4）
+
+> Gate：规则 → embedding → LLM 三级流水线跑通（LLM 默认云端、配置可切本地）；混合检索、词云（三态词元）、关系图（focus 模式）可用；回归集通过率记录在案。
+
+- [ ] 规则分类器（关键词/正则/先验映射补漏）
+- [ ] 本地 embedding（bge-m3 类中文模型，optional 依赖）+ 聚类
+- [ ] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；few-shot 来自回归集；先聚类后命名）
+      - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）
+- [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）+ jieba 关键词统计
+- [ ] 混合检索（关键词 + 语义，结果可解释排序理由）
+- [ ] 词云视图（三态词元：scoped cloud 范围随焦点分类子树变化；分类词元点击进入子分类并联动分类树；内容词元点击 = facet 过滤当前范围；字号 ∝ √权重；按主导顶层分类着色）
+      - 探针：切到某大类，词云只反映该子树条目；点分类词元树同步跳转；点内容词元条目列表按该词过滤
+- [ ] 关系图视图（cytoscape 力导；共现/同源/父子边；focus 模式：焦点节点 + 按 source_type 聚合的卫星源节点，二级点击展开条目 top N；点击跳转）
+- [ ] 时间线视图 + 陈旧分支提醒（长期无新内容的分支提示清理或归档）
+
+## Phase 5 — 导出与运维（M5）
+
+> Gate：三种导出格式验证通过；备份恢复演练一次成功；MCP 端点可被 agent 调用。
+
+- [ ] JSON 全量导出（Schema 版本化，含 schema 版本字段）
+- [ ] Obsidian vault 导出（条目笔记 + 分类 MOC 笔记）
+      - 探针：导出目录可直接被 Obsidian 打开且双链可用
+- [ ] OPML 导出（书签类条目往返）
+- [ ] 自动备份（同步前 VACUUM INTO 快照，保留 10 份轮换）+ 恢复演练
+      - 探针：WAL 开启状态下从快照恢复（含删 -wal/-shm）后条目数与快照时一致
+- [ ] MCP 只读查询端点（检索 + 树遍历，供 agent 查询）
+      - 探针：只读校验——端点无任何写操作
+
+## Phase 6 — 高风险源（M6，可选，最后做）
+
+> Gate：脚本失败不影响主流程；收藏链接路线三步骤跑通；聊天记录导出产物按文件源扫描纳入。
+
+- [ ] 微信收藏 · 步骤一取链接：从 favorite.db 轻量提取标题 + URL（或用户手动粘贴链接清单），落固定目录 JSON（一条一行含 title/url）
+      - 探针：链接清单生成；主工具不依赖 favorite.db 全量解密
+- [ ] 微信收藏 · 步骤二解析 biz：mp.weixin.qq.com 链接提取 `__biz`；非公众号链接触发普通 http 抓取
+      - 探针：混合链接清单正确分流
+- [ ] 微信收藏 · 步骤三全扒：按 biz 调 wechat-article-exporter 拉该博主全部文章，Markdown 入 content store；条目 meta 记 seed_entry_id + biz，视图支持"展开该博主全部相关文章"
+      - 探针：一个种子收藏条目可展开显示该博主全部相关文章；exporter 失败不影响主流程
+- [ ] 主工具按文件源扫描（wxfav scheme + wxfav_reader；扒取产物按 file:// 处理）
+- [ ] 微信聊天记录源：集成 WeChatMsg / MemoTrace 活跃 fork 解密导出（HTML/MD/sqlite），主工具按文件源扫描产物目录
+      - 探针：fork 版本失效时明确报错，主流程不受影响
+
+## 阻塞项
+
+无。原 5 项阻塞事项已于 2026-10-19 第二次确认全部定稿（详见设计方案 §10.1 决策记录）：聊天工具=微信；pq=PostgreSQL；微信收藏=链接全扒路线；部署=本地 Web 服务；LLM=云端 API 默认、配置可切本地。另新增定稿：词云=三态词元架构（scoped cloud + 双态词元 + 关系图 focus 射线）；新增手动链接入口（kadd / UI / bookmarklet）。
+
+2026-10-19 契约返工（H1 多 locator / H2 正文索引 / H3 upsert 与删除检测 / H4 path 派生 / H6 备份安全 / H7 B站 source_key / K1 默认不抓正文 / K2 M0.5 / K3 仓库化）已全部落入设计方案与完整方案，详见 handoff/变更工单-2026-10-19-契约返工.md 与 handoff/变更工单-2026-10-19-安全与API修正.md；阻塞项仍为无。
+
+## 里程碑对照
+
+| 里程碑 | 对应 Phase | 一句话判据 |
+|---|---|---|
+| M0.5 垂直切片 | 0.5 | 200 条真实链接跑通 kadd 全链路，10 大类经真实数据检验修订 |
+| M1 最小可用 | 0 + 0.5 + 1 | 三源自带结构源接入，分类树可用可校正，kadd 可贴链接 |
+| M2 内容层自洽 | 2 | 正文跨源只抓一次、双后端抓取、kadd 自动归类 |
+| M3 全源接入 | 3 | 在线源（含 B站收藏夹）全部接入，凭证与限流故障处理有章可循 |
+| M4 语义完备 | 4 | 三级分类流水线 + 三大视图全部可用 |
+| M5 运维就绪 | 5 | 导出、备份、MCP 端点完成 |
+| M6 高风险源 | 6 | 微信收藏链接路线 + 微信聊天记录以隔离方式纳入 |

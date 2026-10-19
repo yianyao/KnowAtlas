@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "knowatlas"
+version = "0.1.0"
+description = "知道 KnowAtlas —— 个人知识统一索引与分类导航工具"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# 依赖不入 pyproject：以 requirements-core.txt / requirements-optional.txt 两份清单为准（完整方案 §1）
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+knowatlas = ["datalayer/migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
