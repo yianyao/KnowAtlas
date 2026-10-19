@@ -168,6 +168,11 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
     # 含人工挂接的条目跳过；其余先统一摘除机器分类
     # 1) detach 前清理真·空壳（历史遗留、无挂接无子类且非人工）
     dropped = dl.delete_empty_categories()
+    # 1.5) 碎片收拢：单条目的机器二级类目并入一级（树由内容聚出来，2026-10-19 用户定调）
+    moved = dl.prune_fragment_categories(min_size=2)
+    if moved:
+        dl.log_task(_now_iso(), "sync", "prune_fragments", "auto",
+                    {"count": len(moved), "names": [m["name"] for m in moved]})
     # 2) 快照大类骨架：detach 前有真实条目支撑的一级类目（防待清理类目混入候选）
     root_names = {n["name"] for n in dl.get_tree()}
     # 3) 摘除全部机器分类
@@ -201,12 +206,19 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
                 dl.attach_category(e.id, cid, classification.confidence,
                                    classification.origin, run_id)
             classified += 1
+    dropped = dl.delete_empty_categories()
+    # 分类后再收拢一次：本轮 LLM 新产生的单条目碎片也并入一级
+    moved = dl.prune_fragment_categories(min_size=2)
+    if moved:
+        dl.log_task(_now_iso(), "sync", "prune_fragments", "auto",
+                    {"count": len(moved), "names": [m["name"] for m in moved]})
     if dropped:
         dl.log_task(_now_iso(), "sync", "drop_empty_categories", ",".join(d[0] for d in dropped),
                     {"names": [d[1] for d in dropped], "count": len(dropped)})
     stats = {"reclassify_total": len(targets), "classified": classified,
              "staged": staged, "llm_used": llm is not None,
-             "dropped_empty_categories": [d[1] for d in dropped]}
+             "dropped_empty_categories": [d[1] for d in dropped],
+             "pruned_fragments": len(moved)}
     dl.log_task(_now_iso(), "sync", "reclassify", "all",
                 {k: v for k, v in stats.items()})
     return stats

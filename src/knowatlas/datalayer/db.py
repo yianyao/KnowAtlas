@@ -559,6 +559,45 @@ class DataLayer:
             conn.executemany("DELETE FROM categories WHERE id=?", [(d[0],) for d in doomed])
         return doomed
 
+    def prune_fragment_categories(self, min_size: int = 2) -> list[dict[str, Any]]:
+        """收拢碎片类目：挂接条目数 < min_size 的非人工二级类目并入其一级父。
+
+        条目挂接迁移到父类目（origin 保留），类目删除。返回操作记录供 task_log。
+        多父类目迁移到首个父；无父类目不动（一级类目不收拢）。
+        """
+        moved: list[dict[str, Any]] = []
+        with self.transaction() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.origin FROM categories c"
+                " WHERE c.origin != 'manual'"
+                "   AND EXISTS (SELECT 1 FROM category_parents cp WHERE cp.category_id=c.id)"
+                "   AND (SELECT COUNT(DISTINCT entry_id) FROM entry_categories"
+                "        WHERE category_id=c.id) < ?",
+                (min_size,),
+            ).fetchall()
+            for r in rows:
+                parents = [p["parent_id"] for p in conn.execute(
+                    "SELECT parent_id FROM category_parents WHERE category_id=?",
+                    (r["id"],)).fetchall()]
+                if not parents:
+                    continue
+                target = parents[0]
+                members = conn.execute(
+                    "SELECT DISTINCT entry_id, origin FROM entry_categories WHERE category_id=?",
+                    (r["id"],)).fetchall()
+                for m in members:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO entry_categories"
+                        " (entry_id, category_id, confidence, origin, task_run_id)"
+                        " VALUES (?,?,?,?,?)",
+                        (m["entry_id"], target, 0.5, m["origin"], "prune-fragments"),
+                    )
+                conn.execute("DELETE FROM entry_categories WHERE category_id=?", (r["id"],))
+                conn.execute("DELETE FROM category_parents WHERE category_id=?", (r["id"],))
+                conn.execute("DELETE FROM categories WHERE id=?", (r["id"],))
+                moved.append({"name": r["name"], "into": target, "entries": len(members)})
+        return moved
+
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""
         cats = {r["id"]: dict(r) for r in

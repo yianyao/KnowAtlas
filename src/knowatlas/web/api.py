@@ -108,6 +108,41 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                              "source_type": e.source_type, "native_path": e.native_path}
                             for e in entries]}
 
+    @app.post("/api/entries/{entry_id}/reject")
+    async def reject_entry(entry_id: str, request: Request):
+        """用户明确舍弃：状态置 rejected——不入树/检索/图，重新同步永不复活。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        dl.set_status([entry_id], "rejected")
+        dl.log_task(_now_iso(), "web", "reject", entry_id, {"old_status": entry.status})
+        return {"entry_id": entry_id, "status": "rejected"}
+
+    @app.post("/api/entries/{entry_id}/restore")
+    async def restore_entry(entry_id: str, request: Request):
+        """从 rejected 恢复为 active（误舍弃的后悔药）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        dl.set_status([entry_id], "active")
+        dl.log_task(_now_iso(), "web", "restore", entry_id, {"old_status": entry.status})
+        return {"entry_id": entry_id, "status": "active"}
+
+    @app.get("/api/rejected")
+    def rejected_entries(limit: int = 500):
+        """已舍弃条目列表（查看/恢复入口）。"""
+        rows = dl.list_entries(status="rejected", limit=limit)
+        return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
+                             "source_type": e.source_type} for e in rows]}
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。"""

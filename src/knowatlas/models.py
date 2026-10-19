@@ -12,7 +12,9 @@ SOURCE_TYPES = (
     "wxfav", "manual", "wxchat", "wxarticle", "bili",
 )
 
-STATUSES = ("active", "archived", "deleted")
+# status 枚举：active=在库 / archived=源里消失（可复活） / rejected=用户明确舍弃（永不复活，
+# 重新同步也不会重新加载——2026-10-19 用户需求）/ deleted=物理删除前过渡
+STATUSES = ("active", "archived", "rejected", "deleted")
 
 # §5 locator scheme 清单（canary 覆盖项）
 SCHEMES = (
