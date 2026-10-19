@@ -1,32 +1,44 @@
 # 知道 KnowAtlas 配置示例 —— 复制为 config/knowatlas.toml 后按本机填写
 # 铁律：凭证一律只存"环境变量名"（*_env），密钥本体永不入配置、不入仓库、不入日志
 # 校验规则：任何 enabled = true 的源必须有非空路径/凭证，否则启动报 ConfigError
+#
+# 通用语法说明（TOML 格式）：
+# - 方括号 [xxx] 是"节"（一个知识源/一个功能块），节内的 xxx = yyy 是该节的配置项
+# - 数组值（可填多个）写法：roots = ["D:/资料/百卓", "D:/笔记"] —— 多个值用逗号分开
+#   单个值也建议写成数组：roots = ["D:/资料/百卓"]
+# - 引号内的路径用正斜杠 /（Windows 也认），不要用单个反斜杠 \
+# - true/false 是开关；enabled = true 表示该源启用，启动校验会检查必填项非空
 
 [general]
-db_path      = "data/knowledge.db"
+db_path      = "data/knowledge.db"   # SQLite 库文件位置（相对项目根，一般不用改）
 content_root = "data/content"        # 可选；大正文外置时启用
-backup_dir   = "data/backups"
-log_level    = "INFO"
-server_host  = "127.0.0.1"
-server_port  = 8420
+backup_dir   = "data/backups"        # 备份输出目录
+log_level    = "INFO"                # 日志级别：DEBUG / INFO / WARNING / ERROR
+server_host  = "127.0.0.1"           # Web 服务只监听本机（安全约束，不建议改 0.0.0.0）
+server_port  = 8420                  # Web 服务端口
 
 [web]                                  # 本地服务安全（H5 五条约束）
-token_env    = "KNOWATLAS_WEB_TOKEN"   # 写操作 token 的环境变量名；缺失时写端点 503 并提示
+# 写操作令牌的环境变量"名"（不是令牌本体）。
+# 不设该环境变量时，serve 启动会自动生成一次会话令牌并打印在日志里，照着粘贴即可；
+# 想固定令牌就自己设环境变量：值自己定，任意非空字符串均可，建议 20 位以上随机串
+# （PowerShell 永久设置：setx KNOWATLAS_WEB_TOKEN "你的口令" —— 设完重开终端再启动 serve）。
+token_env    = "KNOWATLAS_WEB_TOKEN"
 
-[llm]                                  # 默认云端（可切本地：改 base_url 即可，代码不变）
+[llm]                                  # 语义分类用的大模型（OpenAI 兼容接口均可接）
+# 只在语义判断时调用（L1 先验/L2 规则命中不消耗 LLM）；key 未设则静默跳过，不影响其他功能
 enabled        = true
 base_url       = "https://api.deepseek.com/v1"
-api_key_env    = "KNOWATLAS_LLM_API_KEY"
+api_key_env    = "KNOWATLAS_LLM_API_KEY"   # 环境变量名；本机已设 DeepSeek key
 model          = "deepseek-chat"
 temperature    = 0.2
-max_batch      = 20
+max_batch      = 20                    # 每次批量送给 LLM 的条目数（控成本）
 
 [embedding]                             # 可选级；依赖缺失自动降级
 enabled  = false
 provider = "local"
 model_path = ""
 
-[fetch]
+[fetch]                                 # 正文抓取
 default_backend   = "simple"            # simple | deepseek
 fallback_backend  = "deepseek"          # simple 失败时的升级目标；置空则关闭升级
 timeout_seconds   = 20
@@ -36,21 +48,40 @@ max_retries       = 3
 on_sync           = false               # K1：同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
 max_fetch_per_run = 50
 
-# ---- 知识源（M0.5 阶段仅 manual 可用；其余源随 M1–M6 接入后开启）----
+# ---- 知识源 ----
+# 分源原则：按"数据形态"分，不按"目录"分。同一个目录（如 D:/Data/百卓）既有普通文档
+# 又有 .emmx 脑图时，folders 和 emmx 两个源都把该目录填进各自的 roots 即可，互不冲突。
+# 目前已实现：manual / bookmarks / folders / emmx；其余源为后续版本占位。
+
 [sources.bookmarks]
+# 浏览器书签。browsers 里列了哪个浏览器，paths 里就要给哪个浏览器的 Bookmarks 文件路径
 enabled = false
 browsers = ["edge", "chrome"]
 paths = { edge = "", chrome = "" }      # 本机 Bookmarks 文件路径，填好后改 enabled = true
 
 [sources.folders]
+# 本地文件夹中的普通文档（PDF/Office/txt/md 等），每个文件 = 一个条目
+# roots 可填多个文件夹，逗号分开：roots = ["D:/Data/百卓", "E:/笔记"]
+# 路径要求是本机可见的目录——各网盘的"本地同步盘"（OneDrive/坚果云等的同步文件夹）直接填其路径即可；
+# 纯云端网盘（只有网页/API，本地没有同步目录）当前不支持，等后续云端适配器
+# 可选过滤（用户已在本机 config 启用）：
+# include_exts = [".pdf", ".docx", ".md", ".txt", ".xlsx", ".pptx"]   # 白名单，白名单外直接排除
+# exclude_globs = ["cj_session*", "~$*"]                              # 文件名黑名单（fnmatch 通配）
 enabled = false
 roots = []                              # file:// 相对这些根
 
 [sources.emmx]
+# 万兴脑图 .emmx 文件：每个脑图节点 = 一个条目（不是每个文件一条）
+# roots 同样可多个、逗号分开；可与 folders 填同一个目录（见上方"分源原则"）
+# 只吃本地 .emmx 文件：MindMaster 云端脑图需先在软件里"另存为 .emmx"导出到 roots 目录
 enabled = false
 roots = []
 
 [sources.mail]
+# 邮件源（M2 计划，当前未实现，占位）。两种接法二选一：
+# maildir_root = 本地邮件归档目录（Maildir 格式，邮件客户端导出的本地副本）
+# imap_host    = 邮箱的 IMAP 服务器地址（在邮箱客户端/网页设置里查，如 imap.qq.com；
+#                邮箱当然不在本地——这里填的就是远端服务器地址，凭证走环境变量）
 enabled = false
 maildir_root = ""
 imap_host = ""
