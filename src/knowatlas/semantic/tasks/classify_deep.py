@@ -47,10 +47,17 @@ def _entry_line(idx: int, inp: SemanticInput) -> str:
     from urllib.parse import urlsplit
 
     url = str(inp.meta.get("locator", "")) or ""
-    host = urlsplit(url).hostname or "" if url else ""
+    host = ""
+    if url.startswith(("http://", "https://")):
+        try:
+            host = urlsplit(url).hostname or ""
+        except ValueError:
+            host = ""  # 非 ASCII 全角字符等非法 netloc——域名信号放弃，不丢条目
     parts = [f"{idx}. 标题:{inp.title[:60]}"]
     if host:
         parts.append(f"域名:{host}")
+    if not host and url.startswith("file://"):
+        parts.append(f"文件:{url.removeprefix('file://')[:60]}")
     if inp.native_path:
         parts.append(f"文件夹:{inp.native_path}")
     if inp.body:
