@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any
 
 from ..adapters.bookmark import collect_bookmarks
+from ..adapters.emmx import collect_emmx
 from ..adapters.folder import collect_folders
 from ..errors import AdapterError, DegradedParseError, FetchError
 from ..ids import content_hash
@@ -38,9 +39,11 @@ def _now_iso() -> str:
 _BATCH_COLLECTORS: dict[str, Any] = {
     "bookmarks": collect_bookmarks,
     "folders": collect_folders,
+    "emmx": collect_emmx,
 }
 # 配置名 → source_type（archive_missing 按条目来源类型做删除检测）
-_SOURCE_TYPE_BY_NAME: dict[str, str] = {"bookmarks": "bookmark", "folders": "folder"}
+_SOURCE_TYPE_BY_NAME: dict[str, str] = {
+    "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx"}
 
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000

@@ -199,3 +199,19 @@
 - **测试**：`tests/test_folders.py` 4 项（native_path 探针、根缺失报错、端到端幂等 +
   删除检测、file 补抓正文）；全量 60 项通过。
 - 使用：config `[sources.folders]` 填 `roots = ["<本机文档目录>"]` 并 `enabled = true`。
+
+### 修正 + 新增（0.2.0 第十批：emmx 适配器 + 视图跳转修复 + 测试代理隔离）
+
+- **万兴脑图适配器**（`adapters/emmx.py`，source_type=emmx，M1 三源之三）：.emmx=ZIP，
+  防御性解析 content.xml——topic 元素树（title/name 属性、children/topics 嵌套，覆盖
+  MindMaster 常见结构）；节点 id 取 XML id 属性缺失时路径序号兜底；content.xml 缺失/
+  坏 zip/无 topic 结构 → **降级标题级单条目，meta.degraded=true**（TODO page.bin 降级纪律）；
+  source_key=相对路径#节点id、locator=emmx://同构、native_path=文件目录层级、
+  主题路径进 meta.mind_path；3000 节点防失控上限。sync 注册 + fixture 测试 4 项。
+  **真实 .emmx 样本验收探针待用户提供文件后执行**（合成 fixture 已全过）。
+- **UI 修复（用户截图反馈"改一次分类就跳到暂存区，很烦"）**：写操作成功后不再强制跳转——
+  各视图入口设置 refreshCurrent，操作后**留在当前视图局部刷新**。
+- **测试环境修正**：conftest 强制 `NO_PROXY=127.0.0.1,localhost`——系统代理
+  （http_proxy 环境变量）对本地 fixture 请求的转发不稳定，导致 kadd 端到端在多文件
+  组合跑时偶发假挂（与 uv 验证期踩坑同源：httpx trust_env 读代理）。
+- **测试**：全量 64 项通过（含组合跑回归验证）。

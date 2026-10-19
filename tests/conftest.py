@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+# 本地 fixture 测试绝不走系统代理（httpx trust_env 会读 http_proxy，
+# 代理对 127.0.0.1 的转发行为不稳定 → kadd 端到端偶发假挂，2026-10-19）
+os.environ["NO_PROXY"] = "127.0.0.1,localhost"
+os.environ["no_proxy"] = "127.0.0.1,localhost"
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))

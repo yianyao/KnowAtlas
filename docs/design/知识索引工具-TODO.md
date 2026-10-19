@@ -62,7 +62,7 @@ reader: 执行者（人与 agent）
       - 探针：fixture 书签 JSON → 条目数、native_path 与收藏夹层级一致
 - [x] 文件夹适配器（遍历 + 文档/PDF/其他分类标记）——2026-10-19 提前完成（M1 提期）：adapters/folder.py + ksync 落地，meta.file_kind 四类标记，file:// 补抓打通（--fetch-limit 对文件生效），探针全过（CHANGELOG 0.2.0）
       - 探针：嵌套目录路径正确进入 native_path ✅
-- [ ] 万兴脑图适配器（.emmx = ZIP + XML 解析节点树；page.bin 二进制情况下降级标题级并标记 degraded）
+- [~] 万兴脑图适配器（.emmx = ZIP + XML 解析节点树；page.bin 二进制情况下降级标题级并标记 degraded）——2026-10-19 实现落地（adapters/emmx.py 防御性解析：topic 树 + title/name 属性 + children/topics 嵌套；content.xml 缺失/坏 zip 降级标题级 degraded=true），合成 fixture 测试全过；**真实 .emmx 样本验收探针待用户提供文件后执行**（CHANGELOG 0.2.0）
       - 探针：至少一个真实 .emmx 文件解析出中心主题与主分支
 - [ ] 先验映射规则表（native_path → 分类分支，origin=prior, confidence=1.0）
 - [ ] 顶层大类定稿（10 类，已经 M0.5 真实数据修订）+ 未分类暂存区

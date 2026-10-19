@@ -79,6 +79,7 @@
 <script>
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
 let currentCat = null; // 当前选中分类 id
+let refreshCurrent = null; // 当前视图刷新器——写操作成功后局部刷新，不跳转
 
 function token() { return localStorage.getItem("knowatlas_token") || ""; }
 async function writeJSON(url, body) {
@@ -190,16 +191,18 @@ document.getElementById("move-form").onsubmit = async (e) => {
   const res = await writeJSON(`/api/entries/${moveTargetId}/recategorize`, { target_path: p });
   document.getElementById("move-dialog").close();
   if (res.error) { alert("失败：" + res.error.message); return; }
-  document.getElementById("staged-btn").click();  // 刷新当前视图
-};
+  // 留在当前视图，只局部刷新（不跳转）
+  refreshCurrent ? refreshCurrent() : loadTree();
+}
 async function opReject(entryId, title) {
   if (!confirm(`舍弃「${title.slice(0, 60)}」？\n\n将不再出现在树/检索/图中；重新同步也不会恢复。\n（可在「已舍弃条目」里找回）`)) return;
   const res = await writeJSON(`/api/entries/${entryId}/reject`, {});
   if (res.error) { alert("失败：" + res.error.message); return; }
-  document.getElementById("staged-btn").click();
+  refreshCurrent ? refreshCurrent() : loadTree();
 }
 document.getElementById("dead-link").onclick = async (e) => {
   e.preventDefault();
+  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
   document.getElementById("crumb").textContent =
     "☠️ 失效链接（404/410 = 永久消失；error = 疑似临时故障，可重测）";
@@ -229,6 +232,7 @@ document.getElementById("dead-link").onclick = async (e) => {
 
 document.getElementById("nonk-link").onclick = async (e) => {
   e.preventDefault();
+  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
   document.getElementById("crumb").textContent =
     "🔬 待清理候选——LLM 判为「非具体知识」（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
@@ -260,6 +264,7 @@ document.getElementById("nonk-link").onclick = async (e) => {
 
 document.getElementById("rejected-link").onclick = async (e) => {
   e.preventDefault();
+  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
   document.getElementById("crumb").textContent = "🗑️ 已舍弃条目（点击恢复后重新参与分类）";
   document.getElementById("filter").style.display = "none";
@@ -284,6 +289,7 @@ function renderEntries(list) {
 
 async function showCategory(catId) {
   currentCat = catId;
+  refreshCurrent = () => showCategory(catId);
   document.getElementById("filter").style.display = "block";
   const data = await (await fetch(`/api/categories/${catId}/entries`)).json();
   if (data.error) { alert(data.error.message); return; }
@@ -301,7 +307,8 @@ async function showCategory(catId) {
   loadTree();  // 刷新选中态
 }
 
-document.getElementById("staged-btn").onclick = async () => {
+document.getElementById("staged-btn").onclick = async (e) => {
+  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
   document.getElementById("crumb").textContent = "📥 暂存区（未分类条目）";
   document.getElementById("filter").style.display = "none";
