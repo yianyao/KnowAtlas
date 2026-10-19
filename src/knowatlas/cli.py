@@ -56,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
     ktest = sub.add_parser("ktest", help="回归集 / 契约金丝雀运行器")
     ktest.add_argument("what", choices=["regress", "canary"])
 
+    kcheck = sub.add_parser("kcheck", help="链接体检：检测可达性（404/410 标记 dead）")
+    kcheck.add_argument("--limit", type=int, default=100, help="本次最多检测条数（默认 100）")
+    kcheck.add_argument("--qps", type=float, default=4.0, help="检测速率（默认 4 条/秒）")
+
     return parser
 
 
@@ -163,6 +167,21 @@ def _cmd_ktest(args: argparse.Namespace) -> int:
     return _unimplemented("ktest", "运行测试请用 pytest（tests/ 已覆盖 canary 与回归骨架）")
 
 
+def _cmd_kcheck(args: argparse.Namespace) -> int:
+    from .pipeline.health import run_health_check
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        stats = run_health_check(cfg, dl, limit=args.limit, qps=args.qps)
+    finally:
+        dl.close()
+    print(f"OK 体检完成：{stats}（dead=永久失效，error=疑似临时故障；"
+          f"Web UI「失效链接」视图可批量舍弃）")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -171,6 +190,7 @@ _COMMANDS = {
     "kexport": _cmd_kexport,
     "kbackup": _cmd_kbackup,
     "ktest": _cmd_ktest,
+    "kcheck": _cmd_kcheck,
 }
 
 

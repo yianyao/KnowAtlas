@@ -52,6 +52,7 @@
   <button id="staged-btn">📥 暂存区（未分类条目）</button>
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（结构关系 v0）</a>
   <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
+  <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
   <div id="tree">加载中…</div>
 </aside>
 <dialog id="move-dialog">
@@ -196,6 +197,35 @@ async function opReject(entryId, title) {
   if (res.error) { alert("失败：" + res.error.message); return; }
   document.getElementById("staged-btn").click();
 }
+document.getElementById("dead-link").onclick = async (e) => {
+  e.preventDefault();
+  currentCat = null;
+  document.getElementById("crumb").textContent =
+    "☠️ 失效链接（404/410 = 永久消失；error = 疑似临时故障，可重测）";
+  document.getElementById("filter").style.display = "none";
+  const data = await (await fetch("/api/dead-links")).json();
+  const row = (x, tag, code) =>
+    `<div class="entry"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+    + `<span class="badge">${tag}${x.code ? " " + x.code : ""}</span>`
+    + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
+  const box = document.getElementById("hits");
+  const all = [...data.dead.map(x => row(x, "失效", x.code)),
+               ...data.error.map(x => row(x, "疑似临时", x.code))];
+  box.innerHTML = all.length ? all.join("")
+    : "<small>没有失效链接。用 CLI 跑体检：uv run python -m knowatlas kcheck</small>";
+  bindEntryButtons();
+  const rejectMany = async (ids) => {
+    for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {});
+    e.target.click();
+  };
+  if (data.dead.length)
+    box.insertAdjacentHTML("beforeend",
+      `<button id="reject-all-dead" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${data.dead.length} 条失效链接</button>`);
+  document.getElementById("reject-all-dead")?.addEventListener("click",
+    () => { if (confirm(`确认舍弃全部 ${data.dead.length} 条失效链接？（可在已舍弃里找回）`))
+      rejectMany(data.dead.map(x => x.id)); });
+};
+
 document.getElementById("rejected-link").onclick = async (e) => {
   e.preventDefault();
   currentCat = null;

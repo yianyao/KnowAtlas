@@ -598,6 +598,15 @@ class DataLayer:
                 moved.append({"name": r["name"], "into": target, "entries": len(members)})
         return moved
 
+    def list_by_link_status(self, link_status: str, limit: int = 500) -> list[Entry]:
+        """按链接体检结果列出条目（meta.link_status；dead=永久失效，error=疑似临时）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status='active'"
+            "   AND json_extract(meta, '$.link_status')=? ORDER BY rowid LIMIT ?",
+            (link_status, limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""
         cats = {r["id"]: dict(r) for r in

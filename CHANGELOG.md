@@ -148,3 +148,22 @@
   （自动补全全部类目路径，输入过滤，也允许新路径）。
 - **测试**：`tests/test_reject_prune.py` 4 项（舍弃生命周期、rejected 不复活、碎片收拢
   迁移正确性、reclassify 收拢联动）；全量 52 项通过。
+
+### 新增（0.2.0 第七批：链接体检，用户需求"不可达的链接还要来干嘛"）
+
+- **`kcheck` 命令**（`pipeline/health.py`）：对 active http(s) 条目 GET+stream 可达性检测
+  （默认限量 100 条、qps 限流），结果写条目 meta（link_status/link_code/link_checked_at）。
+  **可达性是波动属性，放 meta 不放 status 列**（status 归用户/源决定）。
+- **四级分级**（真实体检校准，防误杀）：
+  - `ok`：2xx/3xx；
+  - `dead`：404/410——服务器明确说内容没了，高置信死链；
+  - `blocked`：401/403/412/429——**反爬拦截，链接对人有效**（浏览器可达），不算失效
+    （真实体检发现知乎 403、B站 412 均属此类）；
+  - `error`：5xx、超时、DNS/网络失败——可能临时（本地代理环境也会产生噪音）。
+  不自动舍弃任何条目；dead 只标记，批量舍弃由用户确认。
+- **API + UI**：`GET /api/dead-links`（dead + error 分列）；侧栏「☠️ 失效链接」视图，
+  单条 🚫 舍弃 + 「一键舍弃全部失效链接」（批量确认）。
+- **`DataLayer.list_by_link_status`**（接口扩展，json_extract 查询）。
+- **测试**：`tests/test_health.py` 2 项（mock 检测函数，meta 写入与分级查询）；全量 54 项通过。
+- 后续（M2 正文层）：folder 源的乱码/不可读文件走既有 `DegradedParseError` 降级标记；
+  死链重测多次仍失败可升级处理策略（未实现，先观察误报率）。

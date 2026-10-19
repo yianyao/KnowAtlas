@@ -143,6 +143,20 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
                              "source_type": e.source_type} for e in rows]}
 
+    @app.get("/api/dead-links")
+    def dead_links():
+        """失效链接（体检 dead）与疑似临时故障（error）清单。"""
+        return {
+            "dead": [{"id": e.id, "title": e.title, "locator": e.locator,
+                      "code": e.meta.get("link_code"),
+                      "checked_at": e.meta.get("link_checked_at")}
+                     for e in dl.list_by_link_status("dead")],
+            "error": [{"id": e.id, "title": e.title, "locator": e.locator,
+                       "code": e.meta.get("link_code"),
+                       "checked_at": e.meta.get("link_checked_at")}
+                      for e in dl.list_by_link_status("error")],
+        }
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。"""
