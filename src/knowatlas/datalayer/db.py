@@ -343,6 +343,20 @@ class DataLayer:
     def all_category_paths(self) -> set[str]:
         return {p for _, p in self._all_paths()}
 
+    def manual_category_paths(self) -> set[str]:
+        """仅人工挂接（origin=manual）的分类的派生路径——reclassify 的候选来源。
+
+        语义：LLM 的类目候选由用户人工认可的类目决定，空壳机器类目不进候选
+        （2026-10-19 用户反馈：LLM 不应顺手归并残留类目）。
+        """
+        ids = [r["category_id"] for r in self._conn.execute(
+            "SELECT DISTINCT category_id FROM entry_categories WHERE origin='manual'"
+        ).fetchall()]
+        out: set[str] = set()
+        for cid in ids:
+            out.update(self.get_category_paths(cid))
+        return out
+
     def get_category_by_path(self, path: str) -> Category | None:
         """递归 CTE 派生路径匹配；多父派生导致路径歧义时取 origin 优先级最高者并记 task_log。"""
         rows = self._conn.execute(
@@ -523,6 +537,27 @@ class DataLayer:
             for m in members:
                 links.append({"source": m, "target": domain_id, "kind": "same_host"})
         return {"nodes": nodes, "links": links}
+
+    def delete_empty_categories(self, *, protect_manual: bool = True) -> list[str]:
+        """删除「空壳」分类：无条目挂接且无子类。返回被删的 (id, name) 名单。
+
+        protect_manual=True 时跳过 origin=manual（人工建的类目即使空也保留）。
+        用途：reclassify 后清理不再被内容支撑的旧机器类目。
+        """
+        with self.transaction() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.origin FROM categories c"
+                " WHERE NOT EXISTS (SELECT 1 FROM entry_categories ec WHERE ec.category_id=c.id)"
+                "   AND NOT EXISTS (SELECT 1 FROM category_parents cp WHERE cp.parent_id=c.id)"
+            ).fetchall()
+            doomed = [(r["id"], r["name"]) for r in rows
+                      if not (protect_manual and r["origin"] == "manual")]
+            conn.executemany(
+                "DELETE FROM category_parents WHERE category_id=?",
+                [(d[0],) for d in doomed],
+            )
+            conn.executemany("DELETE FROM categories WHERE id=?", [(d[0],) for d in doomed])
+        return doomed
 
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""

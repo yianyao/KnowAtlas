@@ -40,9 +40,17 @@ fetch("/api/graph").then(r => r.json()).then(data => {
   document.getElementById("tip").textContent =
     `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length} / 条目 ${nodes.filter(n=>n.kind==="entry").length} / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}。语义级关系（正文引用、相似度）随 M2/M4 接入。`;
   const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
+  const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
+  const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
+                       llm: "语义判断", manual: "人工校正" };
   chart.setOption({
-    tooltip: { formatter: p => p.dataType === "edge"
-        ? `${p.data.source} → ${p.data.target}` : `${p.data.name}（${p.data.kind}）` },
+    tooltip: { formatter: p => {
+      if (p.dataType === "edge") {
+        const kind = KIND_LABEL[p.data.kind] || p.data.kind || "";
+        return `${nameOf[p.data.source] || p.data.source}<br>— ${kind} →<br>${nameOf[p.data.target] || p.data.target}`;
+      }
+      return `${p.data.name}（${({category: "分类", entry: "条目", domain: "域名"})[p.data.kind] || p.data.kind}）`;
+    } },
     legend: { data: ["category", "entry", "domain"],
               formatter: k => ({category: "分类", entry: "条目", domain: "域名"})[k] },
     series: [{

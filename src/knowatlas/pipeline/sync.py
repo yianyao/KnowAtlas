@@ -152,8 +152,11 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
 def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str, Any]:
     """全量重分类：active 条目重跑 classify_coarse 三级流水线。
 
-    - 含人工校正（origin=manual）挂接的条目整条跳过——人工结论优先于机器（H3）；
-    - 其余条目先 detach 全部机器分类再重挂（先验/规则/L3 按当前版本重新评估）；
+    语义（0.2.0 修正，用户反馈"LLM 不该顺手归并残留类目"）：
+    - 先统一 detach 全部机器分类；候选路径（known_paths）只保留**人工挂接**的分类——
+      LLM 的类目候选由用户认可的类目决定，不再被旧机器类目 anchor；
+    - 含人工挂接的条目整条跳过（人工结论优先，H3）；
+    - 重跑后自动清理空壳机器类目（无条目、无子类、origin != manual）；
     - [llm] 未启用 / key 未设时 L3 静默跳过，结果 = 先验+规则（stats.llm_used=false）。
     """
     from ..semantic.base import SemanticInput, TaskContext
@@ -161,18 +164,27 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
 
     llm = LlmClient.from_config(cfg)
     _, classify = semantics.resolve_task("classify_coarse")
-    known = frozenset(dl.all_category_paths())
     entries = dl.list_entries(status="active", limit=10000)
-    targets = [e for e in entries
-               if not any(l["origin"] == "manual" for l in dl.get_entry_categories(e.id))]
+    # 含人工挂接的条目跳过；其余先统一摘除机器分类
+    # 1) detach 前清理真·空壳（历史遗留、无挂接无子类且非人工）
+    dropped = dl.delete_empty_categories()
+    # 2) 快照大类骨架：detach 前有真实条目支撑的一级类目（防待清理类目混入候选）
+    root_names = {n["name"] for n in dl.get_tree()}
+    # 3) 摘除全部机器分类
+    targets: list[Entry] = []
+    for e in entries:
+        links = dl.get_entry_categories(e.id)
+        if any(l["origin"] == "manual" for l in links):
+            continue
+        targets.append(e)
+        for link in links:
+            dl.detach_category(e.id, link["category_id"])
+    # 候选 = 人工挂接路径 ∪ 大类骨架（完整旧路径不进候选，防顺手归并碎片类目）
+    known = frozenset(dl.manual_category_paths() | root_names)
     classified = staged = 0
     max_batch = int(cfg.get("llm.max_batch", 20) or 20)
     for i in range(0, len(targets), max_batch):
         chunk = targets[i:i + max_batch]
-        for e in chunk:
-            for link in dl.get_entry_categories(e.id):
-                if link["origin"] != "manual":
-                    dl.detach_category(e.id, link["category_id"])
         outputs = classify(
             [SemanticInput(entry_id=e.id, title=e.title, body=e.inline_content,
                            native_path=e.native_path,
@@ -189,8 +201,12 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
                 dl.attach_category(e.id, cid, classification.confidence,
                                    classification.origin, run_id)
             classified += 1
+    if dropped:
+        dl.log_task(_now_iso(), "sync", "drop_empty_categories", ",".join(d[0] for d in dropped),
+                    {"names": [d[1] for d in dropped], "count": len(dropped)})
     stats = {"reclassify_total": len(targets), "classified": classified,
-             "staged": staged, "llm_used": llm is not None}
+             "staged": staged, "llm_used": llm is not None,
+             "dropped_empty_categories": [d[1] for d in dropped]}
     dl.log_task(_now_iso(), "sync", "reclassify", "all",
                 {k: v for k, v in stats.items()})
     return stats
