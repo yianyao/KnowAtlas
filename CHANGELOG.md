@@ -225,3 +225,26 @@
 - 用户本地 config 已回写过滤规则（include_exts 六类文档 + cj_session* 黑名单），
   并修正无效写法 `meta.file_kind`（非配置项）。
 - **测试**：过滤规则用例 1 项；全量 65 项通过。
+
+### 修订 + 验收（0.2.0 第十二批：emmx 真实格式定稿，M1 三源验收完成）
+
+- **真实 .emmx 格式解剖**（9 个真实样本：D:/Data/百卓 下 PECOS 进度/供应链流程/编码规则/
+  培训小程序/培训积分/总务管理/抽象工厂/泛型/行政）：实际为 **MindMaster 9.x Shape 结构**，
+  与最初假设的 content.xml topic 树完全不同——主题树在 `page/page.xml`（document.xml 的
+  Properties/Pages 指明页名）；节点 = `<Shape Type="MainIdea|MainTopic|SubTopic|SummaryTopic">`，
+  标题在 Text/TextBlock/Text 深层 `<tp>` 元素（多段合并）；**层级不是 XML 嵌套而是
+  `<LevelData><Super V="父ID"/>` 引用**；Boundary/Summary/Callout/MMConnector 为装饰 Shape
+  不建条目；仅 mmpage/page.bin（旧版二进制）无 page.xml → 降级标题级 degraded=true。
+- **解析器按真实格式重写**（`adapters/emmx.py`）：契约细化 source_key/locator 节点 id 为
+  `<页名>/<ShapeID>`（如 `emmx://PECOS/编码规则.emmx#page/305`）；mind_path 沿 Super 引用
+  上溯构建（父指向非主题装饰容器时断链按顶层，引用环有深度上限防死循环）；
+  **native_path 修正为 根名/文件所在子目录层级**（原只存根名，丢失 PECOS/开发 先验信号，
+  与 folder 适配器同构）。
+- **真实验收探针通过**：9 文件全结构化解析、**0 降级**、865 节点条目
+  （百卓/PECOS 500 + 百卓/开发 365；编码规则.emmx 单图 424 节点、行政.emmx mind_path 深
+  达 d10 层级正确）；多段 tp 合并正常（"泛型 将要操作的数据类型指定为参数…"副标题段落并入标题）。
+- **测试**：fixture 重写为真实格式（Shape/tp/Super 结构 + Boundary 断链 + 旧版 page.bin
+  降级 + 空图降级），4 项全过；全量 65 项通过。
+- **边界如实记录**：emmx 云端脑图（MindMaster 云文档）不在本地盘，适配器只能吃本地 .emmx
+  文件——云端脑图需用户在 MindMaster 中另存为 .emmx 到 roots 目录；结构化条目标题未截断
+  （副标题段落并入），展示层与分类输入侧自行截断。
