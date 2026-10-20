@@ -634,14 +634,16 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     def entry_summary(entry_id: str):
         """条目轻量概要（关系图弹窗卡用）：完整 detail 含全文，悬浮场景过重。
 
-        服务端截断 snippet 至 400 字符，防大文件整段进响应。
+        只取正文前缀（substr，不整段进内存），服务端归一空白后截 snippet 至
+        160 字符——悬浮卡片不需要长文（第三十七批：400→160 + 前缀读取提速）。
         """
         entry = dl.get_entry(entry_id)
         if entry is None:
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
                                 status_code=404)
-        content = dl.get_content(entry.content_hash) if entry.content_hash else ""
-        snippet = " ".join((content or "").split())[:400]
+        head = dl.get_content_preview(entry.content_hash, 2000) \
+            if entry.content_hash else ""
+        snippet = " ".join((head or "").split())[:160]
         return {
             "id": entry.id, "title": entry.title, "locator": entry.locator,
             "source_type": entry.source_type, "created_at": entry.created_at,

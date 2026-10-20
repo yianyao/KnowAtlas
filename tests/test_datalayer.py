@@ -129,6 +129,17 @@ def test_two_char_query_finds_content(dl):
     assert any(hit.entry_id == e.id for hit in hits)
 
 
+def test_get_content_preview_prefix(dl):
+    """正文前缀读取（第三十七批）：SQL substr 只取头部，不整段进内存。"""
+    text = "0123456789" * 1000  # 1 万字符
+    h = content_hash(text)
+    dl.put_content(FetchResult(text=text, content_hash=h,
+                               fetcher="test", fetched_at="2026-10-20T00:00:00"))
+    assert dl.get_content_preview(h, 160) == text[:160]
+    assert dl.get_content_preview(h, 10 ** 9) == text      # 超长 limit = 全文
+    assert dl.get_content_preview("no-such-hash", 160) is None
+
+
 def test_three_char_query_uses_fts(dl):
     e = make_entry(source_key="https://e.com/b", title="PostgreSQL 索引优化实践",
                    locator="https://e.com/b")

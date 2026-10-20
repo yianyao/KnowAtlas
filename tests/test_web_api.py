@@ -218,7 +218,7 @@ def test_entries_linkage_batch(client, dl):
 
 
 def test_entry_summary_endpoint(client, dl):
-    """关系图弹窗卡概要：轻端点截断 snippet、无正文返回空串、未知 404、免令牌。"""
+    """关系图弹窗卡概要：轻端点截断 snippet（160，第三十七批）、无正文空串、404、免令牌。"""
     from knowatlas.models import Entry, FetchResult
     e = Entry.build(source_type="manual", source_key="sum1", title="概要条目",
                     locator="https://x.example/a", locator_canonical="https://x.example/a",
@@ -231,7 +231,8 @@ def test_entry_summary_endpoint(client, dl):
     assert r.status_code == 200
     body = r.json()
     assert body["title"] == "概要条目"
-    assert len(body["snippet"]) == 400 and "  " not in body["snippet"]  # 截断+空白归一
+    assert len(body["snippet"]) == 160 and "  " not in body["snippet"]  # 截断+空白归一
+    assert body["snippet"].startswith("第一段 摘要正文 第二段")
     assert body["locator"] == "https://x.example/a"
     # 无正文条目 → 空串而非报错
     e2 = Entry.build(source_type="manual", source_key="sum2", title="无正文",
@@ -241,25 +242,16 @@ def test_entry_summary_endpoint(client, dl):
     assert client.get("/api/entries/nope1234567890ab/summary").status_code == 404
 
 
-def test_entry_summary_endpoint(client, dl):
-    """关系图弹窗卡概要：轻端点截断 snippet、无正文返回空串、未知 404、免令牌。"""
-    from knowatlas.models import Entry, FetchResult
-    e = Entry.build(source_type="manual", source_key="sum1", title="概要条目",
-                    locator="https://x.example/a", locator_canonical="https://x.example/a",
-                    content_hash="hash-sum-001")
-    dl.upsert_entries([e])
-    dl.put_content(FetchResult(text="第一段  摘要正文\n第二段 " + "长" * 500,
-                               content_hash="hash-sum-001",
-                               fetcher="test", fetched_at="2026-10-20T00:00:00+08:00"))
-    r = client.get(f"/api/entries/{e.id}/summary")
-    assert r.status_code == 200
-    body = r.json()
-    assert body["title"] == "概要条目"
-    assert len(body["snippet"]) == 400 and "  " not in body["snippet"]  # 截断+空白归一
-    assert body["locator"] == "https://x.example/a"
-    # 无正文条目 → 空串而非报错
-    e2 = Entry.build(source_type="manual", source_key="sum2", title="无正文",
-                     locator="https://x.example/b", locator_canonical="https://x.example/b")
-    dl.upsert_entries([e2])
-    assert client.get(f"/api/entries/{e2.id}/summary").json()["snippet"] == ""
-    assert client.get("/api/entries/nope1234567890ab/summary").status_code == 404
+def test_static_pages_consumption_defaults():
+    """静态页探针（第三十七批）：弹窗卡仅 http(s) 出「打开原文」；管理入口默认折叠。"""
+    from knowatlas.web.app import _STATIC_DIR
+
+    graph = (_STATIC_DIR / "graph.html").read_text(encoding="utf-8")
+    assert "/^https?:/i.test(loc)" in graph       # 只有 http(s) 渲染「打开原文」链接
+    assert "ccopy" in graph                       # file:// / emmx:// 走 locator+复制
+    index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert '<details id="mgmt"' in index          # 管理分组存在
+    assert 'details id="mgmt" open' not in index  # 且默认收起（消费页优先）
+    # 四个数据管理入口都在 details 块内
+    for eid in ("staged-btn", "rejected-link", "dead-link", "nonk-link"):
+        assert index.index('<details id="mgmt"') < index.index(f'id="{eid}"')

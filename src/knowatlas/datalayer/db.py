@@ -326,6 +326,14 @@ class DataLayer:
         ).fetchone()
         return row["text"] if row else None
 
+    def get_content_preview(self, content_hash: str, limit: int) -> str | None:
+        """正文前缀（SQL substr 截取，不整段进内存——悬浮概要等轻场景用）。"""
+        row = self._conn.execute(
+            "SELECT substr(text, 1, ?) AS head FROM content_store WHERE content_hash=?",
+            (max(0, int(limit)), content_hash),
+        ).fetchone()
+        return row["head"] if row else None
+
     # ---- 分类 ----
 
     def _category_from_row(self, row: sqlite3.Row, path: str) -> Category:

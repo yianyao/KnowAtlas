@@ -72,12 +72,16 @@
   <h1>知道 KnowAtlas</h1>
   <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
   <input id="search" placeholder="工作台：输入主题词 → 聚合结果 / 线索 / 放射 三视图">
-  <button id="staged-btn">📥 暂存区（未分类条目）</button>
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
   <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
-  <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
-  <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
-  <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
+  <!-- 数据管理入口默认折叠（第三十七批用户定调：日常是消费数据，采集/清理只在新数据时用） -->
+  <details id="mgmt" style="margin:4px 0 8px">
+    <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
+    <button id="staged-btn" style="width:100%;box-sizing:border-box;padding:6px;margin:8px 0">📥 暂存区（未分类条目）</button>
+    <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
+    <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
+    <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
+  </details>
   <label style="display:block;margin:8px 0 0;font-size:12px;opacity:.7;user-select:none">
     <input type="checkbox" id="show-empty-cats"> 显示空分类（条目已清空的）
   </label>

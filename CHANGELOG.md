@@ -906,3 +906,54 @@
   放射正常
 - 三页 serve 实跑 200；pytest 191 项全绿（+6 守卫 -0）；canary 不变
 - 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
+
+### 0.2.0 第三十七批（2026-10-20，变更工单）：弹窗卡提速/修打开原文 + 管理入口折叠 + 测试重名修正
+
+**来源**：用户实图批注——①概要加载太慢、「不用太长吧？」；②弹窗卡「打开原文」好像失效；
+③默认应该是消费页，数据采集/清理入口应折叠隐藏（大部分时候是消费数据）。
+
+**根因**
+
+- 概要慢：`/api/entries/{id}/summary` 走 `get_content` 拉全量正文（content_store 有
+  百万字符级条目），悬浮场景只用开头几百字。
+- 打开原文失效：locator 三种 scheme 前端一律当 href——http(s) 可开；
+  `file://<配置根相对路径>` 两段式被浏览器解析为 host=配置根名（指向错误位置）；
+  `emmx://` 浏览器不认。假链接必失效（浏览器还不允许 http 页面直接导航 file://）。
+- 附带发现：tests/test_web_api.py `test_entry_summary_endpoint` 定义两次，
+  后者覆盖前者，pytest 实际只收集一个。
+
+**旧 → 新**
+
+1. **db.py** 新增 `get_content_preview(content_hash, limit)`：SQL `substr(text,1,?)`
+   只取前缀，不再整段进内存。
+2. **api.py entry_summary**：改用 preview（limit=2000）→ 空白归一 → snippet
+   截 400 → **160** 字（用户口径：不用太长）。
+3. **graph.html 弹窗卡**：locator 以 http(s) 开头才渲染「打开原文」链接；
+   file:// 与 emmx:// 改为只读 locator 文本 + 「⧉ 复制」按钮（file:// 为配置根
+   相对路径；emmx 为脑图节点引用，均提示在对应工具打开）。隐藏延时 250→350ms
+   （鼠标走到卡片的余裕更足）。
+4. **index.html**：侧栏管理入口（暂存区/已舍弃/失效链接/待清理候选）折进
+   `<details>`「🛠 数据管理（采集 / 清理）」，**默认收起**；消费入口（搜索工作台/
+   关系图/串联工作区/分类树）保持顶层。"/" 本就服务 index.html（消费页），路由不动。
+5. **tests/test_web_api.py**：删除重复定义的 `test_entry_summary_endpoint`，
+   保留一份并更新断言（snippet 160、超长归一后截断）。
+
+**复检探针**（实现后逐条命中）
+
+- get_content_preview(hash, n) == get_content(hash)[:n]（有/无正文两态）
+- summary snippet 长度 ≤160；无正文空串；404 不变
+- graph.html 静态检查：仅 `^https?:` 渲染 anchor；复制按钮事件绑定存在
+- index.html 静态检查：details#mgmt 默认无 open；四个管理入口在其内
+- pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20，全命中）**
+
+- get_content_preview 前缀 == get_content[:n]（含无正文 None、超长 limit=全文，
+  tests/test_datalayer.py::test_get_content_preview_prefix）
+- summary snippet 160 + 空白归一 + startswith 断言；无正文空串；404 不变
+  （test_entry_summary_endpoint 重名定义已删，实测此前 pytest 只收集一份）
+- 静态页探针 test_static_pages_consumption_defaults：graph.html 仅 /^https?:/
+  渲染打开原文 + ccopy 复制按钮存在；index.html details#mgmt 存在且默认收起、
+  四个管理入口均在块内
+- pytest 193 项全绿；七个变更文件 UTF-8 无 BOM + LF
+- canary 不变（无 DDL / 注册表变动）

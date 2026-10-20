@@ -38,6 +38,10 @@
   #nodecard .cs { margin: 6px 0; font-size: 12px; line-height: 1.5;
                   max-height: 130px; overflow: auto; white-space: pre-wrap; }
   #nodecard .copen { display: inline-block; margin-top: 2px; color: #4a9eff; }
+  #nodecard .cpath { color: #888; font-size: 11px; word-break: break-all; }
+  #nodecard .ccopy { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                     background: transparent; color: inherit; font-size: 11px;
+                     padding: 0 6px; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -81,11 +85,20 @@ let cardHideTimer = null, cardKey = null;
 
 function hideCardSoon() {         // 用户口径③：鼠标走（节点与弹窗都离开），弹窗隐
   clearTimeout(cardHideTimer);
-  cardHideTimer = setTimeout(() => { nodecard.hidden = true; }, 250);
+  cardHideTimer = setTimeout(() => { nodecard.hidden = true; }, 350);
 }
 function keepCard() { clearTimeout(cardHideTimer); }
 nodecard.addEventListener("mouseenter", keepCard);
 nodecard.addEventListener("mouseleave", hideCardSoon);
+// 「⧉ 复制」按钮（事件委托，卡片 innerHTML 每次重建也能响应）
+nodecard.addEventListener("click", e => {
+  const btn = e.target.closest(".ccopy");
+  if (!btn) return;
+  navigator.clipboard.writeText(btn.dataset.loc || "").then(() => {
+    btn.textContent = "✓ 已复制";
+    setTimeout(() => { btn.textContent = "⧉ 复制"; }, 1200);
+  }).catch(() => { btn.textContent = "✗ 复制失败"; });
+});
 
 function showCard(d, cx, cy) {
   keepCard();
@@ -94,10 +107,21 @@ function showCard(d, cx, cy) {
   if (d.path) info.push(`<div class="cp">路径：${d.path}</div>`);
   if (d.reasons && d.reasons.length)
     info.push(`<div class="cp">关联：${d.reasons.join("；")}</div>`);
+  // 打开原文只对 http(s) 出真链接；file://（配置根相对路径）/emmx://（脑图引用）
+  // 浏览器打不开（第三十七批：不再渲染假链接，改 locator 文本 + 复制）
+  const loc = d.locator || "";
+  let openPart = "";
+  if (/^https?:/i.test(loc))
+    openPart = `<a class="copen" href="${loc}" target="_blank" rel="noopener">▶ 打开原文 ↗</a>`;
+  else if (loc)
+    openPart = `<span class="cpath" title="${loc.startsWith("file://")
+      ? "本地文件（配置根相对路径），复制后在文件管理器打开"
+      : "脑图节点引用，请在 MindMaster 中打开对应文件"}">${loc}</span>`
+      + `<button class="ccopy" data-loc="${loc.replace(/"/g, "&quot;")}">⧉ 复制</button>`;
   nodecard.innerHTML =
     `<div class="ct">${d.name}（${KIND_NAME[d.kind] || d.kind}）</div>` + info.join("")
     + (d.kind === "entry" ? `<div class="cs">概要加载中…</div>` : "")
-    + (d.locator ? `<a class="copen" href="${d.locator}" target="_blank" rel="noopener">▶ 打开原文 ↗</a>` : "");
+    + openPart;
   // 视口内夹紧：不跟鼠标跑，出了屏幕边缘往回拉
   nodecard.style.left = Math.min(cx + 14, window.innerWidth - 320) + "px";
   nodecard.style.top = Math.min(cy + 14, window.innerHeight - 200) + "px";
