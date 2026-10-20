@@ -1093,3 +1093,58 @@ simhash 近似与 embedding 余弦（M4）误合成本高于漏合（合并伤�
 - pytest 212 项全绿（+12 邮件）；canary ddl 升版 567685343650（003 新表），
   test_threads 迁移断言升 3 并纳入 conv_messages 表检查
 - 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
+
+### 0.2.0 第四十批（2026-10-20，变更工单）：书签扩散抓取——同目录系列内容显式扩抓
+
+**来源**：2026-10-20 用户需求（像微信收藏步骤三「全扒」一样，书签不只抓原文，还抓
+同一目录页同一主题的内容）。TODO Phase 2 预留条目落地。
+
+**范围裁定（纯规则，可解释）**：扩散线索 = 种子页内链接中**与种子同目录**（同
+scheme+host+父目录路径）者——正中「同一目录页同一主题」；整站同 host 链接不收
+（导航/推荐噪音会演变成全站爬取，违背「显式触发、小步扩充」约束）。LLM 相似判定
+后置（relation_reason 纪律：规则可解释先行）。
+
+**模型**：种子 = 已入库书签/http 条目。`ksync --expand <entry_id>` 显式触发（不自动跑）：
+现抓种子 HTML（fetcher 产物是 readability 纯文本，链接已丢，须读原文）→ 提取同目录
+链接 → 过滤链（canonical 化去重锚点 → 排除种子自身 → 未入库 [find_by_canonical /
+find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截断，默认 20）→
+逐条 fetch_with_fallback 抓正文 → 入库 + content_store + 照常 classify_coarse 分类。
+
+**旧 → 新**
+
+1. **models.py** SOURCE_TYPES 加 "expand"（canary source_types 升版；SCHEMES 不动，
+   locator 仍 http）。新增枚举动机：扩散条目不得用 bookmark（书签源 full 同步
+   archive_missing 会把它归档——它不在书签文件里），manual 语义（手动收录）也不准。
+2. **pipeline/expand.py**：expand_seed(cfg, dl, locators, semantics, seed_entry_id,
+   limit=20)——校验种子存在且 http(s)；现抓 HTML（httpx，复用 UA/超时配置）；
+   urljoin 归一链接；同目录判定；候选过滤链；逐条抓取入库（source_key =
+   `expand:{seed_id}:{canonical}` 幂等）；meta 记 seed_entry_id + expand_reason
+   （"series_same_dir"，关联解释纪律）；put_content；分类复用 kadd 的
+   classify_coarse 链路；task_log 全程留痕。
+3. **cli.py / sync**：ksync 加 `--expand ENTRY_ID`、`--expand-limit N`（不进 run_sync
+   主循环，CLI 分支直调 expand_seed，自含 start_run/finish_run 留痕）。
+4. **index.html**：SRC_LABEL 补 { expand: "扩散" } 徽标。
+5. **config**：无新键（limit 走 CLI 参数；不进 pyproject 依赖——纯标准库+既有依赖）。
+
+**复检探针**（实现后逐条命中）
+
+- 种子页含同系列链接（/series/02、/series/03）→ 扩散出条目且 meta.seed_entry_id
+  指向种子、expand_reason="series_same_dir"（探针①）
+- 不同目录链接（/other/x）与站外链接不产生条目
+- L0 拦截：同目录下 /docs/ 尾斜杠列表页被价值守卫拦截，不产生条目（探针②）
+- 重复 expand 同一种子 → 第二轮 created=0，canonical 去重（探针③）
+- --expand-limit=1 截断生效
+- pytest 全绿；canary source_types 新值落常量；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20，全命中）**
+
+- tests/test_expand.py 5 项（本地 HTTP fixture 多路由）：探针①同目录系列扩散
+  （02/03 入库，meta.seed_entry_id 指种子、expand_reason='series_same_dir'、
+  全文进 content_store）/ 探针② L0 拦截（/series/ 尾斜杠列表页 blocked_by_guard=1）
+  + 不同目录与站外不收 + 种子自身 already_known / 探针③重复扩散 created=0
+  （canonical 去重）/ --expand-limit 截断 / 非 http 种子拒绝
+- 开发期修一处语义：种子自身链接计入 already_known（原 continue 不计数，
+  幂等报告少一项）
+- fetch_with_fallback http 分支不依赖 locators——扩散直接传真实注册表（无 shim）
+- canary source_types 升版 25f37b30ac76（+expand）；SCHEMES 不动
+- pytest 217 项全绿（+5）；九个变更文件 UTF-8 无 BOM + LF

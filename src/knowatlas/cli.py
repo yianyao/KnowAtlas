@@ -45,6 +45,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="价值体检：纯规则标记非知识内容（资源直链/站点首页/列表子页），零费用、不动分类树；配合 --dry-run 只出报告")
     ksync.add_argument("--dedupe-scan", action="store_true",
                        help="跨源去重存量扫描：canonical/正文 hash 完全一致的条目合并为一条（主条目保留全部 locator 可跳转，副条目隐藏、可逆）；配合 --dry-run 只出报告")
+    ksync.add_argument("--expand", metavar="ENTRY_ID", default=None,
+                       help="书签扩散抓取（显式触发）：对指定书签/http 条目抓取其同目录系列页（同一目录页同一主题）")
+    ksync.add_argument("--expand-limit", type=int, default=20,
+                       help="扩散每轮最多新建条数（默认 20）")
 
     serve = sub.add_parser("serve", help="启动本地 Web 服务（默认 127.0.0.1:8420）")
     serve.add_argument("--host", default=None)
@@ -117,13 +121,20 @@ def _cmd_kadd(args: argparse.Namespace) -> int:
 
 
 def _cmd_ksync(args: argparse.Namespace) -> int:
-    from .pipeline.sync import run_sync
-
     cfg = load_config()
     setup_logging(cfg.log_level)
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     try:
+        if args.expand:
+            from .pipeline.expand import expand_seed
+
+            stats = expand_seed(cfg, dl, locators, semantics,
+                                args.expand, limit=args.expand_limit)
+            print(f"OK 扩散完成：{stats}")
+            return _EXIT_OK
+        from .pipeline.sync import run_sync
+
         stats = run_sync(cfg, dl, locators, semantics, full=args.full,
                          source=args.source, dry_run=args.dry_run,
                          limit=args.limit, fetch_limit=args.fetch_limit,

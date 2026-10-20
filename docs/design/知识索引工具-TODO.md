@@ -93,15 +93,17 @@ reader: 执行者（人与 agent）
       - 探针：同一篇文章在书签与邮件中各出现一次，数据层合并为一条、两个 locator 均保留
         可跳转 ✅（tests/test_dedupe.py：书签+manual 同 URL / 两 folder 同正文；
         find_by_locator 反查主条目；邮件源待 M3 接入后补真实场景）
-- [ ] 书签扩散抓取（2026-10-20 用户需求：像微信收藏步骤三「全扒」一样，书签不只抓原文，
-      还抓同目录页/同主题内容）——从已入库书签条目提取扩散线索：同 host + 页内「相关文章」
-      链接 + 同专栏/系列 URL 模式（先纯规则判同主题，LLM 相似后置）；新条目 meta 记
-      seed_entry_id（与微信收藏全扒同构，视图可「展开该主题相关内容」）
-      - 约束：显式触发不自动跑（`ksync --expand <entry_id>` 或 UI 按钮）；每种子默认上限
-        N 条；扩散候选先过 L0 价值守卫（portal/资源页不抓）；复用 fetch_with_fallback 与
-        content store；抓到的条目照常走分类链路
-      - 探针：一个有系列文章的书签种子扩散出同系列条目且带 seed_entry_id；扩散候选被
-        价值守卫拦截的不产生条目；重复扩散不产生重复条目（canonical 去重）
+- [x] 书签扩散抓取（0.2.0 第四十批：像微信收藏步骤三「全扒」一样，书签不只抓原文，
+      还抓同一目录页同一主题内容）——种子页内链接中**与种子同目录**者（同
+      scheme+host+父目录；整站同 host 链接不收，防演变成全站爬取）；新条目
+      source_type='expand' + meta 记 seed_entry_id / expand_reason='series_same_dir'
+      （关联解释；bookmark 类型不可用——会被书签源 full 同步归档）✅
+      - 约束：显式触发 `ksync --expand <entry_id>`（不自动跑）✅；每种子默认上限
+        20（--expand-limit）✅；扩散候选先过 L0 价值守卫（portal/资源页不抓）✅；
+        复用 fetch_with_fallback 与 content store ✅；抓到的条目照常走分类链路 ✅
+      - 探针：种子扩散出同系列条目且带 seed_entry_id ✅；被价值守卫拦截的不产生
+        条目 ✅；重复扩散不产生重复条目（canonical 去重）✅
+        （tests/test_expand.py 5 项，本地 HTTP fixture）
 - [x] 邮件适配器（0.2.0 第三十九批：本项目**不做 IMAP 直连、不碰凭证**——外部同步工具
       （offlineimap 等）落 maildir → 本地解析；邮箱账号/文件夹/发件人/时间入 meta）✅
       - 探针：凭证错误的报错信息明确指向配置项 ✅（路径缺失/非 maildir 的 AdapterError

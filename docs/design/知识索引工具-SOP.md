@@ -241,6 +241,27 @@ thread_type='source' 的会话线程（串联工作区可见，📮 前缀命名
 **故障处理**：解析失败的邮件跳过并计数（stats.skipped_parse），不中断同步；单源上限
 5000 封（超出计 stats.truncated，提高上限需改适配器 _MAX_MESSAGES）。
 
+### 2.11 书签扩散抓取（0.2.0 第四十批）
+
+**用途**：对一篇系列文章/教程目录里的书签，一把抓下**同一目录**的其余页面
+（同一目录页同一主题）。
+
+**用法（显式触发，不自动跑）**：
+
+```bash
+uv run python -m knowatlas ksync --expand <entry_id>            # 默认每轮最多 20 条
+uv run python -m knowatlas ksync --expand <entry_id> --expand-limit 5
+```
+
+entry_id 可从条目详情/URL 里拿。种子必须是 http(s) 条目（书签/手动收录均可）。
+
+**规则（纯规则可解释）**：只收种子页内链接中与种子**同目录**者（同协议+域名+父目录
+路径）；整站同域名链接不收（防变成全站爬取）。候选依次过：canonical 去重（含种子自身
+与已入库条目，重复扩散零新建）→ L0 价值守卫（站点首页/列表子页/资源直链不抓）→
+上限截断。新条目 source_type='expand'（UI 徽标「扩散」），meta 带 seed_entry_id
+（可回溯种子）与 expand_reason='series_same_dir'（关联解释），正文进
+content_store 并照常走分类链路。
+
 ---
 
 ## 3. 新增一个知识源（SOP-A）

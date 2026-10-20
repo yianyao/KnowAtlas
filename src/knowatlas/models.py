@@ -9,7 +9,7 @@ from typing import Any
 # §3.2 source_type 白名单（canary 覆盖项：改动必须先写工单）
 SOURCE_TYPES = (
     "bookmark", "folder", "emmx", "mail", "ima", "txdoc", "db", "session",
-    "wxfav", "manual", "wxchat", "wxarticle", "bili",
+    "wxfav", "manual", "wxchat", "wxarticle", "bili", "expand",
 )
 
 # status 枚举：active=在库 / archived=源里消失（可复活） / rejected=用户明确舍弃（永不复活，
