@@ -16,7 +16,7 @@ CONFIG_SCHEMA_KEYS = (
     "general.backup_dir", "general.content_root", "general.db_path",
     "general.log_level", "general.server_host", "general.server_port",
     "web.token_env",
-    "llm.api_key_env", "llm.base_url", "llm.enabled", "llm.max_batch",
+    "llm.api_key_env", "llm.backends", "llm.base_url", "llm.enabled", "llm.max_batch",
     "llm.model", "llm.temperature",
     "embedding.enabled", "embedding.model_path", "embedding.provider",
     "fetch.default_backend", "fetch.fallback_backend", "fetch.max_fetch_per_run",

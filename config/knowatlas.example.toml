@@ -31,21 +31,33 @@ token_env    = "KNOWATLAS_WEB_TOKEN"
 
 [llm]                                  # 语义分类用的大模型（OpenAI 兼容接口均可接）
 # 只在语义判断时调用（L1 先验/L2 规则命中不消耗 LLM）；key 未设则静默跳过，不影响其他功能
-# 换供应商只改三行——base_url / api_key_env / model，代码零改动（客户端就是标准
-# OpenAI 兼容的 POST {base_url}/chat/completions）。已试过的接法：
-#   DeepSeek 官方：base_url="https://api.deepseek.com/v1"        model="deepseek-chat"
-#   硅基流动：    base_url="https://api.siliconflow.cn/v1"      model="deepseek-ai/DeepSeek-V3"
-#     （硅基流动 API Key 在 https://cloud.siliconflow.cn 申请；key 只进环境变量不入本文件）
+# 换供应商零代码改动（客户端就是标准 OpenAI 兼容的 POST {base_url}/chat/completions）。
+# 已知接法：DeepSeek 官方 https://api.deepseek.com/v1（deepseek-chat）；
+#           硅基流动 https://api.siliconflow.cn/v1（如 deepseek-ai/DeepSeek-V3，
+#           key 在 https://cloud.siliconflow.cn 申请，只进环境变量不入本文件）。
 #
-# 多个 key 的配法（0.2.0 第二十批 key 池——「用完一个换一个」全自动，不用手动 setx）：
-#   ① 最省事：一个环境变量值里逗号分隔——
-#      setx KNOWATLAS_LLM_API_KEY "sk-第一个,sk-第二个"   （api_key_env 仍指这一个变量名）
-#   ② 分开存：api_key_env 指向多个变量名（逗号分隔）——
-#      api_key_env = "KNOWATLAS_LLM_API_KEY_A,KNOWATLAS_LLM_API_KEY_B"
-#   两种可堆叠。顺序即优先级：书写排前的先用；某个 key 失效(401/403)/余额不足(402)/
-#   限流(429)时自动换下一个重试，全部不可用才报错（报错只带 key 指纹不带明文）。
-#   注意：serve 启动时读一次 key——新增/更换 key 后要重开终端并重启 serve 才生效
-#   （ksync 每次是新进程，重开终端重跑即可）。
+# ---- 单供应商（旧写法，继续有效）：扁平三行 + key 只进环境变量 ----
+# base_url    = "https://api.deepseek.com/v1"
+# api_key_env = "KNOWATLAS_LLM_API_KEY"
+# model       = "deepseek-chat"
+#
+# ---- 多供应商按序 failover（0.2.0 第二十一批）：[[llm.backends]] 数组表 ----
+# 书写顺序即优先级：前面的 base_url 整体不可用（key 失效/限流/余额不足/5xx/连不上）
+# 才切下一个；每个后端内部还支持多个 key（逗号分隔变量名/值，先换 key 再换 base_url）。
+# 不写 backends 时由上面的扁平三行合成单后端——两种写法二选一，别混用。
+#   [[llm.backends]]
+#   base_url    = "https://api.deepseek.com/v1"      # 第一优先：DeepSeek 官方
+#   api_key_env = "KNOWATLAS_LLM_API_KEY"            # 该后端的 key 环境变量名（可多个，逗号分隔）
+#   model       = "deepseek-chat"
+#
+#   [[llm.backends]]
+#   base_url    = "https://api.siliconflow.cn/v1"    # 兜底：硅基流动
+#   api_key_env = "KNOWATLAS_LLM_API_KEY_SF1,KNOWATLAS_LLM_API_KEY_SF2"   # 两个 key 都塞给它
+#   model       = "deepseek-ai/DeepSeek-V3"
+#   # temperature = 0.1                              # 可选：覆盖下面的全局值
+#
+# 注意：serve 启动时读一次 key——新增/更换 key 后要重开终端并重启 serve 才生效
+# （ksync 每次是新进程，重开终端重跑即可）。
 enabled        = true
 base_url       = "https://api.deepseek.com/v1"
 api_key_env    = "KNOWATLAS_LLM_API_KEY"   # 环境变量名；本机已设 DeepSeek key

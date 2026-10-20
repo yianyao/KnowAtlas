@@ -399,3 +399,21 @@
 - **配置描述**：example.toml [llm] 写清两种多 key 配法 + 顺序即优先级 + 换 key 触发条件
   + 「serve 启动时读一次，换 key 后重开终端并重启 serve」。
 - **测试**：新增 tests/test_llm_pool.py 12 项（配置解析 5 + 池行为 7），全量 122 项通过。
+
+### 新增（0.2.0 第二十一批：LLM 多后端池——多个 base_url 按序 failover）
+
+- **用户诉求（2026-10-20，截图红字）**：「多个 base_url 也没用啊，只能用一个」——第二十批
+  key 池只解决同一 base_url 下多 key 切换，跨供应商（DeepSeek ↔ 硅基流动）仍然切不动。
+- **`[[llm.backends]]` 数组表（新配置键，canary config_keys 摘要已升版重录）**：每个后端
+  = base_url + key 池 + model，书写顺序即 failover 优先级；不写 backends 时由扁平
+  `[llm]` 字段（base_url/api_key_env/model）合成单后端——**旧配置照常工作**；
+  后端 key 未设的自动跳过（不带空池进链）；temperature 可后端级覆盖全局。
+- **两级切换策略（`semantic/llm.py` 重构 `_Backend` + `LlmClient(backends)`）**：
+  401/403/402/429（key 失效/余额/限流）→ 先换同后端下一个 key → key 池尽切下一个后端；
+  5xx/网络异常/响应结构异常 → 同后端其他 key 无益，直接切下一个后端；
+  4xx 其他（400 等请求/配置问题）→ 直接抛，不换供应商（换了也治不好且掩盖问题）。
+- **错误聚合**：全部不可用时逐行列「base_url — HTTP 状态/错误（key 指纹）」，只指纹不明文；
+  单后端单 key 的错误消息与旧版逐字一致（向后兼容）。
+- **测试**：test_llm_pool.py 重写扩到 15 项（failover 全路径、5xx 跳同后端 key、4xx 不切、
+  聚合只带指纹、旧消息兼容、扁平配置兼容、数组表解析与覆盖、无 key 后端跳过），
+  另做端到端真 TOML 验证（DeepSeek 优先 + 硅基双 key 兜底）；**全量 125 项通过**。
