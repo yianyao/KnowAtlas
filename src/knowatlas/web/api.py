@@ -358,6 +358,18 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "merge_category", category_id, {"target_id": target_id})
         return {"merged": category_id, "into": target_id}
 
+    @app.get("/api/entries/linkage")
+    def entries_linkage(ids: str = ""):
+        """批量取条目的分类挂接（双向联动②：条目列表点分类路径徽标在树中定位）。
+
+        只读；最多 100 个 id（前端按视图批量取，防 URL 过长）。必须声明在
+        /api/entries/{entry_id} 之前——否则 "linkage" 会被路径参数捕获。
+        """
+        id_list = [s.strip() for s in ids.split(",") if s.strip()][:100]
+        if not id_list:
+            return {"linkage": {}}
+        return {"linkage": {eid: dl.get_entry_categories(eid) for eid in id_list}}
+
     @app.get("/api/entries/{entry_id}")
     def entry_detail(entry_id: str):
         detail = dl.get_entry_detail(entry_id)

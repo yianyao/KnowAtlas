@@ -177,3 +177,41 @@ def test_graph_view_endpoints(client, dl):
     assert {n["name"] for n in sr["nodes"] if n["kind"] == "entry"} == {"搜索样本0", "搜索样本1"}
     assert {n["name"] for n in sr["nodes"] if n["kind"] == "category"} >= {"图谱大类"}
     assert client.get("/api/graph/search?q=").json()["nodes"] == []
+
+
+# ---- 双向联动②端点（0.2.0 第二十三批）：批量取条目分类挂接 ----
+
+def test_entries_linkage_batch(client, dl):
+    from knowatlas.models import Entry
+    es = [Entry.build(source_type="bookmark", source_key=f"edge:lk{i}",
+                      title=f"联动样本{i}", locator=f"https://lk.example/{i}",
+                      locator_canonical=f"https://lk.example/{i}", native_path="书签栏")
+          for i in range(2)]
+    dl.upsert_entries(es)
+    a = dl.create_category("联动大类", [], "rule")
+    dl.attach_category(es[0].id, a.id, 1.0, "prior", "r1")
+    r = client.get(f"/api/entries/linkage?ids={es[0].id},{es[1].id}").json()
+    assert r["linkage"][es[0].id][0]["path"] == "联动大类"
+    assert r["linkage"][es[1].id] == []  # 未挂接条目返回空列表而非缺键
+    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}}
+    # "linkage" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
+    assert client.get("/api/entries/linkage").status_code == 200
+
+
+# ---- 双向联动②端点（0.2.0 第二十三批）：批量取条目分类挂接 ----
+
+def test_entries_linkage_batch(client, dl):
+    from knowatlas.models import Entry
+    es = [Entry.build(source_type="bookmark", source_key=f"edge:lk{i}",
+                      title=f"联动样本{i}", locator=f"https://lk.example/{i}",
+                      locator_canonical=f"https://lk.example/{i}", native_path="书签栏")
+          for i in range(2)]
+    dl.upsert_entries(es)
+    a = dl.create_category("联动大类", [], "rule")
+    dl.attach_category(es[0].id, a.id, 1.0, "prior", "r1")
+    r = client.get(f"/api/entries/linkage?ids={es[0].id},{es[1].id}").json()
+    assert r["linkage"][es[0].id][0]["path"] == "联动大类"
+    assert r["linkage"][es[1].id] == []  # 未挂接条目返回空列表而非缺键
+    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}}
+    # "linkage" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
+    assert client.get("/api/entries/linkage").status_code == 200
