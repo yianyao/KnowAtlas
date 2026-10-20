@@ -223,6 +223,10 @@ Web UI 同等功能：首页输入框粘贴 URL 即可；浏览器 bookmarklet�
 
 若上述任一步需要改代码，即为违反可迁移铁律，记录到 TODO 并修复。
 
+> **换机前必读**：`docs/迁移踩坑清单.md`——本机实踩过的依赖/Windows/代理/并发/
+> LLM 密钥坑（含 markitdown 裸装导致 Office 解析全废、uv venv 无 pip、全局代理
+> 劫持 localhost 请求等），每条都是真实踩过的，换机会原样再踩。
+
 ---
 
 ## 10. 变更管理纪律
