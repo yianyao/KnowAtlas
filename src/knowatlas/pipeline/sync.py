@@ -385,7 +385,13 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                 continue
             if old.status == "archived":
                 revived_ids.append(e.id)
-            if any(getattr(old, f) != getattr(e, f) for f in _SOURCE_FIELDS):
+            # 预检与 upsert 内容保护同口径（0.2.0 第二十五批）：采集器不产正文时
+            # 不比较 inline_content/content_hash——否则已抓正文的条目每轮都被误判
+            # updated，白白重跑一次无正文的分类（烧 LLM 费用）
+            src_has_content = bool((e.inline_content or "").strip()) or bool(e.content_hash)
+            fields = _SOURCE_FIELDS if src_has_content else tuple(
+                f for f in _SOURCE_FIELDS if f not in ("inline_content", "content_hash"))
+            if any(getattr(old, f) != getattr(e, f) for f in fields):
                 updated_ids.add(e.id)
         result = dl.upsert_entries(entries)
         if revived_ids:
