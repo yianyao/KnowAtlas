@@ -84,3 +84,19 @@ def judge_value(locator: str | None) -> str | None:
     if raw.endswith("/"):
         return "index_subdir"
     return None
+
+
+def is_garbled(text: str, *, scan_limit: int = 5000) -> bool:
+    """内容质量守卫（用户铁律 2026-10-20：乱码 = 不是可用的知识 = 没有）。
+
+    规则（纯函数零 IO）：替换符 U+FFFD 占比 > 5%，或控制字符（\\t\\n\\r 除外）
+    占比 > 10% → 乱码。只扫前 scan_limit 字符（内联正文上限 4000，余量足够）。
+    """
+    if not text:
+        return False
+    sample = text[:scan_limit]
+    n = len(sample)
+    if sample.count("\ufffd") / n > 0.05:
+        return True
+    ctrl = sum(1 for ch in sample if ord(ch) < 32 and ch not in "\t\n\r")
+    return ctrl / n > 0.10

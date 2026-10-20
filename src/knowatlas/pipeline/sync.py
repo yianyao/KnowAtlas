@@ -139,6 +139,7 @@ def _apply_content(entry: Entry, text: str, content_hash_hex: str,
     meta = dict(entry.meta)
     meta["fetch_backend"] = fetcher
     meta["fetched_at"] = fetched_at
+    meta["fetch_status"] = "ok"
     return Entry(
         id=entry.id, source_type=entry.source_type, title=entry.title,
         locator=entry.locator, locator_canonical=entry.locator_canonical,
@@ -150,27 +151,53 @@ def _apply_content(entry: Entry, text: str, content_hash_hex: str,
 
 def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
                    limit: int, run_id: str) -> dict[str, int]:
-    """K1 显式补抓：对缺正文的 http(s) 条目抓取，最多 limit 条；失败计数不中断。"""
+    """K1 显式补抓：对缺正文的 http(s)/file 条目抓取，最多尝试 limit 次；失败计数不中断。
+
+    用户铁律（2026-10-20）：不可达、解析不出、乱码——总之「不是具体的、用不了的知识
+    等于没有」→ 抓取失败/乱码的条目直接打 not_knowledge（value_flag_reason 注明原因）
+    进待清理候选；用户 value_flag=ok 否决的照旧不覆盖（_flag_value 读库判定）。
+    limit 是**尝试次数**上限（不是成功数）——失败大多不计费，但要防一轮跑太久。
+    """
     import httpx
     from datetime import datetime
+    from types import SimpleNamespace
 
     from ..fetchers.base import fetch_with_fallback
+    from ..semantic.value_guard import is_garbled
 
-    done = failed = 0
+    done = failed = attempts = 0
     ctx = FetchContext(config=cfg, datalayer=dl, http=httpx.Client(), run_id=run_id)
     updates: list[Entry] = []
+
+    def _flag(entry: Entry, reason: str, err: str | None = None) -> None:
+        """失败/乱码 → 待清理候选（reason 进 value_flag_reason）；附 fetch_status 供诊断。"""
+        nonlocal failed
+        failed += 1
+        _flag_value(dl, entry, SimpleNamespace(tags=["not_knowledge", f"value_reason:{reason}"]))
+        patch: dict[str, Any] = {"fetch_status": reason}
+        if err:
+            patch["fetch_error"] = err[:120]
+        dl.merge_meta(entry.id, patch)
+
     for e in entries:
-        if done >= limit:
+        if done >= limit or attempts >= limit:
             break
         is_file = e.locator.startswith("file://")
         if e.locator_canonical is None and not is_file:
             continue  # 非 http 且非 file，无正文可抓
         if e.content_hash and dl.get_content(e.content_hash) is not None:
             continue  # 正文已在 content_store（抓过一次不重复抓）
+        attempts += 1
         try:
             text, title = fetch_with_fallback(e.locator, locators, ctx)
-        except (FetchError, DegradedParseError):
-            failed += 1  # 不可读文件（乱码/解析失败）在此暴露——条目保留，可手动舍弃
+        except (AdapterError, FetchError) as exc:
+            _flag(e, "unreachable", str(exc))  # 文件缺失/路径非法/HTTP 错误/超时
+            continue
+        except DegradedParseError as exc:
+            _flag(e, "unparseable", str(exc))  # markitdown/readability 解析不出
+            continue
+        if is_garbled(text):
+            _flag(e, "garbled")  # 乱码正文不入库不进 FTS，直接进待清理候选
             continue
         fhash = content_hash(text)
         dl.put_content(FetchResult(text=text, content_hash=fhash,
@@ -182,7 +209,7 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         done += 1
     if updates:
         dl.upsert_entries(updates)
-    return {"fetched": done, "fetch_failed": failed}
+    return {"fetched": done, "fetch_failed": failed, "fetch_attempts": attempts}
 
 
 def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str, Any]:

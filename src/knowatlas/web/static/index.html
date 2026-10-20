@@ -303,7 +303,8 @@ document.getElementById("nonk-link").onclick = async (e) => {
     "🔬 待清理候选——规则或 LLM 判为「非具体知识」（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
   document.getElementById("filter").style.display = "none";
   const data = await (await fetch("/api/not-knowledge")).json();
-  const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页" };
+  const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页",
+                        unreachable: "无法访问", unparseable: "解析失败", garbled: "乱码" };
   const box = document.getElementById("hits");
   box.innerHTML = data.entries.length
     ? data.entries.map(x =>

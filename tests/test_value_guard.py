@@ -291,3 +291,66 @@ def test_not_knowledge_api_includes_reason(client, dl):
     rows = client.get("/api/not-knowledge").json()["entries"]
     hit = [r for r in rows if r["id"] == e.id]
     assert len(hit) == 1 and hit[0]["reason"] == "portal_homepage"
+
+
+# ---------- 6. 内容质量守卫 + 补抓失败打标（用户铁律 2026-10-20：不可达/乱码 = 没有知识） ----------
+
+
+def test_is_garbled_thresholds():
+    from knowatlas.semantic.value_guard import is_garbled
+
+    assert not is_garbled("正常的中文正文内容，第二行也有文字。")
+    assert not is_garbled("")
+    assert is_garbled("abc" * 100 + "\ufffd" * 30)          # 替换符 > 5%
+    assert is_garbled("abc" * 100 + "\x00\x01\x02" * 40)    # 控制字符 > 10%
+
+
+def _file_entry(tmp_path, name: str, data: bytes | None, *, missing: bool = False):
+    """造一条 folder file:// 条目；missing=True 时不落盘（模拟文件已删除）。"""
+    from knowatlas.models import Entry
+
+    locator = f"file://{name}"
+    if not missing and data is not None:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_bytes(data)
+    return Entry.build(source_type="folder", source_key=f"d:/Data/{name}",
+                       title=name, locator=locator, locator_canonical=None,
+                       native_path=f"D:/Data/{name}", meta={"source_type": "folder"})
+
+
+def test_fetch_missing_flags_unreachable_and_garbled(cfg, dl, registries, tmp_path, monkeypatch):
+    """抓取失败（文件缺失）与乱码正文 → 直接进待清理候选，不中断整轮补抓。"""
+    from knowatlas.pipeline.sync import _fetch_missing
+
+    cfg._data.setdefault("sources", {})["folders"] = {"roots": [str(tmp_path)]}
+    locators, _ = registries
+    e_missing = _file_entry(tmp_path, "没了.md", None, missing=True)
+    e_garbled = _file_entry(tmp_path, "乱.txt", b"\x00\x01\x02" * 200)
+    e_ok = _file_entry(tmp_path, "好.md", ("# 标题\n\n这是足够长的正常正文内容。" * 20).encode("utf-8"))
+    dl.upsert_entries([e_missing, e_garbled, e_ok])
+
+    stats = _fetch_missing(cfg, dl, locators, [e_missing, e_garbled, e_ok], limit=10, run_id="r")
+    assert stats["fetched"] == 1 and stats["fetch_failed"] == 2
+
+    m_miss = dl.get_entry(e_missing.id).meta
+    assert m_miss["value_flag"] == "not_knowledge" and m_miss["value_flag_reason"] == "unreachable"
+    m_gar = dl.get_entry(e_garbled.id).meta
+    assert m_gar["value_flag"] == "not_knowledge" and m_gar["value_flag_reason"] == "garbled"
+    assert not dl.get_entry(e_garbled.id).inline_content  # 乱码正文不入库不进 FTS
+    m_ok = dl.get_entry(e_ok.id).meta
+    assert m_ok["fetch_status"] == "ok" and dl.get_entry(e_ok.id).inline_content
+
+
+def test_fetch_missing_respects_user_veto(cfg, dl, registries, tmp_path):
+    """用户已点「是知识，保留」（value_flag=ok）→ 抓取失败不再打标（fetch_status 照记）。"""
+    from knowatlas.pipeline.sync import _fetch_missing
+
+    cfg._data.setdefault("sources", {})["folders"] = {"roots": [str(tmp_path)]}
+    locators, _ = registries
+    e = _file_entry(tmp_path, "珍贵.md", None, missing=True)  # 文件没了但用户想保留条目
+    dl.upsert_entries([e])
+    dl.merge_meta(e.id, {"value_flag": "ok"})
+    _fetch_missing(cfg, dl, locators, [e], limit=10, run_id="r")
+    meta = dl.get_entry(e.id).meta
+    assert meta["value_flag"] == "ok"  # 否决不被覆盖
+    assert meta["fetch_status"] == "unreachable"  # 诊断信息照记

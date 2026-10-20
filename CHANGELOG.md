@@ -479,3 +479,24 @@
   超时）——符合官方「受目标站点访问策略影响」，错误透明、失败不计费。
 - **测试**：+7（全 mock：升级路由端到端 / 429 退避序列 0.8s,1.6s / 429 耗尽 / 非 429 不重试 /
   空正文 / 缺 key 带 hint 不发请求 / 坏 URL 预检不发请求），**全量 138 项通过**。
+
+### 新增/修正（0.2.0 第二十五批：内容质量守卫——用户铁律「不可达/乱码 = 没有知识」落地）
+
+- **用户定调（2026-10-20）**：「坚持一个原则——不可达的、没办法解释的、乱码的等等，
+  总而言之一句话，不是具体的、用不了的知识，等于没有」；并拍板暂存区处置走路径 A
+  （补抓正文）。
+- **`semantic/value_guard.is_garbled(text)`（新，纯函数零 IO）**：替换符 U+FFFD 占比 > 5%
+  或控制字符（\t\n\r 除外）占比 > 10% → 乱码（只扫前 5000 字符）。
+- **`pipeline/sync._fetch_missing` 重写**：
+  - 抓取失败打标：FetchError/AdapterError → reason=unreachable（无法访问）、
+    DegradedParseError → reason=unparseable（解析失败）、乱码 → reason=garbled（乱码）——
+    统一走 _flag_value 进待清理候选（value_flag=ok 用户否决照旧不被覆盖），
+    并落 meta.fetch_status / fetch_error 供诊断；
+  - **修连带 bug**：file_reader 对「文件不存在」抛 AdapterError，原代码只捕
+    FetchError/DegradedParseError——一个文件缺失会把整轮补抓炸掉；
+  - 乱码正文不入 content_store、不进 FTS（不污染检索）；
+  - limit 语义改为**尝试次数**上限（原为成功数），防大量失败时一轮跑不完；
+  - 成功条目 meta.fetch_status=ok。
+- **Web**：待清理候选 reasonLabel 新增 无法访问/解析失败/乱码 三种来源徽标。
+- **测试 +4**（is_garbled 阈值、失败/乱码/成功三路端到端、用户否决不被覆盖），
+  **全量 141 项通过**。
