@@ -42,7 +42,8 @@ def _is_consumable(entry: Any) -> bool:
     return (entry.status == "active"
             and m.get("value_flag") != "not_knowledge"
             and m.get("link_status") != "dead"
-            and not m.get("dedupe_master"))
+            and not m.get("dedupe_master")
+            and m.get("freshness_flag") != "stale")
 
 
 def find_master(dl: Any, entry: Any) -> tuple[Any | None, str]:

@@ -35,13 +35,15 @@ def _consumable(alias: str = "e") -> str:
     知识消费页（关系图/召回/检索/线索）只出「可消费」条目：
     status='active'（调用方既有条件）+ 非待清理（value_flag!=not_knowledge）
     + 非永久失效（link_status!=dead；error=疑似临时不判死）
-    + 非去重副条目（dedupe_master 为空；第三十八批：跨源合并后由主条目代表）。
-    管理页（待清理候选/失效链接/归档检索）不走本片段，照常全量列出。
+    + 非去重副条目（dedupe_master 为空；第三十八批：跨源合并后由主条目代表）
+    + 非明确过期（freshness_flag!=stale；第四十一批：suspect 仅标记保留可见）。
+    管理页（待清理候选/时效候选/失效链接/归档检索）不走本片段，照常全量列出。
     Python 侧同口径判定在 pipeline/dedupe.py::_is_consumable，改动须两处同步。
     """
     return (f" AND COALESCE(json_extract({alias}.meta,'$.value_flag'),'ok')!='not_knowledge'"
             f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'"
-            f" AND COALESCE(json_extract({alias}.meta,'$.dedupe_master'),'')=''")
+            f" AND COALESCE(json_extract({alias}.meta,'$.dedupe_master'),'')=''"
+            f" AND COALESCE(json_extract({alias}.meta,'$.freshness_flag'),'ok')!='stale'")
 # H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
 # meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
 # value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
@@ -1091,6 +1093,16 @@ class DataLayer:
             "SELECT * FROM entries WHERE status='active'"
             "   AND json_extract(meta, '$.value_flag')=? ORDER BY rowid LIMIT ?",
             (value_flag, limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
+    def list_by_freshness_flag(self, freshness_flag: str, limit: int = 500) -> list[Entry]:
+        """按时效标记列出条目（meta.freshness_flag；stale=明确过期，suspect=疑似过旧，
+        待用户清理/否决。第四十一批时效守卫）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status='active'"
+            "   AND json_extract(meta, '$.freshness_flag')=? ORDER BY rowid LIMIT ?",
+            (freshness_flag, limit),
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 

@@ -1148,3 +1148,61 @@ find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截�
 - fetch_with_fallback http 分支不依赖 locators——扩散直接传真实注册表（无 shim）
 - canary source_types 升版 25f37b30ac76（+expand）；SCHEMES 不动
 - pytest 217 项全绿（+5）；九个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十一批：时效守卫 freshness_flag——过期的、容易误导的知识清出来
+
+**背景**：TODO 步骤「时效/可信守卫」（2026-10-20 用户需求）。与 L0 价值守卫同构：
+纯规则信号、零费用、只标记不自动删，否决权与 value_flag=ok 同口径。
+「易误导」的语义判定成本高，LLM 后置（YAGNI，规则信号不够再上）。
+
+**变更**
+
+1. **新增 semantic/freshness.py**（纯函数零 IO）：
+   - `judge_text(title, body, *, stale_years=3, now_year=None)` → (flag, reason)：
+     - 标题/正文自述关键词（已废弃/已过时/不再维护/deprecated 等）→ **stale/keyword**；
+     - 正文可提取的最新日期（发布/更新/版权年份）早于 stale_years 年前 → **suspect/date_old**；
+   - `extract_latest_year(text)`：日期提取（最后更新于/发布于/©/Copyright/日期模式），
+     取最大年份（最后更新时间）；
+   - `title_key(title)`：同主题聚类键（小写、去版本号 \d+(\.\d+)+、去标点）。
+2. **sync._freshness_scan**（`ksync --freshness-scan [--dry-run]`）：扫全部 active
+   条目（跳过 value_flag=not_knowledge、link_status=dead、freshness_flag=ok 否决件），
+   正文取 inline_content + content_store 前 5000 字符；跨条目规则：同 host 同
+   title_key 组内 ≥2 条、本条更旧（正文日期优先，缺则 created_at）→
+   **suspect/newer_version**。命中打 meta.freshness_flag/freshness_reason/
+   freshness_checked_at。死链比例信号后置（单条死链已有 link_status=dead 承接，
+   host 级比例批量标储备疑，规则信号不够再上）。
+3. **db.py**：`list_by_freshness_flag(flag)`；`_consumable` 追加排除
+   freshness_flag=stale（过期知识退出消费面；suspect 保留可见）。dedupe.py
+   `_is_consumable` 同口径。
+4. **api.py**：`GET /api/freshness`（stale+suspect 分组，带 reason/checked_at）；
+   `POST /api/entries/{id}/unflag-freshness`（否决 → freshness_flag=ok，之后不再标）。
+5. **index.html**：数据管理区加「⏳ 时效候选」入口 + 视图（veto/一键舍弃同款交互）。
+6. **config/依赖**：无新键、无新依赖（纯标准库）。
+
+**复检探针**（实现后逐条命中）
+
+- 标题含「已废弃」样本 → stale/keyword（探针①）
+- 正文「最后更新于 2021-05」且 now_year=2026、stale_years=3 → suspect/date_old；
+  正文日期 2025 → 不标（探针②）
+- 同 host 同主题新旧并存 → 旧的进候选 suspect/newer_version、新的不标（探针③）
+- freshness_flag=ok 后二次扫描不翻转（探针④，与 value_flag 口径一致）
+- stale 条目退出消费面（_consumable）、suspect 保留；dry_run 零写库
+- pytest 全绿；canary 不动（无 DDL/枚举/配置变化）；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- tests/test_freshness.py 11 项：探针①标题/正文自述关键词 → stale/keyword
+  （防误杀反例：token 过期时间、正文裸提及 deprecated 不触发）/ 探针②
+  「最后更新于 2021-05」→ suspect/date_old、2025 不标、无日期不标 /
+  探针③同 host 同主题（Python 3.6 vs 3.12 去版本号同键）旧的进
+  suspect/newer_version、新的不标 / 探针④freshness_flag=ok 二次扫描不翻转
+  （stale 计数归零、meta 保持 ok）/ dry_run 零写库 / 待清理与死链条目跳过
+  / 消费读路径实测 stale 不可见、suspect 可检索，管理视图全量列出
+- 开发期修两处：日期提取预检正则误入 findall 循环（无分组返回整串导致
+  ValueError）拆出独立预检；同日期并列条目被 id 决胜随机误标 newer_version
+  ——改为日期并列即跳过（id 只作排序稳定用）
+- 真实库副本 dry-run 冒烟：1837 扫描，stale 0（强信号窄口径符合预期）、
+  suspect 87（date_old 85 + newer_version 2），只报告未写库
+- _consumable SQL 片段与 dedupe.py Python 口径两处同步（freshness_flag!=stale）
+- canary 六面不变（无 DDL/枚举/配置键变化）；pytest 228 项全绿（+11）；
+  十一个变更文件 UTF-8 无 BOM + LF

@@ -81,6 +81,7 @@
     <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
     <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
     <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
+    <a href="#" id="fresh-link" style="display:block;margin-bottom:8px;font-size:13px">⏳ 时效候选（过期/疑似过旧）</a>
   </details>
   <label style="display:block;margin:8px 0 0;font-size:12px;opacity:.7;user-select:none">
     <input type="checkbox" id="show-empty-cats"> 显示空分类（条目已清空的）
@@ -345,6 +346,44 @@ document.getElementById("nonk-link").onclick = async (e) => {
     box.insertAdjacentHTML("beforeend",
       `<button id="reject-all-nonk" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
   document.getElementById("reject-all-nonk")?.addEventListener("click",
+    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
+      (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); e.target.click(); })();
+    } });
+};
+
+document.getElementById("fresh-link").onclick = async (e) => {
+  e.preventDefault();
+  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
+  currentCat = null;
+  document.getElementById("crumb").textContent =
+    "⏳ 时效候选——规则判为「过期或疑似过旧」（废弃关键词/正文日期过旧/同主题已有更新版本）。仅标记，由你决定。";
+  document.getElementById("filter").style.display = "none";
+  const data = await (await fetch("/api/freshness")).json();
+  const reasonLabel = { keyword: "废弃关键词", date_old: "日期过旧", newer_version: "有更新版本" };
+  const flagLabel = { stale: "明确过期", suspect: "疑似过旧" };
+  const rows = [...data.stale.map(x => ({...x, flag: "stale"})),
+                ...data.suspect.map(x => ({...x, flag: "suspect"}))];
+  const box = document.getElementById("hits");
+  box.innerHTML = rows.length
+    ? rows.map(x =>
+        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + `<span class="badge">${flagLabel[x.flag] || x.flag}</span>`
+        + (x.reason ? `<span class="badge" title="时效规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
+        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+        + `<button class="keep-btn" data-id="${x.id}">↩不过时，保留</button></div>`).join("")
+    : "<small>没有时效候选。跑一次 ksync --freshness-scan（纯规则、零费用）。</small>";
+  bindEntryButtons();
+  document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
+    // 保留：置 freshness_flag=ok（之后规则不再标记它；保留动作记录在 task_log）
+    await writeJSON(`/api/entries/${b.dataset.id}/unflag-freshness`, {});
+    e.target.click();
+  });
+  const ids = rows.map(x => x.id);
+  if (ids.length)
+    box.insertAdjacentHTML("beforeend",
+      `<button id="reject-all-fresh" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
+  document.getElementById("reject-all-fresh")?.addEventListener("click",
     () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
       (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); e.target.click(); })();
     } });

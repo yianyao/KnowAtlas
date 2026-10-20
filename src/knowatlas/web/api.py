@@ -225,6 +225,35 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "unflag_not_knowledge", entry_id, {})
         return {"entry_id": entry_id, "value_flag": "ok"}
 
+    @app.get("/api/freshness")
+    def freshness():
+        """时效候选：规则判为「过期/疑似过旧」的条目（第四十一批时效守卫）。
+
+        stale=明确过期（废弃关键词，已退出消费面）；suspect=疑似过旧
+        （正文日期过旧 / 同主题已有更新版本，保留可见）。仅标记不自动删——
+        保留决定权在用户（否决后 freshness_flag=ok，规则不再标记）。
+        """
+        def _row(e):
+            return {"id": e.id, "title": e.title, "locator": e.locator,
+                    "source_type": e.source_type,
+                    "reason": e.meta.get("freshness_reason"),
+                    "checked_at": e.meta.get("freshness_checked_at")}
+        return {"stale": [_row(e) for e in dl.list_by_freshness_flag("stale")],
+                "suspect": [_row(e) for e in dl.list_by_freshness_flag("suspect")]}
+
+    @app.post("/api/entries/{entry_id}/unflag-freshness")
+    async def unflag_freshness(entry_id: str, request: Request):
+        """用户否决时效判定：置 freshness_flag=ok，之后规则不再标记它。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        if dl.get_entry(entry_id) is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        dl.merge_meta(entry_id, {"freshness_flag": "ok"})
+        dl.log_task(_now_iso(), "web", "unflag_freshness", entry_id, {})
+        return {"entry_id": entry_id, "freshness_flag": "ok"}
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。保留兼容；新视图见下。"""

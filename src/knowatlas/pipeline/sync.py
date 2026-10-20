@@ -383,11 +383,101 @@ def _value_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
     return stats
 
 
+def _freshness_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
+    """时效体检（freshness guard，零费用）：纯规则标记「过期的、容易误导的知识」。
+
+    单条信号（semantic/freshness.judge_text）+ 跨条目信号（同 host 同主题新旧
+    并存）。命中打 meta.freshness_flag=stale/suspect + freshness_reason +
+    freshness_checked_at，进 Web UI 时效候选（仅标记，清理决定权在用户）。
+    - freshness_flag=ok（用户否决）的条目跳过，二次扫描不翻转（value_flag 同口径）；
+    - 已在待清理候选（value_flag=not_knowledge）与已死链（link_status=dead）的
+      条目跳过——它们已有更优先的清理通道，重复打标徒增噪音；
+    - dry_run=True 只出报告不写库。
+    """
+    from ..semantic.freshness import extract_latest_year, judge_text, title_key
+
+    def _body(e: Any) -> str:
+        inline = e.inline_content or ""
+        if e.content_hash:
+            stored = dl.get_content_preview(e.content_hash, 5000) or ""
+            return inline[:2000] + "\n" + stored[:5000]
+        return inline[:5000]
+
+    def _flagged(e: Any, flag: str, reason: str) -> None:
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        if not dry_run:
+            dl.merge_meta(e.id, {"freshness_flag": flag, "freshness_reason": reason,
+                                 "freshness_checked_at": _now_iso()})
+
+    entries = dl.list_entries(status="active", limit=10000)
+    scan_pool = [e for e in entries
+                 if e.meta.get("freshness_flag") != "ok"
+                 and e.meta.get("value_flag") != "not_knowledge"
+                 and e.meta.get("link_status") != "dead"]
+    by_reason: dict[str, int] = {}
+    stale = suspect = 0
+
+    # 单条信号：keyword → stale / date_old → suspect
+    judged: dict[str, tuple[str, str]] = {}   # entry_id -> (flag, reason)
+    for e in scan_pool:
+        verdict = judge_text(e.title, _body(e))
+        if verdict is not None:
+            judged[e.id] = verdict
+
+    # 跨条目信号：同 host 同主题组内 ≥2 条，更旧的补 suspect/newer_version
+    # （date_old/keyword 已 stale 的不降级覆盖；同分并列不判新旧）
+    from urllib.parse import urlsplit
+    groups: dict[tuple[str, str], list[Any]] = {}
+    for e in scan_pool:
+        loc = str(e.locator or "")
+        try:
+            parts = urlsplit(loc)
+        except ValueError:
+            continue
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            continue
+        key = title_key(e.title)
+        if key:
+            groups.setdefault((parts.netloc.lower(), key), []).append(e)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+
+        def _date_of(e: Any) -> str:
+            yr = extract_latest_year(_body(e))
+            return str(yr) if yr else (e.created_at or "9999")
+
+        ordered = sorted(members, key=lambda e: (_date_of(e), e.id))
+        newest_date = _date_of(ordered[-1])
+        for e in ordered[:-1]:
+            if _date_of(e) == newest_date:
+                continue  # 与最新并列：分不出新旧，不判（id 只作排序稳定用）
+            if e.id not in judged:  # 已 stale/suspect 的保持更重结论
+                judged[e.id] = ("suspect", "newer_version")
+
+    for e in scan_pool:
+        verdict = judged.get(e.id)
+        if verdict is None:
+            continue
+        if verdict[0] == "stale":
+            stale += 1
+        else:
+            suspect += 1
+        _flagged(e, verdict[0], verdict[1])
+
+    stats = {"freshness_scan_total": len(entries), "scanned": len(scan_pool),
+             "stale": stale, "suspect": suspect,
+             "by_reason": by_reason, "dry_run": dry_run}
+    dl.log_task(_now_iso(), "sync", "freshness_scan", "all", stats)
+    return stats
+
+
 def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              full: bool = False, source: str | None = None, dry_run: bool = False,
              limit: int | None = None, fetch_limit: int | None = None,
              reclassify: bool = False, value_scan: bool = False,
-             dedupe_scan: bool = False) -> dict[str, Any]:
+             dedupe_scan: bool = False,
+             freshness_scan: bool = False) -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
@@ -409,6 +499,10 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         return {"run_id": run_id, **stats}
     if dedupe_scan:
         stats["dedupe_scan"] = scan_and_merge(dl, dry_run=dry_run)
+        dl.finish_run(run_id, stats)
+        return {"run_id": run_id, **stats}
+    if freshness_scan:
+        stats["freshness_scan"] = _freshness_scan(dl, dry_run)
         dl.finish_run(run_id, stats)
         return {"run_id": run_id, **stats}
 

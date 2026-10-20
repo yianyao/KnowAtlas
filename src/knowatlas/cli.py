@@ -45,6 +45,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="价值体检：纯规则标记非知识内容（资源直链/站点首页/列表子页），零费用、不动分类树；配合 --dry-run 只出报告")
     ksync.add_argument("--dedupe-scan", action="store_true",
                        help="跨源去重存量扫描：canonical/正文 hash 完全一致的条目合并为一条（主条目保留全部 locator 可跳转，副条目隐藏、可逆）；配合 --dry-run 只出报告")
+    ksync.add_argument("--freshness-scan", action="store_true",
+                       help="时效体检：纯规则标记过期/疑似过旧的知识（废弃关键词/正文日期过旧/同主题新旧并存），只标不删、可否决；配合 --dry-run 只出报告")
     ksync.add_argument("--expand", metavar="ENTRY_ID", default=None,
                        help="书签扩散抓取（显式触发）：对指定书签/http 条目抓取其同目录系列页（同一目录页同一主题）")
     ksync.add_argument("--expand-limit", type=int, default=20,
@@ -139,7 +141,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                          source=args.source, dry_run=args.dry_run,
                          limit=args.limit, fetch_limit=args.fetch_limit,
                          reclassify=args.reclassify, value_scan=args.value_scan,
-                         dedupe_scan=args.dedupe_scan)
+                         dedupe_scan=args.dedupe_scan,
+                         freshness_scan=args.freshness_scan)
     finally:
         dl.close()
     print(f"OK 同步完成：{stats}")

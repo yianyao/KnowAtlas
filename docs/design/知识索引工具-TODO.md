@@ -149,13 +149,16 @@ reader: 执行者（人与 agent）
       - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）
 - [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）+ jieba 关键词统计
 - [ ] 混合检索（关键词 + 语义，结果可解释排序理由）
-- [ ] 时效/可信守卫（freshness guard，2026-10-20 用户需求：把过期的、容易误导的知识清出来）——
+- [x] 时效/可信守卫（freshness guard，2026-10-20 用户需求：把过期的、容易误导的知识清出来）——
       与 L0 价值守卫同构的规则信号：页面/正文含 deprecated/已废弃/过期 类关键词、
       发布日期过旧且同主题（同 host 同标题聚类）已有更新版本、死链比例超阈值 →
       打 meta.freshness_flag=stale/suspect 进待清理候选，**只标记不自动删**（用户否决权同
       value_flag 口径）；「易误导」的语义判断成本高，LLM 判定后置（YAGNI，规则信号不够再上）
-      - 探针：deprecated 关键词样本被打 stale；同主题新旧并存时旧的进候选；用户否决后
-        二次同步不翻转（与 value_flag 一致）
+      （0.2.0 第四十一批：keyword→stale / date_old·newer_version→suspect，
+      `ksync --freshness-scan`，UI「时效候选」；死链比例信号后置——单条死链已由
+      link_status=dead 承接，host 级比例批量标待真实需求定义）
+      - 探针：deprecated 关键词样本被打 stale ✓；同主题新旧并存时旧的进候选 ✓；
+        用户否决后二次同步不翻转（与 value_flag 一致）✓
 - [ ] 词云视图（三态词元：scoped cloud 范围随焦点分类子树变化；分类词元点击进入子分类并联动分类树；内容词元点击 = facet 过滤当前范围；字号 ∝ √权重；按主导顶层分类着色）
       - 探针：切到某大类，词云只反映该子树条目；点分类词元树同步跳转；点内容词元条目列表按该词过滤
 - [x] 关系图视图 v0.5（0.2.0 第二十二批落地，终态形态 2026-10-20 用户两轮定调收敛：

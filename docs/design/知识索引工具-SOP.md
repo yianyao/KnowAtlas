@@ -221,14 +221,44 @@ simhash 近似与 embedding 余弦后置（误合成本高于漏合，待真实�
 
 ### 2.10 邮件源（maildir，0.2.0 第三十九批）
 
-**接入方式（不碰邮箱凭证）**：先用外部同步工具（如 offlineimap）把邮箱落成本地
-maildir，再在 `config/knowatlas.toml` 配置：
+**接入方式（不碰邮箱凭证）**：先把邮箱落成本地 maildir，再在 `config/knowatlas.toml`
+配置：
 
 ```toml
 [sources.mail]
 enabled = true
 accounts = { work = { path = "D:/Mail/work" } }   # maildir 根目录
 ```
+
+**邮箱怎么变成 maildir（两条路，任选）**：
+
+- **路 A：手动导出 .eml（零工具，适合少量）**——邮箱客户端/网页版里把邮件
+  另存为 .eml 文件（Outlook：拖拽到文件夹即 .eml；Foxmail：导出邮件选 .eml；
+  网页版如 QQ 邮箱：下载原始邮件），全部放进一个目录，把该目录配成上面的
+  `path` 即可。适配器兼容「目录直落 .eml」形态，也支持一层子文件夹
+  （文件夹名入 meta.mailbox）。
+- **路 B：offlineimap 自动同步（适合持续增量）**——开源工具（GPLv2，独立进程
+  使用无传染问题），IMAP 拉取落标准 maildir：
+
+  ```ini
+  # offlineimaprc 最小示例
+  [general]
+  accounts = work
+  [Account work]
+  localrepository = work_local
+  remoterepository = work_remote
+  [Repository work_local]
+  type = Maildir
+  localfolders = D:/Mail/work
+  [Repository work_remote]
+  type = IMAP
+  remotehost = imap.example.com
+  remoteuser = you@example.com
+  remotepassfile = D:/Mail/work.secret   # 密码放文件，不进仓库
+  ```
+
+  跑 `offlineimap -c offlineimaprc` 即落 maildir；凭证归 offlineimap 管，
+  KnowAtlas 只读它产出的目录（权限最小面不变）。
 
 支持标准 maildir（cur/new/tmp）与一层子文件夹（文件夹名入 meta.mailbox），兼容
 目录直落 .eml 的导出形态。报错「maildir 路径不存在/没找到 mailbox」时检查该 path。
@@ -261,6 +291,35 @@ entry_id 可从条目详情/URL 里拿。种子必须是 http(s) 条目（书签
 上限截断。新条目 source_type='expand'（UI 徽标「扩散」），meta 带 seed_entry_id
 （可回溯种子）与 expand_reason='series_same_dir'（关联解释），正文进
 content_store 并照常走分类链路。
+
+### 2.12 时效守卫（0.2.0 第四十一批）
+
+**用途**：把「过期的、容易误导的知识」清出来——与待清理候选（§2.8 价值守卫）
+同构的只标不删模型。
+
+**用法**：
+
+```bash
+uv run python -m knowatlas ksync --freshness-scan          # 全库体检打标
+uv run python -m knowatlas ksync --freshness-scan --dry-run  # 只出报告不写库
+```
+
+**规则（纯规则、零费用、可解释）**：
+
+| 结论 | 原因 | 信号 |
+|------|------|------|
+| stale（明确过期，退出消费面） | keyword | 标题含废弃词（已废弃/已过时/不再维护/deprecated 等），或正文自述（「本文已过期」「This page is outdated」句式） |
+| suspect（疑似过旧，保留可见） | date_old | 正文可提取的最新日期（最后更新/发布/版权年份）早于 3 年前 |
+| suspect | newer_version | 同 host 同主题（标题去版本号聚类）新旧并存，旧版进候选 |
+
+防误杀：正文单独出现「过期」不触发（token 过期时间等技术语义常见），只认自述
+句式；裸 deprecated 只在标题判；取正文**最新**年份（老页面近年更新过不算旧）；
+与最新版日期并列的不判新旧。
+
+**否决权**：Web UI「数据管理 → ⏳ 时效候选」逐条「不过时，保留」或一键舍弃；
+保留置 freshness_flag=ok，之后扫描不再标记（与 value_flag=ok 同口径）。stale
+条目从消费面（检索/关系图/召回）隐藏，管理视图照常可见；suspect 保留可见。
+死链比例信号后置（单条死链已由链接体检 dead 承接）。
 
 ---
 
