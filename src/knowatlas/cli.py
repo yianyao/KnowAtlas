@@ -43,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="对库中全部条目重跑分类（跳过人工校正过的；[llm] 启用且 key 已设时走 LLM 语义分类）")
     ksync.add_argument("--value-scan", action="store_true",
                        help="价值体检：纯规则标记非知识内容（资源直链/站点首页/列表子页），零费用、不动分类树；配合 --dry-run 只出报告")
+    ksync.add_argument("--dedupe-scan", action="store_true",
+                       help="跨源去重存量扫描：canonical/正文 hash 完全一致的条目合并为一条（主条目保留全部 locator 可跳转，副条目隐藏、可逆）；配合 --dry-run 只出报告")
 
     serve = sub.add_parser("serve", help="启动本地 Web 服务（默认 127.0.0.1:8420）")
     serve.add_argument("--host", default=None)
@@ -125,7 +127,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
         stats = run_sync(cfg, dl, locators, semantics, full=args.full,
                          source=args.source, dry_run=args.dry_run,
                          limit=args.limit, fetch_limit=args.fetch_limit,
-                         reclassify=args.reclassify, value_scan=args.value_scan)
+                         reclassify=args.reclassify, value_scan=args.value_scan,
+                         dedupe_scan=args.dedupe_scan)
     finally:
         dl.close()
     print(f"OK 同步完成：{stats}")

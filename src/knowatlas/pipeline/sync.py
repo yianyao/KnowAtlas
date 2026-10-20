@@ -31,6 +31,7 @@ from ..models import Entry, FetchResult
 from ..registry.capability import FetchContext
 from ..semantic.base import SemanticInput, TaskContext
 from .kadd import ensure_category_path
+from .dedupe import dedupe_entries, scan_and_merge
 
 
 def _now_iso() -> str:
@@ -383,11 +384,14 @@ def _value_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
 def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              full: bool = False, source: str | None = None, dry_run: bool = False,
              limit: int | None = None, fetch_limit: int | None = None,
-             reclassify: bool = False, value_scan: bool = False) -> dict[str, Any]:
+             reclassify: bool = False, value_scan: bool = False,
+             dedupe_scan: bool = False) -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
     value_scan=True 时跳过源收集，只跑 L0 价值守卫打标（零费用，见 _value_scan）。
+    dedupe_scan=True 时跳过源收集，只跑跨源去重存量扫描（第三十八批，见
+    pipeline/dedupe.scan_and_merge；dry_run 只出报告）。
     """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
@@ -399,6 +403,10 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         return {"run_id": run_id, **stats}
     if reclassify:
         stats["reclassify"] = _reclassify_all(cfg, dl, semantics, run_id)
+        dl.finish_run(run_id, stats)
+        return {"run_id": run_id, **stats}
+    if dedupe_scan:
+        stats["dedupe_scan"] = scan_and_merge(dl, dry_run=dry_run)
         dl.finish_run(run_id, stats)
         return {"run_id": run_id, **stats}
 
@@ -447,11 +455,15 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                         {"count": len(revived_ids),
                          "source_type": _SOURCE_TYPE_BY_NAME.get(name, name)})
         cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id)
+        # 跨源判重（第三十八批）：新建/更新条目 canonical/hash 命中已有可消费
+        # 条目 → 附挂 locator + 打 dedupe_master 标（消费页由主条目代表）
+        deduped = dedupe_entries(dl, [e for e in entries
+                                      if e.id in new_ids or e.id in updated_ids])
 
         src_stats: dict[str, Any] = {
             "entries": len(entries),
             "created": result.created, "updated": result.updated,
-            "unchanged": result.unchanged, **cat, **out.stats,
+            "unchanged": result.unchanged, "deduped": deduped, **cat, **out.stats,
         }
         if full:
             archived = dl.archive_missing(
@@ -469,6 +481,9 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                 src_stats["post_fetch"] = _categorize(
                     dl, semantics, cfg, [e for e in with_content if e is not None],
                     set(), set(fetched_ids), run_id)
+                # 补抓拿到正文后 content_hash 才可用——当场判重（hash 命中即合并）
+                fetched_live = [e for e in with_content if e is not None]
+                src_stats["post_fetch_deduped"] = dedupe_entries(dl, fetched_live)
         stats["sources"][name] = src_stats
 
     if not stats["sources"]:

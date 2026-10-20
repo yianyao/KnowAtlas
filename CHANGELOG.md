@@ -957,3 +957,71 @@
   四个管理入口均在块内
 - pytest 193 项全绿；七个变更文件 UTF-8 无 BOM + LF
 - canary 不变（无 DDL / 注册表变动）
+
+### 0.2.0 第三十八批（2026-10-20，变更工单）：跨源去重（确定性判据：canonical + content_hash）
+
+**来源**：TODO Phase 2 步骤 14（M2 落地）。真实库摸底：canonical 重复 2 组 4 条
+（Edge/Chrome 同一收藏），content_hash 重复 63 组 140 条（同一文档多目录拷贝，
+如 constitution×3、runtime_pitfalls×4）。
+
+**范围裁定**：本批只做确定性判据（canonical URL / content_hash 完全一致）——
+simhash 近似与 embedding 余弦（M4）误合成本高于漏合（合并伤害消费体验且需解释），
+待真实需求驱动再立项；开源 simhash 实现届时先调研再定。
+
+**合并模型（只标不删，与 value_flag 同款纪律）**
+
+- 合并 = 主条目（组内 created_at 最早、可消费）attach_locator 副条目 locator
+  （双 locator 进 entry_locators，可跳转）+ 副条目 meta 打 `dedupe_master=主id`
+  与 `dedupe_reason`（canonical_hit / content_hit）；副条目**保留在库**、照常参与
+  同步 upsert（meta 合并语义 `{**旧,**新}` 保标不抹）——不引入新 status、不动 DDL、
+  canary 不变；删 meta 两键即恢复（可逆）。
+- `_consumable` 追加 `dedupe_master` 为空条件 → 副条目从全部消费页（树计数/
+  检索/图/放射/召回/线索）自动消失，管理侧不受影响。
+
+**旧 → 新**
+
+1. **pipeline/dedupe.py 补全**（原骨架仅 is_same_url）：
+   - `_is_consumable(entry)`：Python 侧口径与 _consumable 一致（active + 无
+     value_flag=not_knowledge + 无 link_status=dead + 无 dedupe_master）；
+   - `find_master(dl, entry)`：canonical 优先、content_hash 兜底，在可消费条目中
+     找（排除自身与已 merged），取 created_at 最早；
+   - `merge_into(dl, master, dup, reason)`：attach_locator + merge_meta 打标 +
+     log_task；幂等（attach INSERT OR IGNORE、标同值不翻转）；
+   - `dedupe_entries(dl, entries)`：sync 入库后对新/更条目逐条判重（已有标跳过）；
+   - `scan_and_merge(dl, dry_run)`：存量全库扫描——先摘「死标」（dedupe_master
+     指向不存在/不可消费条目的，回归候选），再按 canonical / hash 分组合并；
+     dry_run 只出报告。
+2. **db.py** `_consumable` 追加 dedupe_master 为空条件（消费 SQL 片段单点改）。
+3. **sync.py**：upsert 与 post_fetch 重分类后对 new_ids∪updated_ids 跑
+   dedupe_entries，stats 记 `deduped`；`--dedupe-scan` 跳过源收集只跑存量扫描。
+4. **cli.py**：ksync 加 `--dedupe-scan`（与 --value-scan 同款交互）。
+5. **kadd.py** 不动（canonical 判重既有，方向=命中即附挂不建新，与本批互补）。
+
+**复检探针**（实现后逐条命中）
+
+- 书签+manual 同 URL：合并为一条消费可见，find_by_locator 两个 locator 均可查到主条目
+- 两 folder 条目同正文：hash 命中合并；副条目从 search_fts/graph/radiate/
+  recall/threads 消失（_consumable 单点生效）
+- 同步幂等：副条目所在源重复 sync，标不抹、不重复建、不重复附挂
+- 主条目被舍弃后扫描：死标摘除，副条目回归消费面（或换主）
+- scan_and_merge dry_run 零写入；真实执行后统计与库一致
+- pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20，全命中）**
+
+- tests/test_dedupe.py 7 项：canonical 命中合并（书签+manual，双 locator 反查主）/
+  hash 命中合并（两 folder 同正文）/ 消费面隐藏（search_fts/subtree/radiate/
+  _consumable_count）/ 幂等+源重推保标 / 主被舍弃后死标摘除（dry_run 零写入）/
+  scan_and_merge 分组+幂等 / canonical 优先于 hash
+- 开发期修的两个方向性 bug（测试钉住）：①find_master 原只比候选不比自身——同批
+  新建条目会互相当主、方向依赖遍历序；改为主条目 = 候选∪自身中
+  (created_at or "9999", id) 最小者（None created_at 排最后，不与真实时间竞争）；
+  ②find_by_canonical 只回任意一条——组内同伴漏检；新增 find_canonical_group 全组查询
+- 旧断言升级：test_bookmarks 端到端的「跨文件夹重复 URL」fixture 本就是重复对——
+  created_at 微秒差 3μs 在 ISO 秒级截断后并列，id 序定主；断言改为「恰好一条
+  消费可见 + 副条目标指向主 + 检索命中的正是主」
+- 真实库副本冒烟：dry_run {canonical 2 组, hash 63 组} 零写入 0.1s；真实执行合并
+  77 条（组内 >2 展开）；副 locator 反查指主 ✓；检索/关系图不见副条目 ✓；
+  二次扫描 merged=0 幂等 ✓
+- pytest 200 项全绿（+7 dedupe）；九个变更文件 UTF-8 无 BOM + LF；canary 不变
+  （无 DDL/注册表变动，dedupe_master 走 meta 键）

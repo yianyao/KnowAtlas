@@ -132,10 +132,19 @@ def test_sync_bookmarks_end_to_end(cfg, dl, registries, tmp_path, bookmarks_json
     assert src["entries"] == 5 and src["created"] == 5 and src["archived"] == 0
     # 「PostgreSQL 教程」标题命中规则关键词 postgres → 技术开发/数据库
     assert src["classified"] >= 1
-    # FTS 消费面守卫（第三十六批）：SQLite 条目（内容页，未打标）可检索；
-    # PostgreSQL/Redis 的 /docs/ 尾斜杠目录页被 L0 守卫打 not_knowledge → 不进消费页
-    sq = [e for e in dl.search_fts("SQLite") if e.title == "SQLite 官方文档"]
-    assert sq, "未打标条目应可被 FTS 检索到"
+    # FTS 消费面守卫（第三十六批）+ 跨源去重（第三十八批）：SQLite 两条书签
+    # canonical 相同（fragment 归一）→ 合并为一条消费可见；PostgreSQL/Redis 的
+    # /docs/ 尾斜杠目录页被 L0 守卫打 not_knowledge → 不进消费页。
+    # 主条目判定：created_at 秒级并列（WebKit 微秒差在 ISO 秒级截断）→ id 序定主。
+    sq = dl.search_fts("SQLite")
+    assert len(sq) == 1, "重复书签应合并为一条消费可见"
+    entries = {e.title: e for e in dl.list_entries(status="active", limit=100)}
+    pair = [entries["SQLite 官方文档"], entries["SQLite 文档副本"]]
+    masters = [p for p in pair if not p.meta.get("dedupe_master")]
+    dups = [p for p in pair if p.meta.get("dedupe_master")]
+    assert len(masters) == 1 and len(dups) == 1
+    assert sq[0].entry_id == masters[0].id          # 检索出的正是主条目
+    assert masters[0].id == dups[0].meta["dedupe_master"]
     assert not [e for e in dl.search_fts("PostgreSQL") if e.title == "PostgreSQL 教程"]
     assert [e for e in dl.list_by_value_flag("not_knowledge") if e.title == "PostgreSQL 教程"]
 

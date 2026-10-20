@@ -205,6 +205,20 @@ Web UI 同等功能：首页输入框粘贴 URL 即可；浏览器 bookmarklet�
 **不受影响的页面**：待清理候选、失效链接、归档/舍弃检索等管理页照常全量列出——
 守卫只挡「消费」，不挡「管理」。条目被否决（value_flag=ok）或修好链接后自动回到消费页。
 
+### 2.9 跨源去重（0.2.0 第三十八批）
+
+**判据（确定性）**：canonical URL 五步规范化一致，或 content_hash（规范化文本）一致。
+simhash 近似与 embedding 余弦后置（误合成本高于漏合，待真实需求驱动）。
+
+**合并模型（只标不删）**：组内最早的可消费条目为主条目；副条目 locator 附挂到主条目
+（`entry_locators`，双 locator 均可跳转）+ meta 打 `dedupe_master=主id`。副条目保留在库、
+照常参与同步（meta 合并语义保标），消费面由 `_consumable` 统一隐藏；删掉两个 meta 键即恢复。
+
+**两个入口**：
+- 自动：每次 ksync 入库后对新/更条目判重（stats 里 `deduped` / `post_fetch_deduped`）；
+- 手动存量扫描：`uv run python -m knowatlas ksync --dedupe-scan`（加 `--dry-run` 只出
+  报告不写库）。扫描同时摘「死标」——主条目被舍弃/待清理/归档后，副条目自动回归消费面。
+
 ---
 
 ## 3. 新增一个知识源（SOP-A）

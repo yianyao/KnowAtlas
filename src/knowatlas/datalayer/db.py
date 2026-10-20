@@ -34,11 +34,14 @@ def _consumable(alias: str = "e") -> str:
 
     知识消费页（关系图/召回/检索/线索）只出「可消费」条目：
     status='active'（调用方既有条件）+ 非待清理（value_flag!=not_knowledge）
-    + 非永久失效（link_status!=dead；error=疑似临时不判死）。
+    + 非永久失效（link_status!=dead；error=疑似临时不判死）
+    + 非去重副条目（dedupe_master 为空；第三十八批：跨源合并后由主条目代表）。
     管理页（待清理候选/失效链接/归档检索）不走本片段，照常全量列出。
+    Python 侧同口径判定在 pipeline/dedupe.py::_is_consumable，改动须两处同步。
     """
     return (f" AND COALESCE(json_extract({alias}.meta,'$.value_flag'),'ok')!='not_knowledge'"
-            f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'")
+            f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'"
+            f" AND COALESCE(json_extract({alias}.meta,'$.dedupe_master'),'')=''")
 # H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
 # meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
 # value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
@@ -255,6 +258,13 @@ class DataLayer:
             "SELECT * FROM entries WHERE locator_canonical=?", (canonical_url,)
         ).fetchone()
         return self._row_to_entry(row) if row else None
+
+    def find_canonical_group(self, canonical_url: str) -> list[Entry]:
+        """canonical 相同的全部条目（跨源去重分组用，第三十八批）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE locator_canonical=?", (canonical_url,)
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
 
     def find_by_content_hash(self, content_hash: str) -> list[Entry]:
         rows = self._conn.execute(

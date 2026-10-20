@@ -83,8 +83,16 @@ reader: 执行者（人与 agent）
 - [x] kadd 联动补全：手动粘贴的 URL 自动抓正文并跑语义分类——2026-10-20 核实收口（0.2.0 第二十六批）：pipeline/kadd.py 全链路已实现（建条目 → 抓正文 → put_content → classify_coarse → 有类挂接/无类暂存），本次核查代码+测试在位，无需新代码
       - 探针：kadd 一个文章 URL，同步结束后该条目有正文且离开暂存区（或被明确标记无法抓取）✅（tests/test_kadd.py::test_kadd_full_chain + test_kadd_title_only_on_fetch_failure）
 - [x] content store（正文按 content_hash 缓存，fetcher 只抓一次）——早随补抓链路落地（datalayer put_content/get_content；同 hash 不重复存）
-- [ ] 跨源去重：canonical URL 规范化 + simhash + embedding 余弦 → canonical/hash 命中已有条目时走 attach_locator（双 locator 进 entry_locators 表）
-      - 探针：同一篇文章在书签与邮件中各出现一次，数据层合并为一条、两个 locator 均保留可跳转
+- [x] 跨源去重（0.2.0 第三十八批，确定性判据先行）：canonical URL / content_hash 完全一致
+      → 组内最早可消费条目为主，副条目 locator 走 attach_locator（双 locator 进
+      entry_locators 表可跳转）+ meta 打 dedupe_master 标（只标不删，可逆），
+      消费面守卫 _consumable 统一隐藏副条目；sync 入库自动判重 + ksync --dedupe-scan
+      存量扫描（真实库副本冒烟：合并 77 条、幂等、消费面消失）。**simhash 近似与
+      embedding 余弦（M4）后置**——误合成本高于漏合，待真实需求驱动再立项（届时先调研
+      开源 simhash 实现）
+      - 探针：同一篇文章在书签与邮件中各出现一次，数据层合并为一条、两个 locator 均保留
+        可跳转 ✅（tests/test_dedupe.py：书签+manual 同 URL / 两 folder 同正文；
+        find_by_locator 反查主条目；邮件源待 M3 接入后补真实场景）
 - [ ] 书签扩散抓取（2026-10-20 用户需求：像微信收藏步骤三「全扒」一样，书签不只抓原文，
       还抓同目录页/同主题内容）——从已入库书签条目提取扩散线索：同 host + 页内「相关文章」
       链接 + 同专栏/系列 URL 模式（先纯规则判同主题，LLM 相似后置）；新条目 meta 记
