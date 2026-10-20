@@ -87,6 +87,11 @@ reader: 执行者（人与 agent）
       - 探针：同一篇文章在书签与邮件中各出现一次，数据层合并为一条、两个 locator 均保留可跳转
 - [ ] 邮件适配器（IMAP 同步工具落 maildir → 本地解析；邮箱文件夹/发件人/时间入 meta）
       - 探针：凭证错误的报错信息明确指向配置项
+      - 线程增补（完整方案 §9.4 第三十一批）：还原原始会话线程（In-Reply-To/References
+        + Subject 归一化）落 threads(thread_type='source') + conv_messages；引用剥离走
+        quote_strip（mail-parser-reply 底座 + 中文回复头自补规则，适配器本身不调 LLM）
+      - 探针：同一回复链多封邮件还原为一条 source 线程、轮次顺序正确；多层引用邮件
+        剥离后增量正文不含引用块且锚点指向被引用轮
 
 ## Phase 3 — 在线源（M3）
 
@@ -94,6 +99,9 @@ reader: 执行者（人与 agent）
 
 - [ ] AI 会话适配器（映射 session-harvester 输出的 SessionRecord/Message 双结构）
       - 探针：harvester 产物目录 → 条目含 title/session_id/created_at/turns 摘要
+      - 线程增补（完整方案 §9.4 第三十一批）：Message 父子/顺序关系还原为
+        threads(thread_type='source') + conv_messages（msg_key=轮次 id，parent_id 按产物结构）
+      - 探针：多轮会话入库后 conv_messages 轮次/父子关系与 harvester 产物一致；原文不复制进 conv_messages
 - [ ] B站收藏夹适配器（官方 API：list-all 取收藏夹列表 + resource/list 分页内容；SESSDATA 走 KNOWATLAS_BILI_SESSDATA 环境变量；收藏夹名进 native_path；简介作 inline_content；WBI 签名可开关）
       - 探针：SESSDATA 失效时报错含 F12 获取指引且旧条目保留；收藏夹名正确映射 native_path；同一视频进两个收藏夹只产一条且 meta.fav_folder_ids 含两个 id；下架视频看 attr 位保留标题级并记 meta.invalid
 - [ ] IMA 适配器（官方 OpenAPI：list_notebooks / list_notes / get_note_content；凭证走配置）
@@ -108,6 +116,10 @@ reader: 执行者（人与 agent）
 > Gate：规则 → embedding → LLM 三级流水线跑通（LLM 默认云端、配置可切本地）；混合检索、词云（三态词元）、关系图（focus 模式）可用；回归集通过率记录在案。
 
 - [ ] 规则分类器（关键词/正则/先验映射补漏）
+- [ ] 会话线程语义任务（完整方案 §9.4 第三十一批，后置——先规则后 LLM）：quote_strip
+      （mail-parser-reply 底座 + 中文回复头自补规则，纯规则不调 LLM）→ delta_summarize /
+      thread_digest（LLM 走 [llm] 后端池：硅基流动优先、DeepSeek 官方兜底；可独立关闭）
+      - 探针：关闭 LLM 后 quote_strip 仍工作（纯规则降级）；thread_digest 关闭不影响检索与线程视图
 - [ ] 本地 embedding（bge-m3 类中文模型，optional 依赖）+ 聚类
 - [ ] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；few-shot 来自回归集；先聚类后命名）
       - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）

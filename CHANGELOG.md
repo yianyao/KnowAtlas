@@ -604,3 +604,27 @@
 - 用户定：财务发票非知识且敏感——folders exclude_dirs 增「发票」（用户自行改入
   config），重同步归档 271 条电子发票 PDF/表格；原件永久留在源目录。库况终态：
   active 约 1937，有正文 1342，待清理候选 64。
+
+### 0.2.0 第三十一批（2026-10-20，变更工单）：§9.4 增补「原始会话线程还原」+ TODO Phase 2/3/4 同步（纯文档）
+
+**背景**：用户引文核查定调（0.2.0 第二十九批同日）——采纳「线程还原 + 规则引用剥离」
+思想，不绑定引文推荐工具；Python 侧自行选型。
+
+**旧 → 新**
+
+1. 完整方案 §9.4：原只有用户串联线索（threads 表）→ 增补「原始会话线程还原」契约草案：
+   threads 增列 `thread_type`（curated 用户串联 / source 源还原，同表不分表）；新表
+   `conv_messages`（DDL 草案：id/thread_id/entry_id/msg_key/parent_id/sender/sent_at/
+   ordinal/quote_anchor，只存结构与锚点、永不复制正文）；语义任务新增 quote_strip
+   （规则，mail-parser-reply 底座[MIT/纯Python/零依赖/2025-12 仍维护，联网核实] +
+   中文回复头自补；email_reply_parser 仅英文停更只借鉴）/ delta_summarize / thread_digest
+   （LLM 后置，走 [llm] 池硅基流动优先）；三层留存、视图衔接、实施顺序纪律。
+2. TODO Phase 2 邮件适配器：增线程还原 + quote_strip 增补行与双探针。
+3. TODO Phase 3 AI 会话适配器：增 conv_messages 还原增补行与探针。
+4. TODO Phase 4：增「会话线程语义任务」条目（先规则后 LLM、可独立关闭）+ 探针。
+
+**复检探针**（已全部命中）
+
+- §9.4 含 thread_type / conv_messages / mail-parser-reply / quote_strip / delta_summarize / thread_digest
+- TODO Phase 2 含「线程增补」，Phase 3 含「conv_messages」，Phase 4 含「quote_strip」
+- 变更文件 UTF-8 无 BOM + LF（字节扫描通过）
