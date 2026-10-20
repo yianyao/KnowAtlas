@@ -258,3 +258,18 @@
   （PDF 说明书提取 17747 字符全文、docx 正常）——解析器是通的；暂存纯粹因 K1 默认不抓正文、
   用户从未跑 --fetch-limit，分类只靠文件名。解法：`ksync --full --fetch-limit 500` 补正文后
   `ksync --reclassify`。
+
+### 修正 + 新增（0.2.0 第十四批：采集上限配置化 + emmx 主题路径进 LLM 输入，用户暂缓入库下先修基础能力）
+
+- **[sources.folders].max_entries 上限配置化**：原 2000 为模块硬编码，真实踩坑——用户把
+  roots 扩到 D:/Data 全盘后撞顶 2000，**617 个白名单文件被静默截断永远进不来**，且未
+  collect 到的旧条目会被 archive_missing 误判为"源已删除"（删除检测与截断叠加的误杀风险）。
+  现缺省 2000、<=0 视为不限，截断计数进 stats.truncated（已在 example.toml 写明风险）。
+- **emmx 条目主题路径进 LLM 输入**（`classify_deep._entry_line`）：emmx 条目标题是脑图节点名
+  （如"类型参数化"），单看信息量低；meta.mind_path（"泛型/概念/是什么/类型参数化"）是强语义
+  信号，现随输入行送给 LLM；与标题相同时不重复输出。
+- **测试**：max_entries 配置生效与 <=0 不限、mind_path 进 prompt（含去重）2 项；全量 67 项通过。
+- **维护操作留痕**（临时配置走 KNOWATLAS_CONFIG，用户 config 原件未改）：用「folder roots 收回
+  百卓 + 用户现有白名单」的临时配置跑 `ksync --source folders --full`，archive_missing 归档
+  35 条 .txt 条目（对应用户收紧白名单去掉 .txt）；emmx 入库另用「emmx 启用 + folders 本轮关闭」
+  的临时配置，避免 D:/Data 全盘文档被连带收录。

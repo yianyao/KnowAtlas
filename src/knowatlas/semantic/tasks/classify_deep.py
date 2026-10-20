@@ -60,6 +60,10 @@ def _entry_line(idx: int, inp: SemanticInput) -> str:
         parts.append(f"文件:{url.removeprefix('file://')[:60]}")
     if inp.native_path:
         parts.append(f"文件夹:{inp.native_path}")
+    mind = str(inp.meta.get("mind_path") or "").strip()
+    if mind and mind != inp.title:
+        # 脑图主题路径（emmx）：如「抽象工厂/产品系列/表单」——比文件名强得多的语义信号
+        parts.append(f"脑图路径:{mind[:80]}")
     if inp.body:
         parts.append(f"摘要:{inp.body[:120]}")
     return " | ".join(parts)

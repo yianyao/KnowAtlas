@@ -12,9 +12,15 @@
 
 过滤（0.2.0 补充，用户反馈：roots 里混入会话数据等非知识文件不该进条目）：
 - exclude_globs：fnmatch 黑名单（匹配文件名或相对路径，如 "cj_session*"）；
+  也可做目录级排除——fnmatch 的 * 会跨路径分隔符，故 "发票*" 可排除 发票/ 整棵目录；
 - include_exts：扩展名白名单（如 [".txt", ".md", ".pdf"]）——设置后白名单外直接排除；
 - 被排除文件不建条目、不计入 seen_rel，不参与 archive_missing 删除检测；
 - 排除动作统计进 stats（skipped_excluded / skipped_ext）。
+
+上限（0.2.0 第十四批）：max_entries 配置项（缺省 2000，<=0 视为不限）。**硬上限会让
+全量同步静默截断**（真实案例：roots=D:/Data 撞 2000 后 617 个白名单文件永远进不来，
+且未 collect 到的旧条目会被 archive_missing 误判为"源已删除"）——撞上限时 stats.truncated
+>0 必须在同步报告里显式呈现。
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ _KIND_BY_SUFFIX[".pdf"] = "pdf"
 for _s in (".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".wps", ".et"):
     _KIND_BY_SUFFIX[_s] = "office"
 
-_MAX_FILES = 2000  # 防失控上限（超限计数并截断）
+_MAX_FILES_DEFAULT = 2000  # 防失控上限缺省值（[sources.folders].max_entries 可覆盖，<=0=不限）
 
 
 def _is_hidden_or_temp(p: Path) -> bool:
@@ -57,6 +63,8 @@ def collect_folders(config: Any) -> AdapterOutput:
                            hint="在 config/knowatlas.toml 填写要收录的根目录（绝对路径）")
     exclude_globs = [str(g) for g in (config.get("sources.folders.exclude_globs") or [])]
     include_exts = {str(x).lower() for x in (config.get("sources.folders.include_exts") or [])}
+    _raw_max = config.get("sources.folders.max_entries")
+    max_files = _MAX_FILES_DEFAULT if _raw_max is None else int(_raw_max)
     entries: list[Entry] = []
     stats: dict[str, Any] = {
         "skipped_hidden": 0, "skipped_symlink": 0, "skipped_excluded": 0,
@@ -90,7 +98,7 @@ def collect_folders(config: Any) -> AdapterOutput:
             if rel in stats["seen_rel"]:
                 stats["duplicate_rel"] += 1
             stats["seen_rel"].add(rel)
-            if len(entries) >= _MAX_FILES:
+            if max_files > 0 and len(entries) >= max_files:
                 over += 1
                 continue
             entries.append(Entry.build(

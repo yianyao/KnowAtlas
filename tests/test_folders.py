@@ -108,3 +108,14 @@ def test_fetch_limit_reads_file_content(cfg, dl, registries, tmp_path, folder_tr
     # txt/md 正文已入 content_store（xlsx/pdf 假文件解析失败计 fetch_failed）
     e = dl.get_entry(dl.find_by_locator("file://笔记.txt")[0].id)
     assert e.content_hash and dl.get_content(e.content_hash) == "hello"
+
+
+def test_max_entries_config(cfg, folder_tree):
+    """max_entries 上限可配置：截断计数进 stats.truncated；<=0 视为不限。"""
+    _enable(cfg, folder_tree)
+    cfg._data["sources"]["folders"]["max_entries"] = 2
+    out = collect_folders(cfg)
+    assert len(out.entries) == 2 and out.stats["truncated"] == 3
+    cfg._data["sources"]["folders"]["max_entries"] = 0
+    out0 = collect_folders(cfg)
+    assert len(out0.entries) == 5 and out0.stats.get("truncated", 0) == 0

@@ -133,3 +133,16 @@ def test_reclassify_skips_manual_and_reruns_rest(cfg, dl, registries):
     # e_re：python 关键词命中规则 → 技术开发；旧类被 detach
     paths = {l["path"] for l in dl.get_entry_categories(e_re.id)}
     assert "技术开发" in paths and "旧类" not in paths
+
+
+def test_emmx_mind_path_in_prompt():
+    """emmx 条目：脑图主题路径（meta.mind_path）进 LLM 输入行——比文件名强得多的语义信号。"""
+    inp = SemanticInput(
+        entry_id="e1", title="类型参数化", body=None, native_path="开发",
+        meta={"source_type": "emmx", "mind_path": "泛型/概念/是什么/类型参数化", "depth": 4},
+    )
+    line = classify_deep._entry_line(1, inp)
+    assert "脑图路径:泛型/概念/是什么/类型参数化" in line
+    # mind_path 与标题相同时不重复输出
+    inp.meta["mind_path"] = "类型参数化"
+    assert "脑图路径" not in classify_deep._entry_line(1, inp)

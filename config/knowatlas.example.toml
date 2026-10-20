@@ -66,7 +66,10 @@ paths = { edge = "", chrome = "" }      # 本机 Bookmarks 文件路径，填好
 # 纯云端网盘（只有网页/API，本地没有同步目录）当前不支持，等后续云端适配器
 # 可选过滤（用户已在本机 config 启用）：
 # include_exts = [".pdf", ".docx", ".md", ".txt", ".xlsx", ".pptx"]   # 白名单，白名单外直接排除
-# exclude_globs = ["cj_session*", "~$*"]                              # 文件名黑名单（fnmatch 通配）
+# exclude_globs = ["cj_session*", "~$*", "发票*"]                       # 文件名/路径黑名单（fnmatch 通配）
+# max_entries = 5000        # 单次采集条目上限（缺省 2000；<=0 表示不限）
+#   注意：撞上限会被静默截断，且未采集到的旧条目可能被误判为"源已删除"——
+#   收录大目录（如整块数据盘）时务必调大或置 0，并在同步报告里看 truncated 数
 enabled = false
 roots = []                              # file:// 相对这些根
 
