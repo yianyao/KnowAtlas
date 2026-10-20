@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -88,3 +90,24 @@ def test_recategorize_requires_token(client, dl):
     dl.upsert_entries([e])
     r = client.post(f"/api/entries/{e.id}/recategorize", json={"target_path": "a/b"})
     assert r.status_code == 403
+
+
+def test_token_hint_fingerprint(cfg, dl, registries):
+    """令牌核对辅助：/api/token-hint 只回指纹不回明文；令牌不匹配的 403 消息带指纹。"""
+    from fastapi.testclient import TestClient
+    from knowatlas.web.app import create_app
+    app = create_app(cfg, dl, *registries)
+    c = TestClient(app, headers={"Host": f"127.0.0.1:{cfg.get('general.server_port', 8420)}"})
+    tok = "unit-test-token"
+    os.environ["KNOWATLAS_TEST_TOKEN"] = tok
+    try:
+        hint = c.get("/api/token-hint").json()
+        assert hint["configured"] is True
+        assert tok not in str(hint)                      # 明文绝不回传
+        assert len(hint["fingerprint"]) == 8
+        r = c.post("/api/entries/999999/reject", json={},
+                   headers={"X-KnowAtlas-Token": "wrong-token"})
+        assert r.status_code == 403
+        assert hint["fingerprint"] in r.json()["error"]["message"]
+    finally:
+        os.environ.pop("KNOWATLAS_TEST_TOKEN", None)

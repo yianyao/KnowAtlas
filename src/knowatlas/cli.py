@@ -155,11 +155,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
     print(f"KnowAtlas 服务：http://{host}:{port}")
+    from .web.api import token_fingerprint
     if auto_generated:
         print(f"本次会话写令牌（写操作时在网页弹窗粘贴一次即可）：{token}")
+        print(f"令牌指纹：{token_fingerprint(token)}（核对用）")
         print(f"如需固定令牌，请设置环境变量 {token_env} 后重启 serve")
     else:
-        print(f"写令牌：来自环境变量 {token_env}")
+        print(f"写令牌：来自环境变量 {token_env}，指纹 {token_fingerprint(token)}")
+        print("网页弹窗里填的值必须与该环境变量的值完全一致（填错、没重启 serve、"
+              "同名变量被系统级/用户级另一处覆盖，都会报「写操作需 token 头」）")
     try:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:

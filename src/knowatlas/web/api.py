@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from datetime import datetime
 from typing import Any
@@ -19,6 +20,17 @@ _TOKEN_HEADER = "x-knowatlas-token"
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def token_fingerprint(token: str) -> str:
+    """令牌指纹（sha256 前 8 位）——供人与服务核对，**绝不回传明文令牌**。
+
+    为什么需要（0.2.0 第十六批，用户连续两次"配了环境变量还是用不了"）：
+    令牌不匹配的常见原因有三——①网页弹窗里填的值与服务端实际读到的不是同一个；
+    ②配完环境变量没重启 serve（进程启动时读一次）；③同名环境变量在"系统级/用户级"
+    两处都存在时被另一级覆盖。指纹让这三类问题都能一眼核对，不必反复试。
+    """
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:8] if token else ""
 
 
 def _port_of(cfg: Any) -> int:
@@ -45,7 +57,10 @@ def check_write_access(request: Request, cfg: Any) -> JSONResponse | None:
     if supplied != expected:
         return JSONResponse(
             {"error": {"code": "FORBIDDEN",
-                       "message": f"写操作需 {_TOKEN_HEADER} 头（或 ?token=，bookmarklet 用）"}},
+                       "message": (f"写操作需 {_TOKEN_HEADER} 头（或 ?token=，bookmarklet 用）；"
+                                   f"服务端当前令牌指纹={token_fingerprint(expected)}（见 serve 启动日志）。"
+                                   "不匹配最常见三因：①弹窗里填的值与服务端不是同一个；"
+                                   "②配完环境变量没重启 serve；③同名环境变量在系统级/用户级两处都有、被另一级覆盖。")}},
             status_code=403,
         )
     return None
@@ -82,6 +97,14 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     @app.get("/api/stats")
     def stats() -> dict:
         return dl.get_stats()
+
+    @app.get("/api/token-hint")
+    def token_hint() -> dict:
+        """令牌核对辅助：只给**指纹**（sha256 前 8 位）与来源，永不回传明文。"""
+        env_name = str(cfg.get("web.token_env", "KNOWATLAS_WEB_TOKEN"))
+        tok = os.environ.get(env_name, "")
+        return {"env_name": env_name, "fingerprint": token_fingerprint(tok),
+                "configured": bool(tok)}
 
     @app.get("/api/tree")
     def tree() -> dict:
