@@ -316,3 +316,27 @@ def test_graph_search_groups_same_host(dl):
     data = dl.search_graph("同站")
     assert any(n["kind"] == "domain" and n["name"] == "z.com" for n in data["nodes"])
 
+
+
+def test_upsert_preserves_fetched_content_from_contentless_source(dl):
+    """抓取内容保护：采集器（无正文）再入库不得抹掉 --fetch-limit 抓来的正文。"""
+    e = make_entry(source_key="https://keep.com/a", locator="https://keep.com/a",
+                   meta={"source_type": "manual"})
+    dl.upsert_entries([e])
+    from knowatlas.pipeline.sync import _apply_content
+    filled = _apply_content(dl.get_entry(e.id), "这是抓来的正文" * 50, "a" * 64,
+                            "simple", "2026-10-20T11:00:00+08:00")
+    dl.upsert_entries([filled])
+    # 同一条目的"源视图"（采集器产出：无正文无 hash）再次 upsert
+    src_view = make_entry(source_key="https://keep.com/a", locator="https://keep.com/a",
+                          title=e.title, meta={"source_type": "manual"})
+    r = dl.upsert_entries([src_view])
+    got = dl.get_entry(e.id)
+    assert got.inline_content == filled.inline_content  # 正文保留
+    assert got.content_hash == "a" * 64                 # hash 保留
+    assert r.unchanged == 1                             # 无真实差异 → 不计 updated
+    # 源自带正文（emmx 类）→ 照常覆盖
+    with_content = make_entry(source_key="https://keep.com/a", locator="https://keep.com/a",
+                              inline_content="脑图节点文本", content_hash=None)
+    dl.upsert_entries([with_content])
+    assert dl.get_entry(e.id).inline_content == "脑图节点文本"

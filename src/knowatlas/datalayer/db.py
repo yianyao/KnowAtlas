@@ -161,8 +161,22 @@ class DataLayer:
                     old_meta = json.loads(row["meta"])
                     merged = {**old_meta, **e.meta}
                     merged_json = _meta_json(merged)
+                    # 抓取内容保护（0.2.0 第二十五批）：采集器不产出正文的源
+                    # （folder/bookmark 的 inline_content 为空）不得抹掉已抓取的
+                    # 正文——K1 纪律「内容只进不出」，否则每轮全量同步都会把
+                    # --fetch-limit 补来的正文与 content_hash 清零并误判 updated。
+                    # emmx 等源自带正文（源非空）→ 照常覆盖。
+                    src_has_content = bool((e.inline_content or "").strip()) or bool(e.content_hash)
+                    if src_has_content:
+                        eff_inline, eff_hash = e.inline_content, e.content_hash
+                    else:
+                        eff_inline = row["inline_content"]
+                        eff_hash = row["content_hash"]
                     changed = (
-                        any(row[f] != getattr(e, f) for f in _SOURCE_FIELDS)
+                        any(row[f] != getattr(e, f) for f in _SOURCE_FIELDS
+                            if f not in ("inline_content", "content_hash"))
+                        or row["inline_content"] != eff_inline
+                        or row["content_hash"] != eff_hash
                         or row["meta"] != merged_json
                     )
                     if changed:
@@ -171,7 +185,7 @@ class DataLayer:
                             " native_path=?, inline_content=?, content_hash=?, meta=?,"
                             " created_at=?, exported_at=? WHERE id=?",
                             (e.title, e.locator, e.locator_canonical, e.native_path,
-                             e.inline_content, e.content_hash, merged_json,
+                             eff_inline, eff_hash, merged_json,
                              e.created_at, _now(), e.id),
                         )
                         updated += 1

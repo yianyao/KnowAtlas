@@ -166,6 +166,7 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
     from ..semantic.value_guard import is_garbled
 
     done = failed = attempts = 0
+    fetched_ids: list[str] = []
     ctx = FetchContext(config=cfg, datalayer=dl, http=httpx.Client(), run_id=run_id)
     updates: list[Entry] = []
 
@@ -206,10 +207,12 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         updates.append(_apply_content(e, text, fhash,
                                       str(cfg.get("fetch.default_backend", "simple")),
                                       datetime.now().astimezone().isoformat(timespec="seconds")))
+        fetched_ids.append(e.id)
         done += 1
     if updates:
         dl.upsert_entries(updates)
-    return {"fetched": done, "fetch_failed": failed, "fetch_attempts": attempts}
+    return {"fetched": done, "fetch_failed": failed, "fetch_attempts": attempts,
+            "fetched_ids": fetched_ids}
 
 
 def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str, Any]:
@@ -403,7 +406,16 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                 seen_ids={e.id for e in entries}, run_id=run_id)
             src_stats["archived"] = len(archived)
         if fetch_limit:
-            src_stats.update(_fetch_missing(cfg, dl, locators, entries, fetch_limit, run_id))
+            fstats = _fetch_missing(cfg, dl, locators, entries, fetch_limit, run_id)
+            fetched_ids = fstats.pop("fetched_ids")
+            src_stats.update(fstats)
+            if fetched_ids:
+                # 抓到正文的条目**当场重分类**（update 语义=先摘机器旧挂接再重挂，
+                # 人工校正不动）——否则正文晚于分类一步，要再跑一次全量 reclassify
+                with_content = [dl.get_entry(eid) for eid in fetched_ids]
+                src_stats["post_fetch"] = _categorize(
+                    dl, semantics, cfg, [e for e in with_content if e is not None],
+                    set(), set(fetched_ids), run_id)
         stats["sources"][name] = src_stats
 
     if not stats["sources"]:
