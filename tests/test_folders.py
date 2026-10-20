@@ -119,3 +119,28 @@ def test_max_entries_config(cfg, folder_tree):
     cfg._data["sources"]["folders"]["max_entries"] = 0
     out0 = collect_folders(cfg)
     assert len(out0.entries) == 5 and out0.stats.get("truncated", 0) == 0
+
+
+def test_exclude_dirs_pruning(cfg, folder_tree):
+    """目录级排除：目录名匹配与相对路径模式都命中，被排除目录整棵剪枝不建条目。"""
+    (folder_tree / "Fiction").mkdir()
+    (folder_tree / "Fiction" / "章节.txt").write_text("f", encoding="utf-8", newline="\n")
+    (folder_tree / "项目资料").mkdir()
+    (folder_tree / "项目资料" / "旧版_备份").mkdir()
+    (folder_tree / "项目资料" / "旧版_备份" / "归档.md").write_text("b", encoding="utf-8", newline="\n")
+    _enable(cfg, folder_tree)
+    # 目录名匹配 + 相对路径通配，两种写法都支持
+    cfg._data["sources"]["exclude_dirs"] = ["Fiction", "项目资料/*_备份"]
+    out = collect_folders(cfg)
+    locs = {e.locator for e in out.entries}
+    assert not any(l.startswith("file://Fiction/") for l in locs)
+    assert not any(l.startswith("file://项目资料/旧版_备份/") for l in locs)
+    assert "file://笔记.txt" in locs
+    assert out.stats["skipped_dir"] == 2
+    # 源级追加项也生效
+    cfg._data["sources"]["exclude_dirs"] = []
+    cfg._data["sources"]["folders"]["exclude_dirs"] = ["ERP/报表"]
+    out2 = collect_folders(cfg)
+    locs2 = {e.locator for e in out2.entries}
+    assert "file://ERP/进销存.xlsx" in locs2
+    assert "file://ERP/报表/2026年报.pdf" not in locs2

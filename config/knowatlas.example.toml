@@ -64,6 +64,12 @@ paths = { edge = "", chrome = "" }      # 本机 Bookmarks 文件路径，填好
 # roots 可填多个文件夹，逗号分开：roots = ["D:/Data/百卓", "E:/笔记"]
 # 路径要求是本机可见的目录——各网盘的"本地同步盘"（OneDrive/坚果云等的同步文件夹）直接填其路径即可；
 # 纯云端网盘（只有网页/API，本地没有同步目录）当前不支持，等后续云端适配器
+# 全局目录级排除（所有文件系统型源共用：folder 及将来的邮件附件目录、会话记录产物、
+# 聊天记录导出目录）。命中的目录整棵不采集，统计进 skipped_dir。
+#   exclude_dirs = ["Fiction", ".git", "node_modules", "项目/*_备份"]
+#     无 "/" 的写法 = 按目录名匹配（任意层级同名都排除）
+#     带 "/" 的写法 = 按相对路径逐段匹配，段内可用通配
+#   注意：匹配是自己实现的逐段比较（不依赖 fnmatch 跨分隔符通配），Windows/Linux 行为一致。
 # 可选过滤（用户已在本机 config 启用）：
 # include_exts = [".pdf", ".docx", ".md", ".txt", ".xlsx", ".pptx"]   # 白名单，白名单外直接排除
 # exclude_globs = ["cj_session*", "~$*", "发票*"]                       # 文件名/路径黑名单（fnmatch 通配）

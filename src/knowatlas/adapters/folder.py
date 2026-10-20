@@ -26,13 +26,14 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from ..errors import AdapterError
 from ..models import Entry
-from .base import AdapterOutput
+from .base import AdapterOutput, match_path_pattern
 
 _KIND_BY_SUFFIX: dict[str, str] = {}
 for _s in (".txt", ".md", ".markdown", ".rst"):
@@ -63,12 +64,19 @@ def collect_folders(config: Any) -> AdapterOutput:
                            hint="在 config/knowatlas.toml 填写要收录的根目录（绝对路径）")
     exclude_globs = [str(g) for g in (config.get("sources.folders.exclude_globs") or [])]
     include_exts = {str(x).lower() for x in (config.get("sources.folders.include_exts") or [])}
+    # 目录级排除（0.2.0 第十五批，用户需求"要 d:/data 但不要 d:/data/Fiction"）：
+    # 全局 [sources].exclude_dirs 供各文件系统型源共用（folder 及将来的 maildir/会话记录/
+    # 微信导出目录），源级 [sources.folders].exclude_dirs 追加。匹配目录名或相对路径，
+    # 支持通配：["Fiction", ".git", "项目/*_备份"]。命中的目录整棵不下钻（剪枝）。
+    exclude_dirs = ([str(g) for g in (config.get("sources.exclude_dirs") or [])]
+                    + [str(g) for g in (config.get("sources.folders.exclude_dirs") or [])])
     _raw_max = config.get("sources.folders.max_entries")
     max_files = _MAX_FILES_DEFAULT if _raw_max is None else int(_raw_max)
     entries: list[Entry] = []
     stats: dict[str, Any] = {
         "skipped_hidden": 0, "skipped_symlink": 0, "skipped_excluded": 0,
-        "skipped_ext": 0, "duplicate_rel": 0, "roots_ok": [], "seen_rel": set(),
+        "skipped_dir": 0, "skipped_ext": 0, "duplicate_rel": 0, "roots_ok": [],
+        "seen_rel": set(),
     }
     over = 0
     for root_str in roots:
@@ -77,43 +85,56 @@ def collect_folders(config: Any) -> AdapterOutput:
             raise AdapterError(f"根目录不存在：{root_str}",
                                hint="修正 config [sources.folders].roots 中的路径")
         stats["roots_ok"].append(root.name)
-        for p in sorted(root.rglob("*")):
-            if not p.is_file():
-                continue
-            if p.is_symlink():
-                stats["skipped_symlink"] += 1
-                continue
-            if _is_hidden_or_temp(p):
-                stats["skipped_hidden"] += 1
-                continue
-            rel = p.relative_to(root).as_posix()
-            suffix = p.suffix.lower()
-            if any(fnmatch.fnmatch(p.name, g) or fnmatch.fnmatch(rel, g)
-                   for g in exclude_globs):
-                stats["skipped_excluded"] += 1
-                continue
-            if include_exts and suffix not in include_exts:
-                stats["skipped_ext"] += 1
-                continue
-            if rel in stats["seen_rel"]:
-                stats["duplicate_rel"] += 1
-            stats["seen_rel"].add(rel)
-            if max_files > 0 and len(entries) >= max_files:
-                over += 1
-                continue
-            entries.append(Entry.build(
-                source_type="folder",
-                source_key=rel,
-                title=p.stem or p.name,
-                locator=f"file://{rel}",
-                locator_canonical=None,  # 非 http，无 canonical
-                native_path="/".join([root.name, *p.parent.relative_to(root).parts])
-                if p.parent != root else root.name,
-                meta={"source_type": "folder", "ext": suffix,
-                      "file_kind": _KIND_BY_SUFFIX.get(suffix, "other"),
-                      "size_bytes": p.stat().st_size},
-                created_at=_mtime_iso(p),
-            ))
+        for dirpath, dirnames, filenames in os.walk(root):
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            if rel_dir == ".":
+                rel_dir = ""
+            if exclude_dirs:  # 目录剪枝：命中的目录整棵不进入
+                kept = []
+                for d in dirnames:
+                    child_rel = f"{rel_dir}/{d}" if rel_dir else d
+                    if any(match_path_pattern(g, d, child_rel)
+                           for g in exclude_dirs):
+                        stats["skipped_dir"] += 1
+                        continue
+                    kept.append(d)
+                dirnames[:] = sorted(kept)  # 排序保证遍历顺序稳定（幂等）
+            for fn in sorted(filenames):
+                p = Path(dirpath) / fn
+                if p.is_symlink():
+                    stats["skipped_symlink"] += 1
+                    continue
+                if _is_hidden_or_temp(p):
+                    stats["skipped_hidden"] += 1
+                    continue
+                rel = p.relative_to(root).as_posix()
+                suffix = p.suffix.lower()
+                if any(match_path_pattern(g, p.name, rel)
+                       for g in exclude_globs):
+                    stats["skipped_excluded"] += 1
+                    continue
+                if include_exts and suffix not in include_exts:
+                    stats["skipped_ext"] += 1
+                    continue
+                if rel in stats["seen_rel"]:
+                    stats["duplicate_rel"] += 1
+                stats["seen_rel"].add(rel)
+                if max_files > 0 and len(entries) >= max_files:
+                    over += 1
+                    continue
+                entries.append(Entry.build(
+                    source_type="folder",
+                    source_key=rel,
+                    title=p.stem or p.name,
+                    locator=f"file://{rel}",
+                    locator_canonical=None,  # 非 http，无 canonical
+                    native_path="/".join([root.name, *p.parent.relative_to(root).parts])
+                    if p.parent != root else root.name,
+                    meta={"source_type": "folder", "ext": suffix,
+                          "file_kind": _KIND_BY_SUFFIX.get(suffix, "other"),
+                          "size_bytes": p.stat().st_size},
+                    created_at=_mtime_iso(p),
+                ))
     stats.pop("seen_rel")
     if over:
         stats["truncated"] = over

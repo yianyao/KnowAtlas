@@ -273,3 +273,22 @@
   百卓 + 用户现有白名单」的临时配置跑 `ksync --source folders --full`，archive_missing 归档
   35 条 .txt 条目（对应用户收紧白名单去掉 .txt）；emmx 入库另用「emmx 启用 + folders 本轮关闭」
   的临时配置，避免 D:/Data 全盘文档被连带收录。
+
+### 新增 + 修正（0.2.0 第十五批：目录级排除配置，用户需求"要 d:/data 但不要 d:/data/Fiction"）
+
+- **目录级排除**：`[sources].exclude_dirs`（全局，各文件系统型源共用——folder 及将来的
+  maildir 附件目录、会话记录产物目录、聊天记录导出目录都读同一项）+ `[sources.folders]
+  .exclude_dirs`（源级追加）。命中的目录**整棵剪枝不采集**（遍历改 os.walk 在目录层剪枝，
+  比逐文件判断快），统计进 stats.skipped_dir，不计入 seen_rel、不参与 archive_missing——
+  即"不收录"与"源里没有"严格区分。语义：无 "/" 按目录名匹配（任意层级），带 "/" 按相对
+  路径逐段前缀匹配（段内可通配，如 "项目/*_备份"）。
+- **跨平台匹配修正（新发现踩坑）**：原 exclude_globs 用 fnmatch 直接匹相对路径字符串，
+  依赖 `*` 跨路径分隔符通配——**Windows 上 fnmatch 先 normcase 把 '/' 换成 '\\'，
+  实测 "项目资料/*_备份" 匹 "项目资料/旧版备份" 直接 False**，同一份配置跨平台行为不一致
+  （违反项目可迁移铁律）。现自实现 `adapters/base.match_path_pattern`（逐段比较 +
+  fnmatchcase），排除规则在 Windows/Linux 上行为一致；exclude_globs 与 exclude_dirs 共用。
+- **真实验证**：D:/Data 白名单文件真实 2612 个（原 2000 上限静默丢弃 612）；配
+  exclude_dirs = ["Fiction", ".git"] 后 Fiction 残留 0、剪枝 4 个目录；用户 config 已写入
+  exclude_dirs + max_entries = 5000。git 目录下 694 个文档不受 .git 排除影响（那是用户自建
+  文档目录，非仓库内部结构）。
+- **测试**：目录名匹配 / 相对路径模式 / 源级追加 1 项（内含匹配语义回归）；全量 68 项通过。
