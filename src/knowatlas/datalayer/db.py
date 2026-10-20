@@ -798,13 +798,21 @@ class DataLayer:
         return [self._row_to_entry(r) for r in rows]
 
     def merge_meta(self, entry_id: str, patch: dict[str, Any]) -> None:
-        """合并写入条目 meta（浅合并 patch；条目不存在时静默跳过）。"""
+        """合并写入条目 meta（浅合并 patch；条目不存在时静默跳过）。
+
+        patch 值为 None = **删除该键**（0.2.0 第二十八批：补抓成功后清除过时的
+        fetch 失败打标需要真删键——存 null 会在 meta 留脏键）。
+        """
         with self.transaction() as conn:
             row = conn.execute("SELECT meta FROM entries WHERE id=?", (entry_id,)).fetchone()
             if row is None:
                 return
             meta = json.loads(row["meta"])
-            meta.update(patch)
+            for key, val in patch.items():
+                if val is None:
+                    meta.pop(key, None)
+                else:
+                    meta[key] = val
             conn.execute("UPDATE entries SET meta=? WHERE id=?", (_meta_json(meta), entry_id))
 
     def list_by_value_flag(self, value_flag: str, limit: int = 500) -> list[Entry]:

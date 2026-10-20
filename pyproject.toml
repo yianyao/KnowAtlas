@@ -20,12 +20,25 @@ dependencies = [
     "jieba",
     "readability-lxml",
     "markitdown",
+    # markitdown 各格式转换器的可选依赖（0.2.0 第二十八批：裸装 markitdown 时
+    # docx/xlsx/xls/pptx 全部 MissingDependencyException，Office 文档从未解析成功过）
+    "mammoth",
+    "openpyxl",
+    "pandas",
+    "xlrd",
+    "python-pptx",
     "pdfplumber",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest"]
-optional = ["sentence-transformers", "psycopg[binary]"]
+optional = [
+    "sentence-transformers",
+    "psycopg[binary]",
+    # 旧版 .doc/.ppt 的 Windows COM 解析后端（fetchers/office_legacy.py 可选能力：
+    # Windows + 本机装有 MS Office 时生效；缺失时优雅降级并指路）
+    "pywin32; sys_platform == 'win32'",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

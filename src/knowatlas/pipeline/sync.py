@@ -155,6 +155,28 @@ def _is_timeout(exc: Exception) -> bool:
     return "timed out" in s or "timeout" in s
 
 
+def _clear_stale_fetch_flags(dl: Any, fetched_ids: list[str]) -> None:
+    """清除过时的 fetch 失败打标（0.2.0 第二十八批）。
+
+    补抓成功 = 旧「解析失败/不可达/乱码」结论作废，条目不该继续留在待清理候选。
+    upsert 的 meta 合并语义（{**旧,**新}）会保留库中旧键，必须显式删（merge_meta
+    None=删键）。用户否决 value_flag=ok 与 L0 结构规则（URL 形态，与抓取无关）
+    不动——L0 reason 不属 fetch 失败三因，不会命中。
+    """
+    for eid in fetched_ids:
+        patch: dict[str, Any] = {"fetch_error": None}
+        stored = dl.get_entry(eid)
+        # 必须是机器打标（value_flag=not_knowledge）才清——用户否决 value_flag=ok
+        # 时 reason 可能仍是旧 fetch 失败三因（ok 覆盖了 flag 但 reason 残留），
+        # 人的决定优先，不得清。
+        if (stored and stored.meta.get("value_flag") == "not_knowledge"
+                and stored.meta.get("value_flag_reason") in (
+                    "unparseable", "unreachable", "garbled")):
+            patch["value_flag"] = None
+            patch["value_flag_reason"] = None
+        dl.merge_meta(eid, patch)
+
+
 def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
                    limit: int, run_id: str) -> dict[str, int]:
     """K1 显式补抓：对缺正文的 http(s)/file 条目抓取，最多尝试 limit 次；失败计数不中断。
@@ -235,6 +257,7 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         done += 1
     if updates:
         dl.upsert_entries(updates)
+    _clear_stale_fetch_flags(dl, fetched_ids)
     return {"fetched": done, "fetch_failed": failed, "fetch_attempts": attempts,
             "fetched_ids": fetched_ids}
 

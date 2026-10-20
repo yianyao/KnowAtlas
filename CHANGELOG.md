@@ -557,3 +557,34 @@
      content store 同批核实标记 [x]。
 
 - 测试：145 项全绿（142 + 3）。
+
+### 0.2.0 第二十八批（2026-10-20）：Office 文档解析修复——「我能直接打开的 .doc 被打 unparseable」
+
+**根因（用户核实待清理候选时指出，两个独立问题叠加）**
+
+1. markitdown 0.1.8 裸装（无 `[all]` extra）缺可选依赖：docx（mammoth）/
+   xlsx（openpyxl+pandas）/ xls（xlrd）/ pptx（python-pptx）全部
+   `MissingDependencyException`——**Office 文档解析在本库从未成功过**
+   （待清理候选 489 条 = xlsx 306 + docx 64 + xls 54 + ppt 32 + doc 31 + pptx 2）。
+2. 旧版二进制 .doc / .ppt：markitdown 根本没有转换器（"No converter attempted
+   a conversion"），装依赖也解决不了，需要独立解析链路。
+
+**修复**
+
+- 补装依赖（requirements-core + pyproject dependencies 两处同步）：mammoth /
+  openpyxl / pandas / xlrd / python-pptx；pywin32 入 optional（Windows COM 可选能力）。
+- 新增 `fetchers/office_legacy.py`：.doc/.ppt 旧版后端链——soffice（LibreOffice，
+  `KNOWATLAS_SOFFICE_PATH` 可覆盖路径，跨平台首选）→ Windows COM（Word /
+  PowerPoint 自动化，本机已验证）→ DegradedParseError 带可操作指引（另存
+  docx/pptx / 装 LibreOffice / 装 pywin32+Office）；`file_reader.py` 按
+  扩展名路由 `_LEGACY_SUFFIXES = {".doc", ".ppt"}`。
+- 修「补抓成功仍赖在待清理候选」：upsert meta 合并语义（{**旧,**新}）保留旧键，
+  `value_flag=not_knowledge`（reason 属 fetch 三因 unparseable/unreachable/garbled）
+  在补抓成功后显式清除；`merge_meta` 增 None=删键语义；用户否决 value_flag=ok
+  与 L0 结构规则（URL 形态，与抓取无关）不动。
+- 复检探针：`tests/test_office_parse.py` 10 项（真实 xlsx/pptx/docx 转换、
+  .doc 路由、无后端指路报错、soffice/COM 后端选择、None 删键、打标清除、
+  用户否决与 L0 打标保留）。真机冒烟：STD-技术手冊(Version2019).doc 经 COM
+  提取 10447 字符；docx/xlsx/xls/pptx 真实文件 markitdown 全通。
+
+- 测试：155 项全绿（145 + 10）。

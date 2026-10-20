@@ -1,3 +1,6 @@
 # 完整方案 §1：按需安装（本地向量级 / PostgreSQL 数据文件源）
 sentence-transformers
 psycopg[binary]
+# 旧版 .doc/.ppt 的 Windows COM 解析后端（office_legacy 可选能力：Windows +
+# MS Office 时生效；缺失时优雅降级并指路）
+pywin32; sys_platform == "win32"

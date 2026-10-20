@@ -1,4 +1,5 @@
-"""file:// 获取器：txt/md 直读；Office/PDF 走 markitdown（缺失即降级报错）。"""
+"""file:// 获取器：txt/md 直读；旧版 .doc/.ppt 走 office_legacy 后端链；
+其余 Office/PDF 走 markitdown（缺失即降级报错）。"""
 
 from __future__ import annotations
 
@@ -9,6 +10,9 @@ from ..errors import AdapterError, DegradedParseError
 from ..registry.capability import FetchContext
 
 _TEXT_SUFFIXES = {".txt", ".md", ".markdown"}
+# markitdown 0.1.8 无 Word 97-2003 / PPT 97-2003 转换器（0.2.0 第二十八批：
+# 用户核实「我能直接打开的 .doc 被打 unparseable」）——这批扩展名走旧版后端链
+_LEGACY_SUFFIXES = {".doc", ".ppt"}
 
 
 def fetch_file(locator: str, ctx: FetchContext) -> tuple[str, str]:
@@ -38,6 +42,9 @@ def fetch_file(locator: str, ctx: FetchContext) -> tuple[str, str]:
     suffix = candidate.suffix.lower()
     if suffix in _TEXT_SUFFIXES:
         text = candidate.read_text(encoding="utf-8", errors="replace")
+    elif suffix in _LEGACY_SUFFIXES:
+        from .office_legacy import convert_legacy
+        text = convert_legacy(candidate, suffix)
     else:
         try:
             from markitdown import MarkItDown
