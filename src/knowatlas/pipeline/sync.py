@@ -149,6 +149,12 @@ def _apply_content(entry: Entry, text: str, content_hash_hex: str,
     )
 
 
+def _is_timeout(exc: Exception) -> bool:
+    """超时类错误判定（httpx 措辞 "timed out" / "timeout"）——只有超时才值得重试。"""
+    s = str(exc).lower()
+    return "timed out" in s or "timeout" in s
+
+
 def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
                    limit: int, run_id: str) -> dict[str, int]:
     """K1 显式补抓：对缺正文的 http(s)/file 条目抓取，最多尝试 limit 次；失败计数不中断。
@@ -192,13 +198,28 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         if stored and stored.content_hash and dl.get_content(stored.content_hash) is not None:
             continue  # 正文已在 content_store（抓过一次不重复抓）
         attempts += 1
-        try:
-            text, title = fetch_with_fallback(e.locator, locators, ctx)
-        except (AdapterError, FetchError) as exc:
-            _flag(e, "unreachable", str(exc))  # 文件缺失/路径非法/HTTP 错误/超时
-            continue
-        except DegradedParseError as exc:
-            _flag(e, "unparseable", str(exc))  # markitdown/readability 解析不出
+        # 用户定调（2026-10-20）：「连续三次超时且排除网络问题，扔掉」——超时重试
+        # 最多 3 次（每次走完整双后端链），仍超时按 unreachable 打标进待清理候选；
+        # 非超时错误（403/404/解析失败）是确定性的，重试无益，一次判死。
+        text = title = None
+        last_exc: Exception | None = None
+        ok = False
+        for _try in range(3):
+            try:
+                text, title = fetch_with_fallback(e.locator, locators, ctx)
+                ok = True
+                break
+            except DegradedParseError as exc:
+                last_exc = exc
+                break  # 解析失败确定性失败
+            except (AdapterError, FetchError) as exc:
+                last_exc = exc
+                if not _is_timeout(exc):
+                    break
+        if not ok:
+            if last_exc is not None:
+                _flag(e, "unparseable" if isinstance(last_exc, DegradedParseError)
+                      else "unreachable", str(last_exc))
             continue
         if is_garbled(text):
             _flag(e, "garbled")  # 乱码正文不入库不进 FTS，直接进待清理候选

@@ -532,3 +532,28 @@
   `python -m knowatlas` + `data/knowledge.db`（完整方案 §9.4 已注明）。
 - **落点**：完整方案新增 §9.4（契约草案，标注「实现时字段变更走 CHANGELOG 工单」）；
   TODO Phase 4 新增三待办（串联工作区最高优先 > 放射增强 > 统一入口），词云/时间线顺延。
+
+### 0.2.0 第二十七批（2026-10-20）：超时三次规则 + 目录级排除 + kadd 核实收口
+
+**变更工单（三件事，全部落地）**
+
+1. **补抓超时三次规则**（用户定调：「连续三次超时且排除网络问题，扔掉」）
+   - 旧→新：`_fetch_missing` 单次失败即打标 → 超时类错误（措辞 timed out/timeout）
+     最多重试 3 次（每次走完整双后端链），仍超时按 `unreachable` 打标进待清理候选；
+     非超时错误（403/404/解析失败）是确定性失败，一次判死不重试。
+   - 复检探针：`tests/test_value_guard.py` 新增 3 项（恰 3 次后打标 unreachable /
+     前 2 次超时第 3 次成功恢复入库 / 非超时 1 次判死），全绿。
+
+2. **目录级排除 exclude_dirs**（git/code 仓库噪音源头治理）
+   - 旧→新：用户 config `[sources.folders]` 新增
+     `exclude_dirs = ["vendor", "samples", "_legacy", ".git", "node_modules"]`；
+     folder 采集器机制早已支持（目录名或相对路径 glob 任意深度命中即剪整棵子树）。
+   - 效果：phpoffice samples、specSkill fixtures 等样例噪音不再入库；
+     需全量重同步一次让存量噪音归档（本轮已执行，见运维记录）。
+
+3. **kadd 联动补全核实收口**
+   - 核实 `pipeline/kadd.py` 全链路（建条目→抓正文→put_content→classify_coarse→
+     挂接/暂存）已实现且测试在位（test_kadd_full_chain），TODO 标 [x] 无需新代码；
+     content store 同批核实标记 [x]。
+
+- 测试：145 项全绿（142 + 3）。

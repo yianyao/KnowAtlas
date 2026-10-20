@@ -354,3 +354,82 @@ def test_fetch_missing_respects_user_veto(cfg, dl, registries, tmp_path):
     meta = dl.get_entry(e.id).meta
     assert meta["value_flag"] == "ok"  # 否决不被覆盖
     assert meta["fetch_status"] == "unreachable"  # 诊断信息照记
+
+
+def _patch_fetch(monkeypatch, behavior):
+    """把 knowatlas.fetchers.base.fetch_with_fallback 换成计数桩。
+
+    behavior(locator, call_no) -> (text, title) 或抛异常；返回调用次数列表。
+    sync._fetch_missing 是函数体内延迟导入，patch 源模块属性即可生效。
+    """
+    import knowatlas.fetchers.base as fb
+
+    calls: list[str] = []
+
+    def stub(locator, locators, ctx):
+        calls.append(locator)
+        return behavior(locator, len(calls))
+
+    monkeypatch.setattr(fb, "fetch_with_fallback", stub)
+    return calls
+
+
+def test_fetch_missing_timeout_retries_three_then_flags(cfg, dl, registries, tmp_path, monkeypatch):
+    """用户定调：连续三次超时 → 扔掉（打 unreachable 进待清理候选）。"""
+    from knowatlas.errors import FetchError
+    from knowatlas.pipeline.sync import _fetch_missing
+
+    cfg._data.setdefault("sources", {})["folders"] = {"roots": [str(tmp_path)]}
+    locators, _ = registries
+    e = _file_entry(tmp_path, "超时页.md", None, missing=True)
+    dl.upsert_entries([e])
+
+    calls = _patch_fetch(
+        monkeypatch,
+        lambda loc, n: (_ for _ in ()).throw(FetchError("The read operation timed out")))
+    _fetch_missing(cfg, dl, locators, [e], limit=10, run_id="r")
+    assert len(calls) == 3  # 恰好三次，不第五次不第二次
+    meta = dl.get_entry(e.id).meta
+    assert meta["value_flag"] == "not_knowledge"
+    assert meta["value_flag_reason"] == "unreachable"
+    assert "timed out" in meta["fetch_error"]
+
+
+def test_fetch_missing_timeout_then_success_recovers(cfg, dl, registries, tmp_path, monkeypatch):
+    """前两次超时第三次成功 → 正常入库，不算失败。"""
+    from knowatlas.errors import FetchError
+    from knowatlas.pipeline.sync import _fetch_missing
+
+    cfg._data.setdefault("sources", {})["folders"] = {"roots": [str(tmp_path)]}
+    locators, _ = registries
+    e = _file_entry(tmp_path, "慢站.md", None, missing=True)
+    dl.upsert_entries([e])
+
+    def behavior(loc, n):
+        if n < 3:
+            raise FetchError(f"attempt {n}: connection timed out")
+        return "# 慢站\n\n" + "终于连上了的正常正文内容。" * 20, "慢站"
+
+    calls = _patch_fetch(monkeypatch, behavior)
+    stats = _fetch_missing(cfg, dl, locators, [e], limit=10, run_id="r")
+    assert len(calls) == 3 and stats["fetched"] == 1
+    assert dl.get_entry(e.id).meta["fetch_status"] == "ok"
+
+
+def test_fetch_missing_non_timeout_fails_fast(cfg, dl, registries, tmp_path, monkeypatch):
+    """403/404 等确定性失败 → 一次判死不重试。"""
+    from knowatlas.errors import FetchError
+    from knowatlas.pipeline.sync import _fetch_missing
+
+    cfg._data.setdefault("sources", {})["folders"] = {"roots": [str(tmp_path)]}
+    locators, _ = registries
+    e = _file_entry(tmp_path, "拒之门外.md", None, missing=True)
+    dl.upsert_entries([e])
+
+    calls = _patch_fetch(
+        monkeypatch,
+        lambda loc, n: (_ for _ in ()).throw(FetchError("HTTP 403 Forbidden")))
+    _fetch_missing(cfg, dl, locators, [e], limit=10, run_id="r")
+    assert len(calls) == 1  # 非超时错误重试无益，一次判死
+    meta = dl.get_entry(e.id).meta
+    assert meta["value_flag_reason"] == "unreachable"
