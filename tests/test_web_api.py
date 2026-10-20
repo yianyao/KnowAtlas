@@ -111,3 +111,41 @@ def test_token_hint_fingerprint(cfg, dl, registries):
         assert hint["fingerprint"] in r.json()["error"]["message"]
     finally:
         os.environ.pop("KNOWATLAS_TEST_TOKEN", None)
+
+
+def test_session_cookie_auto_auth(cfg, dl, registries):
+    """同源自动写凭据：/api/session 种 HttpOnly+SameSite=Strict Cookie，带 cookie 的写操作
+    通过守卫——用户零手工填令牌（浏览器自动携带）。"""
+    from fastapi.testclient import TestClient
+    from knowatlas.web.app import create_app
+    tok = "unit-test-token-2"
+    os.environ["KNOWATLAS_TEST_TOKEN"] = tok
+    try:
+        app = create_app(cfg, dl, *registries)
+        c = TestClient(app, headers={"Host": f"127.0.0.1:{cfg.get('general.server_port', 8420)}"})
+        r = c.get("/api/session")
+        assert r.status_code == 200
+        assert tok not in r.text                       # 明文不回传到 JS
+        set_cookie = r.headers.get("set-cookie", "")
+        assert "knowatlas_write=" in set_cookie
+        assert "HttpOnly" in set_cookie and "SameSite=strict" in set_cookie.replace("Strict", "strict")
+        # TestClient 自动带上刚种的 cookie：不带任何 header 也能通过写守卫
+        w = c.post("/api/entries/999999/reject", json={})
+        assert w.status_code == 404, w.text            # 过了守卫，只是条目不存在
+    finally:
+        os.environ.pop("KNOWATLAS_TEST_TOKEN", None)
+
+
+def test_write_guard_rejects_bad_cookie(cfg, dl, registries):
+    """错误 cookie 仍被拒（守卫不因 cookie 通道而放松）。"""
+    from fastapi.testclient import TestClient
+    from knowatlas.web.app import create_app
+    os.environ["KNOWATLAS_TEST_TOKEN"] = "right-token"
+    try:
+        app = create_app(cfg, dl, *registries)
+        c = TestClient(app, headers={"Host": f"127.0.0.1:{cfg.get('general.server_port', 8420)}"})
+        c.cookies.set("knowatlas_write", "wrong-token")
+        w = c.post("/api/entries/999999/reject", json={})
+        assert w.status_code == 403
+    finally:
+        os.environ.pop("KNOWATLAS_TEST_TOKEN", None)

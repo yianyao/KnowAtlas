@@ -82,27 +82,32 @@ let currentCat = null; // 当前选中分类 id
 let refreshCurrent = null; // 当前视图刷新器——写操作成功后局部刷新，不跳转
 
 function token() { return localStorage.getItem("knowatlas_token") || ""; }
-async function tokenHint() {
-  try { return await (await fetch("/api/token-hint")).json(); } catch { return {}; }
+// 页面打开时向服务端要一次同源写凭据（服务端种 HttpOnly Cookie，浏览器自动携带）。
+// 令牌由服务端环境变量决定，用户**不需要手工填任何令牌**。
+let sessionInfo = {};
+async function ensureSession() {
+  try { sessionInfo = await (await fetch("/api/session")).json(); } catch { sessionInfo = {}; }
+  return sessionInfo;
 }
 async function writeJSON(url, body) {
-  if (!token()) {
-    const h = await tokenHint();
-    const tip = h.configured
-      ? `服务端令牌指纹：${h.fingerprint}（环境变量 ${h.env_name}）\n` +
-        `请把你设置的那个变量的值原样粘贴到下面（指纹对不上就是填错了）。`
-      : `服务端未读到 ${h.env_name}，serve 启动时会自动生成一个会话令牌，值在 serve 启动日志里。`;
-    const t = prompt(
-      "写操作安全令牌（与 LLM 无关）：防止其他网页冒充你修改知识库的安全措施。\n\n" + tip +
-      "\n\n不匹配的常见原因：①填的值与服务端不是同一个；②配完环境变量没重启 serve；" +
-      "③同名环境变量在系统级/用户级两处都存在、被另一级覆盖。");
+  // 兜底：仅当服务端未配置令牌（理论上 serve 启动即自动生成，实践中不会发生）
+  if (sessionInfo && sessionInfo.configured === false) {
+    const t = prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
     if (t === null) return { __aborted: true };
     localStorage.setItem("knowatlas_token", t.trim());
   }
   const r = await fetch(url, { method: "POST",
     headers: { "Content-Type": "application/json", "X-KnowAtlas-Token": token() },
     body: JSON.stringify(body) });
-  return r.json();
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 403 && data && data.error && data.error.code === "FORBIDDEN") {
+    // 凭据失效（例如 serve 重启后换了令牌）——重取一次会话再试，仍失败才提示
+    await ensureSession();
+    const retry = await fetch(url, { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (retry.ok) return retry.json();
+  }
+  return data;
 }
 
 async function loadTree() {
@@ -341,7 +346,8 @@ document.getElementById("search").addEventListener("change", async (e) => {
     : "<small>无命中。</small>";
 });
 
-loadTree();
+// 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
+ensureSession().then(loadTree);
 </script>
 </body>
 </html>

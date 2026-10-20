@@ -12,10 +12,11 @@ import os
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 _TOKEN_HEADER = "x-knowatlas-token"
+_WRITE_COOKIE = "knowatlas_write"  # 同源自动写凭据（HttpOnly，JS 读不到明文）
 
 
 def _now_iso() -> str:
@@ -53,7 +54,9 @@ def check_write_access(request: Request, cfg: Any) -> JSONResponse | None:
                        "message": f"环境变量 {token_env} 未设置，写端点不可用"}},
             status_code=503,
         )
-    supplied = request.headers.get(_TOKEN_HEADER) or request.query_params.get("token", "")
+    supplied = (request.headers.get(_TOKEN_HEADER)
+                or request.cookies.get(_WRITE_COOKIE, "")
+                or request.query_params.get("token", ""))
     if supplied != expected:
         return JSONResponse(
             {"error": {"code": "FORBIDDEN",
@@ -105,6 +108,22 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         tok = os.environ.get(env_name, "")
         return {"env_name": env_name, "fingerprint": token_fingerprint(tok),
                 "configured": bool(tok)}
+
+    @app.get("/api/session")
+    def session(response: Response) -> dict:
+        """页面打开时调用一次：服务端把写令牌种进 HttpOnly Cookie，之后浏览器的
+        同源请求自动携带——**用户不需要手工填任何令牌**（0.2.0 第十七批）。
+
+        防护不降级：cookie 是 HttpOnly（JS 读不到明文）+ SameSite=Strict（跨站请求
+        不携带）+ 绑定 127.0.0.1 域（别的站点拿不到），Host/Origin 校验照旧。
+        """
+        env_name = str(cfg.get("web.token_env", "KNOWATLAS_WEB_TOKEN"))
+        tok = os.environ.get(env_name, "")
+        if tok:
+            response.set_cookie(_WRITE_COOKIE, tok, httponly=True,
+                                samesite="strict", path="/")
+        return {"env_name": env_name, "fingerprint": token_fingerprint(tok),
+                "configured": bool(tok), "cookie": _WRITE_COOKIE if tok else ""}
 
     @app.get("/api/tree")
     def tree() -> dict:
