@@ -118,9 +118,10 @@ async function writeJSON(url, body) {
 async function loadTree() {
   const data = await (await fetch("/api/tree")).json();
   pathToId = {};
-  // 下拉（移动/合并目标）只收非空分类——把条目搬进/合进空分类没有意义
+  // 下拉（移动/合并目标）只收非空分类——把条目搬进/合进空分类没有意义；
+  // count 缺失（旧后端进程）时放行，不误杀
   const collect = (nodes) => { for (const n of nodes) {
-    if (n.count) pathToId[n.path] = n.id;
+    if (n.count === undefined || n.count > 0) pathToId[n.path] = n.id;
     collect(n.children); } };
   collect(data.tree);
   document.getElementById("catlist").innerHTML =
@@ -129,14 +130,14 @@ async function loadTree() {
   box.textContent = "";
   const render = (nodes, parent) => {
     for (const n of nodes) {
-      if (!n.count && !showEmptyCats) continue;  // 空枝默认隐藏；分类不删，勾选后可见
+      if (n.count === 0 && !showEmptyCats) continue;  // 空枝默认隐藏（count 缺失≠空，防旧后端误杀）
       const div = document.createElement("div");
       div.className = "tree-node";
       const row = document.createElement("div"); row.className = "row";
       const name = document.createElement("span");
       name.className = "name" + (n.id === currentCat ? " active" : "")
-                     + (n.count ? "" : " empty");
-      if (!n.count) name.title = "该分类（含子分类）下暂无 active 条目";
+                     + (n.count === 0 ? " empty" : "");
+      if (n.count === 0) name.title = "该分类（含子分类）下暂无 active 条目";
       name.textContent = n.name;
       name.onclick = () => showCategory(n.id);
       const ops = document.createElement("span"); ops.className = "ops";
