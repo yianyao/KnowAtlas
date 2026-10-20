@@ -252,6 +252,25 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             return {"query": q, "nodes": [], "links": []}
         return dl.search_graph(q, limit=limit)
 
+    @app.get("/api/graph/radiate")
+    def graph_radiate(node_id: str, per_channel: int = 8):
+        """放射邻域：焦点一跳关联，每节点带 reasons[]、每边带 reason（第三十三批）。"""
+        data = dl.radiate(node_id, per_channel=max(1, min(per_channel, 40)))
+        if data is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "节点不存在"}},
+                                status_code=404)
+        return data
+
+    @app.get("/api/graph/reverse")
+    def graph_reverse(node_id: str, limit: int = 20):
+        """双向反查：哪些焦点能到达该节点（分类带 path、线索带 thread.html url）。"""
+        data = dl.reverse_reach(node_id, limit=max(1, min(limit, 50)))
+        if data is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND",
+                                           "message": "节点不存在或不支持反查"}},
+                                status_code=404)
+        return data
+
     @app.post("/api/entries/{entry_id}/recategorize")
     async def recategorize(entry_id: str, request: Request):
         """人工校正：条目改挂目标分类（按路径，不存在则自动建，origin=manual）。

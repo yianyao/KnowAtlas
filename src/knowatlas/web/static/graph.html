@@ -8,74 +8,146 @@
   :root { color-scheme: light dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
          display: flex; flex-direction: column; height: 100vh; }
-  header { padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header { padding: 8px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   header a, header button { color: #4a9eff; text-decoration: none; background: none;
          border: 1px solid #4a9eff55; border-radius: 4px; padding: 2px 8px; cursor: pointer;
          font-size: 13px; }
+  header label { font-size: 13px; display: flex; gap: 3px; align-items: center; cursor: pointer; }
   #q { padding: 3px 8px; border: 1px solid #8886; border-radius: 4px; font-size: 13px; }
   #crumb { font-size: 13px; }
+  .crumbit { cursor: pointer; color: #4a9eff; }
+  .crumbit:last-child { color: inherit; font-weight: 600; cursor: default; }
   #tip { color: #888; font-size: 12px; }
+  #expand { display: none; }
   #chart { flex: 1; }
+  #revpanel { position: absolute; top: 92px; right: 16px; width: 320px; max-height: 60vh;
+              overflow: auto; border: 1px solid #8886; border-radius: 6px; padding: 8px 12px;
+              background: inherit; font-size: 13px; z-index: 5; }
+  #revpanel h3 { margin: 2px 0 8px; font-size: 13px; }
+  #revpanel .ritem { margin: 4px 0; line-height: 1.5; }
+  #revpanel .rpath { color: #888; font-size: 12px; }
+  #revpanel .rkind { display: inline-block; border: 1px solid #8886; border-radius: 3px;
+                     padding: 0 4px; margin-right: 4px; font-size: 11px; color: #888; }
+  #revpanel a { color: #4a9eff; }
 </style>
 </head>
 <body>
 <header>
   <a href="/index.html">← 返回分类树</a>
   <strong>知识关系图</strong>
-  <input id="q" placeholder="搜条目标题 / 分类名，回车出子图" size="30">
+  <input id="q" placeholder="搜条目标题 / 分类名，回车出子图" size="28">
   <button id="home">大类总览</button>
+  <button id="expand">展开更多</button>
+  <label title="点任意节点出「焦点一跳邻域」（每条关联带解释）">
+    <input type="checkbox" id="radial"> 放射模式</label>
+  <label title="在边上常驻显示关联理由（tooltip 恒显）">
+    <input type="checkbox" id="showReason"> 🏷 关联解释</label>
+  <button id="reverseBtn" title="哪些焦点能到达当前焦点">🔍 反查</button>
+  <button id="threadBtn" title="当前视图条目一键存为线索">🧵 固化为线索</button>
   <span id="crumb"></span>
   <span id="tip">加载中…</span>
 </header>
 <div id="chart"></div>
+<div id="revpanel" hidden></div>
 <script>
 const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
-                     llm: "语义判断", manual: "人工校正", embedding: "向量聚类" };
+                     llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
+                     child: "子分类", parent: "父分类", attach: "挂接",
+                     thread: "同线索", host_member: "域内条目" };
 const KIND_NAME = { category: "分类", entry: "条目", domain: "域名" };
+const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
+                        same_host: "同域名", thread: "同线索", host_member: "域内条目" };
 const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
 const qBox = document.getElementById("q");
 const crumb = document.getElementById("crumb");
 const tip = document.getElementById("tip");
+const revpanel = document.getElementById("revpanel");
+const expandBtn = document.getElementById("expand");
+
+// ---- 导航栈 + 面包屑（总览/搜索/子树/放射统一压栈，任一级回跳） ----
+const nav = [];          // {label, load(push)}
+let lastData = null;     // 当前视图原始数据（固化/反查用）
+let currentRadiate = null;  // {nodeId, perChannel, name}
+let currentSubtree = null;  // 分类 id（子树视图，反查用）
+
+function renderBread() {
+  crumb.innerHTML = nav.map((v, i) =>
+    `<span class="crumbit" data-i="${i}">${v.label}</span>`).join(" › ");
+  crumb.querySelectorAll(".crumbit").forEach(s => s.onclick = () => {
+    const i = +s.dataset.i;
+    if (i === nav.length - 1) return;
+    nav.length = i + 1;            // 回跳 = 截断到该层
+    nav[i].load(false);
+  });
+}
 
 // node.id 约定：c:<分类id> / e:<条目id> / d:<域名>；分类节点可下钻，条目可打开
-function render(data, crumbText) {
+function render(data, crumbText, opts = {}) {
+  lastData = data;
+  const radiateView = !!opts.radiate;
+  const reasonOn = document.getElementById("showReason").checked;
   const nodes = data.nodes.map(n => {
-    const size = n.kind === "category"
-      ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)   // 总览气泡按 count
-      : (n.kind === "domain" ? 10 : 7);
+    const isFocus = radiateView && n.id === data.focus.id;
+    const size = isFocus ? 34
+      : n.kind === "category"
+        ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)
+        : (n.kind === "domain" ? 10 : 7);
     return {
       id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
+      reasons: n.reasons || [], path: n.path || "",
       symbolSize: size,
-      itemStyle: { color: n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
+      x: isFocus ? 0 : undefined, y: isFocus ? 0 : undefined,
+      fixed: isFocus,   // 焦点居中固定，邻域放射展开
+      itemStyle: { color: isFocus ? "#ffd04b"
+                     : n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
                      : n.kind === "domain" ? "#999" : "#7ba7d7",
-                   opacity: n.ctx ? 0.55 : 1 },
-      label: { show: n.kind === "category" || n.kind === "domain"
+                   opacity: n.ctx ? 0.55 : 1,
+                   borderColor: isFocus ? "#c8871a" : undefined,
+                   borderWidth: isFocus ? 2 : 0 },
+      label: { show: isFocus || n.kind === "category" || n.kind === "domain"
                     || (n.kind === "entry" && data.nodes.length <= 50),
                fontSize: n.kind === "category" ? 13 : 10,
+               fontWeight: isFocus ? "bold" : "normal",
                color: n.ctx ? "#6b7f94" : undefined },
     };
   });
   const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
+  const nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
   const links = data.links.map(l => ({
-    source: l.source, target: l.target, kind: l.kind,
-    lineStyle: { color: l.kind === "same_host" ? "rgba(160,160,160,.35)" : "rgba(74,158,255,.45)",
-                 width: l.kind === "same_host" ? 1 : 1.6, curveness: 0.1 },
+    source: l.source, target: l.target, kind: l.kind, reason: l.reason || "",
+    lineStyle: { color: l.reason || l.kind === "same_host"
+                     ? "rgba(160,160,160,.4)" : "rgba(74,158,255,.45)",
+                 width: (l.kind === "same_host" || l.reason) ? 1 : 1.6, curveness: 0.1 },
+    label: { show: reasonOn && !!l.reason, formatter: l.reason || "",
+             fontSize: 9, color: "#999" },
   }));
-  crumb.textContent = crumbText;
+  crumb.innerHTML = `<span class="crumbit" style="cursor:default;font-weight:600">${crumbText}</span>`;
+  renderBread();
+  const truncParts = Object.entries(data.truncated || {})
+    .map(([k, v]) => `${CHANNEL_LABEL[k] || k} ${v} 条未显示`);
   tip.textContent =
     `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length}` +
     ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}` +
     ` / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}` +
-    `。点分类下钻 / 点条目打开原文 / 回车搜索。`;
+    (radiateView
+      ? `。每条关联都带解释（悬停可看）${truncParts.length ? "；" + truncParts.join("，") : ""}。点邻域节点继续放射，焦点为黄。`
+      : `。点分类下钻 / 点条目打开原文 / 回车搜索。`);
+  expandBtn.style.display = truncParts.length ? "" : "none";
   chart.setOption({
     tooltip: { formatter: p => {
-      if (p.dataType === "edge")
-        return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →<br>${nameOf[p.data.target] || p.data.target}`;
-      return `${p.data.name}（${KIND_NAME[p.data.kind] || p.data.kind}）`;
+      if (p.dataType === "edge") {
+        const why = p.data.reason ? `<br>关联理由：${p.data.reason}` : "";
+        return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
+      }
+      const d = p.data, lines = [`${d.name}（${KIND_NAME[d.kind] || d.kind}）`];
+      if (d.path) lines.push(`路径：${d.path}`);
+      if (d.reasons && d.reasons.length) lines.push("关联：" + d.reasons.join("；"));
+      if (d.locator) lines.push(`<a href="${d.locator}" target="_blank" rel="noopener" style="color:#4a9eff">打开原文 ↗</a>`);
+      return lines.join("<br>");
     } },
     series: [{
       type: "graph", layout: "force", roam: true, draggable: true,
-      force: { repulsion: 90, edgeLength: [30, 120], gravity: 0.08 },
+      force: { repulsion: radiateView ? 160 : 90, edgeLength: [30, 120], gravity: 0.08 },
       data: nodes, links: links,
       emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
       label: { position: "right" },
@@ -83,26 +155,33 @@ function render(data, crumbText) {
   }, { notMerge: true });   // 视图切换整体替换，防旧节点残留
 }
 
-async function showOverview() {
+// ---- 四类视图 ----
+async function showOverview(push = true) {
   qBox.value = "";
   const data = await (await fetch("/api/graph/overview")).json();
   if (!data.nodes.length) {
     tip.textContent = "还没有一级大类——先跑 ksync 建分类。";
-    render({ nodes: [], links: [] }, "");
+    render({ nodes: [], links: [] }, "大类总览");
     return;
   }
   render(data, "大类总览——点大类下钻，或输入关键字搜索");
+  if (push) { nav.length = 0; nav.push({ label: "大类总览", load: showOverview }); renderBread(); }
 }
 
-async function showSubtree(categoryId) {
+async function showSubtree(categoryId, push = true) {
   const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}`);
   if (r.status === 404) { tip.textContent = "分类不存在（可能已删）。"; return; }
   const data = await r.json();
   const rootName = (data.nodes.find(n => n.id === "c:" + categoryId) || {}).name || categoryId;
+  currentSubtree = categoryId;
   render(data, `子树：${rootName}（祖先链为灰底上下文）`);
+  if (push) {
+    nav.push({ label: `子树:${rootName}`, load: p => showSubtree(categoryId, false) });
+    renderBread();
+  }
 }
 
-async function doSearch(q) {
+async function doSearch(q, push = true) {
   if (!q.trim()) { showOverview(); return; }
   const data = await (await fetch(`/api/graph/search?q=${encodeURIComponent(q.trim())}`)).json();
   if (!data.nodes.length) {
@@ -110,21 +189,111 @@ async function doSearch(q) {
     tip.textContent = `没有命中条目或分类——换个关键字（只搜条目标题与分类名）。`;
     return;
   }
+  currentRadiate = null; currentSubtree = null;
   render(data, `搜索「${q.trim()}」——只含命中条目及其分类链`);
+  if (push) {
+    nav.push({ label: `搜「${q.trim()}」`, load: p => doSearch(q, false) });
+    renderBread();
+  }
 }
 
+// ---- 放射模式（第三十三批）：焦点一跳邻域，空层降级不压栈 ----
+async function showRadiate(nodeId, perChannel = 8, push = true) {
+  const r = await fetch(`/api/graph/radiate?node_id=${encodeURIComponent(nodeId)}&per_channel=${perChannel}`);
+  if (r.status === 404) { tip.textContent = "节点不存在（可能已删）。"; return; }
+  const data = await r.json();
+  if (!data.nodes.length) {           // 空层降级：不压栈、不造节点
+    tip.textContent = `「${data.focus.name}」没有可放射的邻域（无挂接/同源/同线索关联）。`;
+    return;
+  }
+  currentRadiate = { nodeId, perChannel, name: data.focus.name };
+  currentSubtree = null;
+  // 焦点节点必须显式在 nodes 里（边引用它；render 据此固定居中+高亮）
+  if (!data.nodes.some(n => n.id === data.focus.id))
+    data.nodes = [{ ...data.focus }, ...data.nodes];
+  render({ ...data, links: data.edges, focus: data.focus },
+         `放射：${data.focus.name}`, { radiate: true });
+  if (push) {
+    nav.push({ label: `放射:${data.focus.name}`, load: p => showRadiate(nodeId, perChannel, false) });
+    renderBread();
+  }
+}
+
+expandBtn.onclick = () => {          // Top-N 渐进披露：×3 扩容（封顶 40）
+  if (!currentRadiate) return;
+  const next = Math.min(currentRadiate.perChannel * 3, 40);
+  showRadiate(currentRadiate.nodeId, next, false).then(() => {
+    if (nav.length && nav[nav.length - 1].label.startsWith("放射:"))
+      nav[nav.length - 1].load = p => showRadiate(currentRadiate.nodeId, next, false);
+  });
+};
+
+// ---- 点击行为：放射模式开启 → 任意节点放射；域名节点恒走放射 ----
 chart.on("click", p => {
   const d = p.data;
   if (!d) return;
+  const radial = document.getElementById("radial").checked;
+  if (d.kind === "domain" && String(d.id).startsWith("d:")) { showRadiate(String(d.id)); return; }
+  if (radial && (d.kind === "category" || d.kind === "entry")) { showRadiate(String(d.id)); return; }
   if (d.kind === "category" && String(d.id).startsWith("c:")) showSubtree(String(d.id).slice(2));
   else if (d.kind === "entry" && d.locator) window.open(d.locator, "_blank", "noopener");
+});
+
+// ---- 反查面板：哪些焦点能到达当前焦点 ----
+document.getElementById("reverseBtn").onclick = async () => {
+  const nodeId = currentRadiate ? currentRadiate.nodeId
+               : currentSubtree ? "c:" + currentSubtree : null;
+  if (!nodeId) { tip.textContent = "先进入放射视图或子树下钻，再反查。"; return; }
+  const r = await fetch(`/api/graph/reverse?node_id=${encodeURIComponent(nodeId)}`);
+  if (r.status === 404) { tip.textContent = "该节点不支持反查（域名节点无反查）。"; return; }
+  const data = await r.json();
+  const KC = { category: "分类", entry: "条目", domain: "域名", thread: "线索" };
+  revpanel.innerHTML = `<h3>🔍 反查：谁指向「${data.focus.id}」</h3>` +
+    (data.items.length ? data.items.map(it => {
+      const inner = it.kind === "thread"
+        ? `<a href="${it.url}" target="_blank" rel="noopener">${it.name} ↗</a>`
+        : (it.kind === "category"
+            ? `<span class="crumbit" data-cat="${it.id.slice(2)}" style="cursor:pointer;color:#4a9eff">${it.name}</span>`
+            : it.name);
+      return `<div class="ritem"><span class="rkind">${KC[it.kind] || it.kind}</span>${inner}`
+           + (it.path ? `<br><span class="rpath">路径：${it.path}</span>` : "")
+           + `<br><span class="rpath">理由：${it.reason}</span></div>`;
+    }).join("") : "<div class='ritem'>没有可反查的焦点。</div>");
+  revpanel.hidden = false;
+  revpanel.querySelectorAll("[data-cat]").forEach(s =>
+    s.onclick = () => { revpanel.hidden = true; showSubtree(s.dataset.cat); });
+};
+
+// ---- 路径固化：当前视图条目一键存为线索（复用第三十二批端点） ----
+document.getElementById("threadBtn").onclick = async () => {
+  const entryIds = (lastData ? lastData.nodes : [])
+    .filter(n => n.kind === "entry").map(n => String(n.id).slice(2));
+  if (!entryIds.length) { alert("当前视图没有条目节点，无可固化内容。"); return; }
+  const name = prompt(`线索名称（将收录当前视图 ${entryIds.length} 条条目）：`,
+                      currentRadiate ? currentRadiate.name : "图上探索 " + new Date().toLocaleDateString());
+  if (!name || !name.trim()) return;
+  const res = await fetch("/api/threads", { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: name.trim(), entry_ids: entryIds }) });
+  const data = await res.json();
+  if (res.status === 403) { alert("需要写令牌（服务配置 KNOWATLAS_WEB_TOKEN 时写操作须携带）。"); return; }
+  if (data.error) { alert("失败：" + data.error.message); return; }
+  const skippedNote = (data.skipped || []).length ? `\n（${data.skipped.length} 条跳过：不存在或已在其他位置）` : "";
+  if (confirm(`线索「${data.name}」已建立，收录 ${data.added.length} 条。${skippedNote}\n现在打开串联工作区？`))
+    window.open(`/thread.html?id=${data.id}`, "_blank", "noopener");
+};
+
+// 关联解释开关：整体重放当前视图（label.show 在 render 里读开关）
+document.getElementById("showReason").addEventListener("change", () => {
+  const last = nav[nav.length - 1];
+  if (last) last.load(false);
 });
 
 qBox.addEventListener("keydown", e => {
   if (e.key === "Enter") doSearch(qBox.value);
   if (e.key === "Escape") showOverview();
 });
-document.getElementById("home").onclick = showOverview;
+document.getElementById("home").onclick = () => showOverview();
 window.addEventListener("resize", () => chart.resize());
 showOverview();
 </script>

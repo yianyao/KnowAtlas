@@ -745,6 +745,212 @@ class DataLayer:
         links.extend(d_links)
         return {"query": q, "nodes": nodes, "links": links}
 
+    # ---- 放射导航（0.2.0 第三十三批：§9.4 探索导向迭代，不推翻三视图） ----
+    # 纪律：没有解释的关联不展示——每个节点带 reasons[]、每条边带 reason；
+    # relation_reason 全部由规则生成（共现/同源/显式关联），语义相似边留 M4 embedding。
+
+    _RADIATE_KINDS = {"c": "category", "e": "entry", "d": "domain"}
+
+    def _entry_node(self, row: sqlite3.Row) -> dict[str, Any]:
+        from urllib.parse import urlsplit
+        host = urlsplit(row["locator"]).hostname or ""
+        return {"id": f"e:{row['id']}", "name": (row["title"] or row["locator"])[:40],
+                "kind": "entry", "locator": row["locator"], "host": host}
+
+    def _entry_row(self, entry_id: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT id, title, locator FROM entries WHERE id=? AND status='active'",
+            (entry_id,)).fetchone()
+
+    def radiate(self, node_id: str, per_channel: int = 8) -> dict[str, Any] | None:
+        """焦点一跳邻域（放射模式数据源）。
+
+        节点 id 约定 `c:<分类id>` / `e:<条目id>` / `d:<host>`。通道与 relation_reason：
+        分类焦点 → child / attach:<origin> / parent；条目焦点 → attach:<origin> /
+        same_host:<host> / thread:<线索名>；域名焦点 → host_member:<host>。
+        每通道上限 per_channel，超出记 truncated[通道]=剩余数。焦点不存在返回 None。
+        """
+        from urllib.parse import urlsplit
+
+        prefix, _, raw_id = node_id.partition(":")
+        kind = self._RADIATE_KINDS.get(prefix)
+        if kind is None or not raw_id:
+            return None
+
+        nodes: dict[str, dict[str, Any]] = {}
+        edges: dict[str, dict[str, Any]] = {}
+        truncated: dict[str, int] = {}
+
+        def add_node(nid: str, name: str, nkind: str, reason: str, **extra: Any) -> None:
+            if nid == node_id:
+                return
+            n = nodes.setdefault(nid, {"id": nid, "name": name, "kind": nkind,
+                                       "reasons": [], **extra})
+            if reason and reason not in n["reasons"]:
+                n["reasons"].append(reason)
+
+        def add_edge(target: str, reason: str) -> None:
+            e = edges.setdefault(target, {"source": node_id, "target": target,
+                                          "reason": reason})
+            if reason and reason not in e["reason"]:
+                e["reason"] = f"{e['reason']}；{reason}" if e["reason"] else reason
+
+        def cut(channel: str, total: int) -> None:
+            if total > per_channel:
+                truncated[channel] = total - per_channel
+
+        if kind == "category":
+            cat = self._conn.execute(
+                "SELECT id, name FROM categories WHERE id=?", (raw_id,)).fetchone()
+            if cat is None:
+                return None
+            focus = {"id": node_id, "name": cat["name"], "kind": "category"}
+            # child：子分类
+            children = self._conn.execute(
+                "SELECT c.id, c.name FROM category_parents cp"
+                " JOIN categories c ON c.id=cp.category_id WHERE cp.parent_id=?"
+                " ORDER BY c.name", (raw_id,)).fetchall()
+            for r in children[:per_channel]:
+                add_node(f"c:{r['id']}", r["name"], "category", "child")
+            cut("child", len(children))
+            # attach:<origin>：挂接条目（带 locator，前端可打开）
+            atts = self._conn.execute(
+                "SELECT e.id, e.title, e.locator, ec.origin FROM entry_categories ec"
+                " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
+                " WHERE ec.category_id=? ORDER BY e.created_at DESC", (raw_id,)).fetchall()
+            for r in atts[:per_channel]:
+                add_node(f"e:{r['id']}", (r["title"] or r["locator"])[:40], "entry",
+                         f"attach:{r['origin']}", locator=r["locator"])
+                add_edge(f"e:{r['id']}", f"attach:{r['origin']}")
+            cut("attach", len(atts))
+            # parent：父分类
+            parents = self._conn.execute(
+                "SELECT c.id, c.name FROM category_parents cp"
+                " JOIN categories c ON c.id=cp.parent_id WHERE cp.category_id=?"
+                " ORDER BY c.name", (raw_id,)).fetchall()
+            for r in parents[:per_channel]:
+                add_node(f"c:{r['id']}", r["name"], "category", "parent")
+                add_edge(f"c:{r['id']}", "parent")
+            cut("parent", len(parents))
+        elif kind == "entry":
+            row = self._entry_row(raw_id)
+            if row is None:
+                return None
+            focus = {"id": node_id, "name": (row["title"] or row["locator"])[:40],
+                     "kind": "entry", "locator": row["locator"]}
+            # attach:<origin>：直挂分类（带派生 path）
+            atts = self._conn.execute(
+                "SELECT ec.category_id, ec.origin FROM entry_categories ec"
+                " WHERE ec.entry_id=?", (raw_id,)).fetchall()
+            for r in atts[:per_channel]:
+                paths = self.get_category_paths(r["category_id"])
+                cname_row = self._conn.execute(
+                    "SELECT name FROM categories WHERE id=?",
+                    (r["category_id"],)).fetchone()
+                add_node(f"c:{r['category_id']}", cname_row["name"] if cname_row else "?",
+                         "category", f"attach:{r['origin']}", path=paths[0] if paths else "")
+                add_edge(f"c:{r['category_id']}", f"attach:{r['origin']}")
+            cut("attach", len(atts))
+            # same_host:<host>
+            host = urlsplit(row["locator"]).hostname or ""
+            if host:
+                peers = self.entries_by_host(host, limit=per_channel + 1)
+                total = len([p for p in peers if p.id != raw_id])
+                for p in [x for x in peers if x.id != raw_id][:per_channel]:
+                    add_node(f"e:{p.id}", (p.title or p.locator)[:40], "entry",
+                             f"same_host:{host}", locator=p.locator)
+                    add_edge(f"e:{p.id}", f"same_host:{host}")
+                cut("same_host", total)
+            # thread:<线索名>：与串联工作区双向打通
+            seen_thread_entries: set[str] = set()
+            thread_total = 0
+            for t in self.threads_for_entry(raw_id):
+                full = self.get_thread(t["id"])
+                if full is None:
+                    continue
+                members = [it for it in full.items if it.entry_id != raw_id]
+                thread_total += len(members)
+                for it in members[:per_channel]:
+                    er = self._entry_row(it.entry_id)
+                    if er is None or it.entry_id in seen_thread_entries:
+                        continue
+                    seen_thread_entries.add(it.entry_id)
+                    add_node(f"e:{it.entry_id}", (er["title"] or er["locator"])[:40],
+                             "entry", f"thread:{t['name']}", locator=er["locator"])
+                    add_edge(f"e:{it.entry_id}", f"thread:{t['name']}")
+            cut("thread", thread_total)
+        else:  # domain
+            host = raw_id.strip().lower()
+            members = self.entries_by_host(host, limit=per_channel + 1)
+            focus = {"id": node_id, "name": host, "kind": "domain"}
+            for p in members[:per_channel]:
+                add_node(f"e:{p.id}", (p.title or p.locator)[:40], "entry",
+                         f"host_member:{host}", locator=p.locator)
+                add_edge(f"e:{p.id}", f"host_member:{host}")
+            cut("host_member", len(members))
+
+        return {"focus": focus, "nodes": list(nodes.values()),
+                "edges": list(edges.values()), "truncated": truncated}
+
+    def reverse_reach(self, node_id: str, limit: int = 20) -> dict[str, Any] | None:
+        """双向反查：哪些焦点能到达该节点。
+
+        条目焦点 → 直挂分类（带 path）+ 同域名 + 同线索（kind=thread，带 thread.html url）；
+        分类焦点 → 父分类 + 挂接条目 Top-N；域名节点不支持反查（返回 None）。
+        """
+        prefix, _, raw_id = node_id.partition(":")
+        kind = self._RADIATE_KINDS.get(prefix)
+        if kind is None or not raw_id or kind == "domain":
+            return None
+
+        items: list[dict[str, Any]] = []
+        if kind == "entry":
+            row = self._entry_row(raw_id)
+            if row is None:
+                return None
+            for r in self._conn.execute(
+                    "SELECT category_id, origin FROM entry_categories WHERE entry_id=?",
+                    (raw_id,)).fetchall():
+                paths = self.get_category_paths(r["category_id"])
+                cname_row = self._conn.execute(
+                    "SELECT name FROM categories WHERE id=?", (r["category_id"],)).fetchone()
+                items.append({"kind": "category", "id": f"c:{r['category_id']}",
+                              "name": cname_row["name"] if cname_row else "?",
+                              "path": paths[0] if paths else "",
+                              "reason": f"attach:{r['origin']}"})
+            from urllib.parse import urlsplit
+            host = urlsplit(row["locator"]).hostname or ""
+            if host:
+                items.append({"kind": "domain", "id": f"d:{host}", "name": host,
+                              "reason": f"same_host:{host}"})
+            for t in self.threads_for_entry(raw_id):
+                items.append({"kind": "thread", "id": t["id"], "name": t["name"],
+                              "url": f"/thread.html?id={t['id']}",
+                              "reason": f"thread:{t['name']}"})
+        else:  # category
+            cat = self._conn.execute(
+                "SELECT id, name FROM categories WHERE id=?", (raw_id,)).fetchone()
+            if cat is None:
+                return None
+            parents = self._conn.execute(
+                "SELECT c.id, c.name FROM category_parents cp"
+                " JOIN categories c ON c.id=cp.parent_id WHERE cp.category_id=?"
+                " ORDER BY c.name", (raw_id,)).fetchall()
+            for r in parents:
+                paths = self.get_category_paths(r["id"])
+                items.append({"kind": "category", "id": f"c:{r['id']}", "name": r["name"],
+                              "path": paths[0] if paths else "", "reason": "parent"})
+            atts = self._conn.execute(
+                "SELECT e.id, e.title, e.locator, ec.origin FROM entry_categories ec"
+                " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
+                " WHERE ec.category_id=? ORDER BY e.created_at DESC LIMIT ?",
+                (raw_id, limit)).fetchall()
+            for r in atts:
+                items.append({"kind": "entry", "id": f"e:{r['id']}",
+                              "name": (r["title"] or r["locator"])[:40],
+                              "reason": f"attach:{r['origin']}"})
+        return {"focus": {"id": node_id, "kind": kind}, "items": items[:limit]}
+
     def delete_empty_categories(self, *, protect_manual: bool = True) -> list[str]:
         """删除「空壳」分类：无条目挂接且无子类。返回被删的 (id, name) 名单。
 

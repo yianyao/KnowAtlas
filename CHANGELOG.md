@@ -696,3 +696,68 @@
   最初豁免种子导致线程内共现种子丢关联解释（与 cocategory/same_host 口径统一）。
 - 关联件同步：TODO Phase 4「串联工作区」标 [x]；SOP 增 §2.5 串联工作区用法；
   交接文档状态快照与待办刷新；契约草案 §9.4 的 thread_type 列已随 002 落库。
+
+### 0.2.0 第三十三批（2026-10-20，变更工单）：放射导航增强——关系图三视图上的探索导向迭代
+
+**来源**：TODO Phase 4「放射导航增强」；契约草案完整方案 §9.4 第 1–6 条
+（Top-N 渐进披露 / 导航栈面包屑 / 边带 relation_reason / 双向反查 / 空层降级 / 路径固化）。
+痛点：「知道大概方向，想顺线索探索发现遗漏」。**不推翻三视图**（总览→搜索子图→子树下钻
+仍是主干），在其上叠加放射能力。
+
+**旧 → 新**
+
+1. **数据层**（db.py，纯查询无 DDL 变动，canary 不受影响）：
+   - `radiate(node_id, per_channel=8)`：焦点一跳邻域。节点 id 约定 `c:<分类id>` /
+     `e:<条目id>` / `d:<host>`（既有图约定）。通道与 relation_reason：
+     分类焦点 → `child`（子分类）/ `attach:<origin>`（挂接条目）/ `parent`（父分类）；
+     条目焦点 → `attach:<origin>`（直挂分类，带 path）/ `same_host:<host>`（同域名条目，
+     复用 entries_by_host）/ `thread:<线索名>`（同线索，复用 threads_for_entry——
+     与第三十二批串联工作区双向打通）；域名焦点 → `host_member:<host>`。
+     每通道上限 per_channel，超出记 `truncated[通道]=剩余数`（前端「展开更多」依据）。
+     焦点不存在返回 None（API 404）。**没有解释的关联不展示**：每个节点带 reasons[]、
+     每条边带 reason。
+   - `reverse_reach(node_id, limit=20)`：双向反查「哪些焦点能到达它」。条目焦点 →
+     直挂分类（带 path）+ 同域名 + 同线索（kind=thread 带 thread.html url）；
+     分类焦点 → 父分类 + 挂接条目 Top-N。域名节点不支持反查（返回 None）。
+2. **Web API**（api.py，均只读免令牌）：
+   GET /api/graph/radiate?node_id=&per_channel=；GET /api/graph/reverse?node_id=&limit=；
+   未知节点 404。
+3. **UI**（graph.html 重写导航层，渲染内核不变）：
+   - 导航栈 + 面包屑：总览/搜索/子树/放射四类视图统一压栈，`关键字 › 集 › 簇 › 知识点`
+     式面包屑任一级可回跳（防迷路）；
+   - 放射模式开关（默认关，保 legacy 行为）：开启后点任意节点出邻域图（焦点居中固定、
+     加大高亮）；放射视图内点击邻域节点持续下钻；域名节点点击恒走放射（原无动作）；
+   - 边带 relation_reason：tooltip 恒显（节点聚合理由 + 边理由），「🏷 关联解释」开关
+     控制边上的常驻标签（默认关防噪）；
+   - 反查面板：「🔍 反查」按当前焦点列出可达焦点（分类带路径、线索可跳 thread.html）；
+   - Top-N 渐进披露：服务端每通道 8 条，「展开更多」按 ×3 扩容（封顶 40），tip 显示
+     truncated 计数（防毛球）；
+   - 空层降级：焦点无任何邻域时不压栈、tip 明示（不强行补空节点）；
+   - 路径固化：「🧵 固化为线索」把当前视图条目节点一键 POST /api/threads（复用第三十二批
+     端点组），成功给 thread.html 直达链接；thread.html 增 `?id=` 参数支持；
+   - index.html 侧栏关系图入口文案更新。
+4. **语义边界**：relation_reason 全部由规则生成（§9.4「LLM 分工」纪律——共现/标签统计
+   纯代码）；语义相似边仍留 M4 embedding，本批不建死代码。
+
+**复检探针**（实现后逐条命中）
+
+- radiate 对分类/条目/域名三类焦点均返回邻域，且**每个节点 reasons 非空、每条边 reason 非空**
+- per_channel 上限生效且 truncated 计数正确（展开更多据此扩容）
+- 条目焦点的 thread 通道带线索名；reverse 对条目返回分类（带 path）+ 域名 + 线索
+- 空分类 radiate 返回空邻域（空层降级，不造节点）；未知节点 API 404
+- radiate/reverse 免令牌可读；写端点（固化）无令牌 403（既有守卫）
+- 面包屑回跳：任一级点击重现该层视图（UI 探针，手工 + 静态检查）
+- pytest 全绿（新增放射导航测试）；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20 收口，全命中）**
+
+- 三类焦点 radiate 全过且 reasons/reason 完备：真实库「信息安全」放射出 `attach:llm`
+  + `parent`，「AI绘图」空邻域（仅父分类，空层可辨）；条目焦点 `attach:rule/prior` +
+  `same_host:github.com`（9 节点）+ thread 通道；域名焦点 `host_member`
+- per_channel 截断：`{attach: 1}` 计数正确，per_channel=40 无截断；API 层夹紧 [1,40]
+- reverse：条目 → 分类（带 path）+ 域名 + 线索（带 thread.html url）；分类 → 父 + 挂接
+  Top-N；域名/未知 → None（API 404）
+- 免令牌可读 / 写端点无令牌 403 / 带令牌固化 2 条成功（test_api_write_still_guarded）
+- 测试 183 项全绿（+14：tests/test_graph_radial.py）；canary 不变（无 DDL / 注册表变动）
+- 真实库副本冒烟：4 分类焦点 + 3 条目焦点 + 域名焦点放射全部带解释返回
+- 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
