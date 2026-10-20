@@ -295,7 +295,16 @@ qBox.addEventListener("keydown", e => {
 });
 document.getElementById("home").onclick = () => showOverview();
 window.addEventListener("resize", () => chart.resize());
-showOverview();
+// 启动：?node=c:/e:/d: 直达放射视图（工作台「在图中打开」深链）；无效节点回退总览
+(async () => {
+  await showOverview();               // 总览先入栈作面包屑根
+  const node = new URLSearchParams(location.search).get("node");
+  if (node) {
+    const r = await fetch(`/api/graph/radiate?node_id=${encodeURIComponent(node)}`);
+    if (r.ok) showRadiate(node);
+    else tip.textContent = `深链节点 ${node} 不存在，已回退总览。`;
+  }
+})();
 </script>
 </body>
 </html>

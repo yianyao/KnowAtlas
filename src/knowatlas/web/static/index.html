@@ -13,6 +13,21 @@
   h1 { font-size: 18px; margin: 0 0 4px; }
   small { color: #888; }
   #search { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
+  .wb-tab { cursor: pointer; border: 1px solid #8886; border-radius: 4px 4px 0 0;
+            background: transparent; color: inherit; font-size: 13px; padding: 4px 12px; }
+  .wb-tab.on { border-bottom-color: transparent; font-weight: 600; color: #4a9eff; }
+  #wb-tabs { display: flex; gap: 4px; align-items: center; margin: 10px 0 0;
+             border-bottom: 1px solid #8884; padding-bottom: 0; }
+  #wb-tabs button { cursor: pointer; }
+  #wb-solidify { border: 1px solid #4a9eff55; border-radius: 4px; background: none;
+                 color: #4a9eff; font-size: 12px; padding: 3px 10px; margin-bottom: 4px; }
+  #wb-body { padding-top: 10px; }
+  .wb-radiate-focus { font-weight: 700; margin-bottom: 6px; }
+  .wb-channel { margin: 10px 0 4px; font-size: 12px; color: #888;
+                border-bottom: 1px dashed #8884; padding-bottom: 2px; }
+  .wb-focus-btn { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                  background: transparent; color: inherit; font-size: 11px;
+                  padding: 0 6px; margin-left: 6px; }
   #staged-btn { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 8px;
                 cursor: pointer; }
   .tree-node { margin: 2px 0 2px 12px; }
@@ -56,7 +71,7 @@
 <aside>
   <h1>知道 KnowAtlas</h1>
   <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
-  <input id="search" placeholder="全文检索（≥3 字走 FTS，两字词自动兜底）">
+  <input id="search" placeholder="工作台：输入主题词 → 聚合结果 / 线索 / 放射 三视图">
   <button id="staged-btn">📥 暂存区（未分类条目）</button>
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
   <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
@@ -385,30 +400,157 @@ document.getElementById("staged-btn").onclick = async (e) => {
   renderEntries(data.entries);
 };
 
-document.getElementById("search").addEventListener("change", async (e) => {
-  const q = e.target.value.trim();
-  if (!q) return;
-  const data = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+// ---- 统一入口工作台（第三十四批，契约 §9.4：模式是视图切换，不是启动分叉） ----
+// 检索提交后同时拉 FTS 与 topic_recall，按条目去重合并，三视图共享同一份结果：
+// 聚合结果（带关联解释） / 线索（命中条目所属线索聚合） / 放射（焦点邻域持续下钻）。
+const wb = { q: "", merged: [], tab: "agg", focusId: null };
+
+function chLabel(ch) {
+  if (ch.startsWith("cocategory:")) return "同分类:" + ch.slice(11);
+  if (ch.startsWith("same_host:")) return "同站点:" + ch.slice(10);
+  if (ch.startsWith("thread:")) return "同线索:" + ch.slice(7);
+  const BARE = { fts: "全文命中", attach: "挂接", same_host: "同站点",
+                 thread: "同线索", child: "子分类", parent: "父分类",
+                 host_member: "域内条目" };
+  return BARE[ch] || ch;
+}
+
+async function doWorkbench(q) {
+  wb.q = q; wb.focusId = null; wb.tab = "agg";
   const box = document.getElementById("hits");
-  box.innerHTML = data.hits.length
-    ? data.hits.map(h =>
-        `<div class="entry" data-id="${h.entry_id}"><a href="${h.locator}" target="_blank" rel="noopener">${h.title}</a><br><small>${h.snippet || ""}</small></div>`
-      ).join("")
-    : "<small>无命中。</small>";
-  attachCatChips();  // 检索结果也带分类定位徽标
-  // 路径固化（§9.4）：这次探索（检索词 + 命中集）一键沉淀为线索，去串联工作区继续编排
-  const ids = data.hits.map(h => h.entry_id);
-  if (ids.length) {
-    box.insertAdjacentHTML("beforeend",
-      `<button id="solidify-btn" style="margin-top:12px;padding:6px 14px;cursor:pointer">🧵 把这 ${ids.length} 条结果固化为线索</button>`);
-    document.getElementById("solidify-btn").onclick = async () => {
-      const name = (prompt("线索名称：", "检索：" + q) || "").trim();
-      if (!name) return;
-      const res = await writeJSON("/api/threads", { name, entry_ids: ids });
-      if (res.error) { alert("失败：" + res.error.message); return; }
-      location.href = "/thread.html?id=" + res.id;
-    };
+  box.innerHTML = "<small>聚合中…</small>";
+  const [fts, rec] = await Promise.all([
+    fetch("/api/search?q=" + encodeURIComponent(q)).then(r => r.json())
+      .catch(() => ({ hits: [] })),
+    fetch("/api/recall", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic: q, limit: 60 }) }).then(r => r.json())
+      .catch(() => ({ hits: [] })),
+  ]);
+  const map = new Map();
+  for (const h of (fts.hits || []))
+    map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
+                          snippet: h.snippet || "", channels: ["fts"] });
+  for (const h of (rec.hits || [])) {
+    const ex = map.get(h.entry_id);
+    if (ex) {
+      for (const ch of (h.channels || []))
+        if (ch !== "fts" && !ex.channels.includes(ch)) ex.channels.push(ch);
+    } else {
+      map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
+                            snippet: "",
+                            channels: (h.channels || []).filter(c => c !== "fts") });
+    }
   }
+  wb.merged = [...map.values()];
+  renderWorkbench();
+}
+
+function renderWorkbench() {
+  const box = document.getElementById("hits");
+  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"]];
+  box.innerHTML =
+    `<div id="wb-tabs">` + tabs.map(([k, label]) =>
+      `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
+    + `<span style="flex:1"></span>`
+    + (wb.merged.length ? `<button id="wb-solidify" title="把当前全部结果存为线索，去串联工作区继续编排">🧵 固化为线索</button>` : "")
+    + `</div><div id="wb-body"></div>`;
+  box.querySelectorAll(".wb-tab").forEach(b =>
+    b.onclick = () => { wb.tab = b.dataset.tab; renderWorkbench(); });
+  const sf = document.getElementById("wb-solidify");
+  if (sf) sf.onclick = async () => {
+    const name = (prompt("线索名称：", "检索：" + wb.q) || "").trim();
+    if (!name) return;
+    const res = await writeJSON("/api/threads",
+      { name, entry_ids: wb.merged.map(x => x.id) });
+    if (res.error) { alert("失败：" + res.error.message); return; }
+    location.href = "/thread.html?id=" + res.id;
+  };
+  if (wb.tab === "agg") renderAggTab();
+  else if (wb.tab === "threads") renderThreadsTab();
+  else renderRadiateTab();
+}
+
+function renderAggTab() {
+  const body = document.getElementById("wb-body");
+  if (!wb.merged.length) {
+    body.innerHTML = "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 主题多路召回）。</small>";
+    return;
+  }
+  body.innerHTML = wb.merged.map(e =>
+    `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+    + e.channels.map(ch => `<span class="badge" title="关联解释：${ch.replace(/"/g, "&quot;")}">${chLabel(ch)}</span>`).join("")
+    + `<button class="wb-focus-btn" data-id="${e.id}" title="以该条目为焦点进入放射视图">🎯 放射</button>`
+    + (e.snippet ? `<br><small>${e.snippet}</small>` : "")
+    + `</div>`).join("");
+  body.querySelectorAll(".wb-focus-btn").forEach(b =>
+    b.onclick = () => { wb.focusId = b.dataset.id; wb.tab = "radiate"; renderWorkbench(); });
+  attachCatChips();  // 分类定位徽标
+  bindEntryButtons();
+}
+
+async function renderThreadsTab() {
+  const body = document.getElementById("wb-body");
+  if (!wb.merged.length) { body.innerHTML = "<small>无命中，无线索可聚合。</small>"; return; }
+  body.innerHTML = "<small>聚合中…</small>";
+  const ids = wb.merged.map(x => x.id);
+  const data = await (await fetch("/api/threads-lookup?ids=" + encodeURIComponent(ids.join(",")))).json();
+  const agg = new Map();  // thread_id → {name, count}
+  for (const ts of Object.values(data.map || {}))
+    for (const t of ts) {
+      const ex = agg.get(t.id) || { name: t.name, count: 0 };
+      ex.count += 1; agg.set(t.id, ex);
+    }
+  body.innerHTML = agg.size
+    ? [...agg.entries()].map(([tid, t]) =>
+        `<div class="entry"><a href="/thread.html?id=${tid}" target="_blank" rel="noopener">🧵 ${t.name}</a>`
+        + `<span class="badge">含当前结果 ${t.count} 条</span></div>`).join("")
+    : `<small>当前 ${wb.merged.length} 条结果都不在线索里——点右上「🧵 固化为线索」把这次探索沉淀下来。</small>`;
+}
+
+async function renderRadiateTab() {
+  const body = document.getElementById("wb-body");
+  if (!wb.merged.length) { body.innerHTML = "<small>无命中，无焦点可放射。</small>"; return; }
+  if (!wb.focusId || !wb.merged.some(x => x.id === wb.focusId))
+    wb.focusId = wb.merged[0].id;
+  body.innerHTML = "<small>放射中…</small>";
+  const r = await fetch(`/api/graph/radiate?node_id=e:${wb.focusId}&per_channel=12`);
+  if (r.status === 404) { body.innerHTML = "<small>焦点条目不存在（可能已舍弃）。</small>"; return; }
+  const data = await r.json();
+  if (!data.nodes.length) {
+    body.innerHTML = `<div class="wb-radiate-focus">🎯 焦点：${data.focus.name}</div>`
+      + `<small>该条目没有可放射的邻域（无挂接/同源/同线索关联）。<a href="/graph.html">去关系图总览</a></small>`;
+    return;
+  }
+  // 按主通道分组；通道顺序固定，可读优先
+  const ORDER = ["attach:", "same_host:", "thread:", "child:", "parent:", "host_member:"];
+  const groups = {};
+  for (const n of data.nodes) {
+    const ch = (n.reasons && n.reasons[0]) || "";
+    const key = ORDER.find(o => ch.startsWith(o)) || ch || "其他";
+    (groups[key] = groups[key] || []).push(n);
+  }
+  const chTitle = key => chLabel(key.replace(/:$/, ""));
+  body.innerHTML =
+    `<div class="wb-radiate-focus">🎯 焦点：${data.focus.name}`
+    + `　<a href="/graph.html?node=e:${wb.focusId}" target="_blank" rel="noopener">🕸️ 在图中打开</a></div>`
+    + Object.keys(groups).map(key =>
+        `<div class="wb-channel">${chTitle(key)}（${groups[key].length}${data.truncated && data.truncated[key.replace(":", "")] ? `，还有 ${data.truncated[key.replace(":", "")]} 条未显示` : ""}）</div>`
+        + groups[key].map(n =>
+            `<div class="entry"><a href="${n.locator || "#"}" target="_blank" rel="noopener">${n.name}</a>`
+            + `<span class="badge" title="关联解释">${n.reasons.map(chLabel).join("；")}</span>`
+            + (n.kind === "entry" ? `<button class="wb-focus-btn" data-eid="${n.id.slice(2)}" title="以该条目为新焦点继续放射">🎯 切焦点</button>` : "")
+            + `</div>`).join("")).join("");
+  body.querySelectorAll(".wb-focus-btn").forEach(b =>
+    b.onclick = () => { wb.focusId = b.dataset.eid; renderRadiateTab(); });
+}
+
+document.getElementById("search").addEventListener("change", e => {
+  const q = e.target.value.trim();
+  if (q) doWorkbench(q);
+});
+document.getElementById("search").addEventListener("keydown", e => {
+  if (e.key === "Enter") doWorkbench(e.target.value.trim());
 });
 
 // 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌

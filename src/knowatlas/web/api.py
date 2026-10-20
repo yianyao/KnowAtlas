@@ -423,6 +423,19 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     def list_threads(thread_type: str | None = None):
         return {"threads": dl.list_threads(thread_type=thread_type)}
 
+    @app.get("/api/threads-lookup")
+    def threads_lookup(ids: str = ""):
+        """批量查条目所属线索（工作台「线索」视图聚合用，只读免令牌）。
+
+        ids 为逗号分隔 entry_id；不存在/无线索的条目映射为空列表。
+        """
+        out: dict[str, list[dict]] = {}
+        for raw in ids.split(","):
+            eid = raw.strip()
+            if eid:
+                out[eid] = dl.threads_for_entry(eid)
+        return {"map": out}
+
     @app.post("/api/threads")
     async def create_thread(request: Request):
         """新建线索；entry_ids 一并入库 = 探索路径一键固化（§9.4 路径固化）。"""

@@ -761,3 +761,55 @@
 - 测试 183 项全绿（+14：tests/test_graph_radial.py）；canary 不变（无 DDL / 注册表变动）
 - 真实库副本冒烟：4 分类焦点 + 3 条目焦点 + 域名焦点放射全部带解释返回
 - 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
+
+### 0.2.0 第三十四批（2026-10-20，变更工单）：统一入口工作台——搜索框升级为三视图切换
+
+**来源**：TODO Phase 4「统一入口工作台」；契约 §9.4 定位条款——「统一入口为一个
+搜索/输入框，输入后工作台同时呈现聚合结果 + 线索编辑区 + 一键切放射视图；
+**模式是视图切换，不是启动分叉**」。痛点：检索、串联、放射探索三个入口分散，
+用户要在三个页面间手动搬运上下文。
+
+**旧 → 新**
+
+1. **Web API**（api.py，新增一个只读端点）：
+   `GET /api/threads-lookup?ids=<entry_id[,entry_id...]>` →
+   `{map: {entry_id: [{id, name, thread_type}...]}}`——批量查条目所属线索
+   （工作台「线索」视图聚合用；避免前端对 N 条命中发 N 个请求的 N+1）。
+   注册顺序置于 `/api/threads/{thread_id}` 之前语义无冲突（路径前缀不同，
+   `/api/threads-lookup` 与 `/api/threads/` 不共享段）。
+2. **UI**（index.html 检索流程升级为工作台，其余视图不动）：
+   - 检索提交后主区呈现**三视图切换条**（默认「聚合结果」）：
+     - 「聚合结果」：`/api/search` FTS 命中 ∪ `/api/recall` 多路召回，按条目去重
+       合并；每条带关联解释徽标（`全文命中` / `同分类:<路径>` / `同站点:<host>` /
+       `同线索:<线索名>`）；保留🧵固化为线索按钮（对合并后全量条目）。
+     - 「线索」：批量 threads-lookup 聚合当前结果所属线索（名称 + 条目数 + 跳
+       thread.html 链接），无关联时明示；固化为线索按钮同样可用。
+     - 「放射」：焦点 = 命中第一条（可点结果切换焦点）；`/api/graph/radiate`
+       按通道分组列表（挂接/同分类/同站点/同线索各带 relation_reason），点邻域
+       条目即切焦点持续下钻；「🕸️ 在图中打开」深链 graph.html。
+   - 关键词输入框 placeholder 更新；`/api/recall` 对纯关键词 fallback：先当 FTS
+     词查（既有 resolve 逻辑），无命中时聚合视图仍显示 FTS 结果，两源互补。
+3. **graph.html 深链**：支持 `?node=c:<id>|e:<id>|d:<host>` 启动直达放射视图
+   （工作台放射视图「在图中打开」的落点；无效节点回退总览）。
+4. **语义边界**：聚合与徽标全部复用既有规则产物（topic_recall relation_reason /
+   FTS snippet），零新增 LLM 调用；不建新表（canary 不变）。
+
+**复检探针**（实现后逐条命中）
+
+- threads-lookup：多 id 混合（有线索/无线索/不存在）返回正确 map；免令牌可读
+- 检索后三视图切换无报错，聚合结果无重复条目且徽标齐全（静态检查 + 端点联测）
+- 放射视图切焦点正常；「在图中打开」深链直达放射
+- 既有功能不回退：分类浏览/暂存区/待清理/失效链接/固化为线索全保留
+- pytest 全绿（+threads-lookup 测试）；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20 收口，全命中）**
+
+- threads-lookup：有线索/无线索/不存在混合查询 map 正确；空 ids 返回 `{"map": {}}`；
+  免令牌可读（test_threads_lookup_batch）
+- 端点链实跑（真实库 serve）：index 200 → search 50 hits → recall topic 5 hits →
+  threads-lookup map 3 键（真实库尚无线索，全空属预期）→ radiate 焦点邻域返回 →
+  graph.html?node= 深链 200
+- 三视图切换/去重合并/徽标：前端逻辑静态检查（聚合 = FTS ∪ recall，channels 合并
+  去重，fts 徽标去重）；既有视图（分类/暂存/候选/失效/舍弃）零改动
+- pytest 184 项全绿（+1）；canary 不变（无 DDL / 注册表变动）
+- 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）

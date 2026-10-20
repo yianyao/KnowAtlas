@@ -367,3 +367,29 @@ def test_entry_threads_endpoint(client, dl):
     threads = client.get(f"/api/entries/{es[0].id}/threads").json()["threads"]
     assert [t["id"] for t in threads] == [tid]
     assert client.get(f"/api/entries/{es[1].id}/threads").json()["threads"] == []
+
+
+def test_threads_lookup_batch(client, dl):
+    """工作台「线索」视图聚合用的批量端点：有线索/无线索/不存在 混合查询。"""
+    es = _seed_entries(dl)
+    t = dl.create_thread("查线")
+    dl.add_thread_item(t.id, es[0].id)
+    r = client.get(f"/api/threads-lookup?ids={es[0].id},{es[1].id},nope12345678")
+    assert r.status_code == 200
+    m = r.json()["map"]
+    assert [x["id"] for x in m[es[0].id]] == [t.id]
+    assert m[es[1].id] == [] and m["nope12345678"] == []
+    assert client.get("/api/threads-lookup?ids=").json() == {"map": {}}
+
+
+def test_threads_lookup_batch(client, dl):
+    """工作台「线索」视图聚合用的批量端点：有线索/无线索/不存在 混合查询。"""
+    es = _seed_entries(dl)
+    t = dl.create_thread("查线")
+    dl.add_thread_item(t.id, es[0].id)
+    r = client.get(f"/api/threads-lookup?ids={es[0].id},{es[1].id},nope12345678")
+    assert r.status_code == 200
+    m = r.json()["map"]
+    assert [x["id"] for x in m[es[0].id]] == [t.id]
+    assert m[es[1].id] == [] and m["nope12345678"] == []
+    assert client.get("/api/threads-lookup?ids=").json() == {"map": {}}
