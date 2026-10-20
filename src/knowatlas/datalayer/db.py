@@ -27,6 +27,18 @@ from .schema import latest_version, load_migration
 
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _ORIGINS = ("prior", "rule", "embedding", "llm", "manual")
+
+
+def _consumable(alias: str = "e") -> str:
+    """消费面守卫 SQL 片段（0.2.0 第三十六批，带前导 AND）。
+
+    知识消费页（关系图/召回/检索/线索）只出「可消费」条目：
+    status='active'（调用方既有条件）+ 非待清理（value_flag!=not_knowledge）
+    + 非永久失效（link_status!=dead；error=疑似临时不判死）。
+    管理页（待清理候选/失效链接/归档检索）不走本片段，照常全量列出。
+    """
+    return (f" AND COALESCE(json_extract({alias}.meta,'$.value_flag'),'ok')!='not_knowledge'"
+            f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'")
 # H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
 # meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
 # value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
@@ -537,7 +549,8 @@ class DataLayer:
         from urllib.parse import urlsplit
 
         entries = self._conn.execute(
-            "SELECT id, title, locator FROM entries WHERE status='active' LIMIT ?",
+            "SELECT id, title, locator FROM entries WHERE status='active'"
+            + _consumable("entries") + " LIMIT ?",
             (max_entries,),
         ).fetchall()
         ecat = self._conn.execute(
@@ -577,6 +590,16 @@ class DataLayer:
     # ---- 关系图三视图（0.2.0 第二十二批：总览 → 搜索/下钻按需子图） ----
     # 用户定调：全量力导一次渲染会拖垮——初始只显示一级大类；搜索框按关键字出
     # 相关子图；点分类节点下钻子树。全部按需加载，服务端裁剪。
+
+    def _consumable_count(self, cat_ids: list[str]) -> int:
+        """分类集合内可消费条目数（去重；消费面守卫口径，见 _consumable）。"""
+        if not cat_ids:
+            return 0
+        ph = ",".join("?" * len(cat_ids))
+        return self._conn.execute(
+            "SELECT count(DISTINCT ec.entry_id) FROM entry_categories ec"
+            " JOIN entries e ON e.id=ec.entry_id AND e.status='active'" + _consumable("e") +
+            f" WHERE ec.category_id IN ({ph})", cat_ids).fetchone()[0]
 
     def _cat_descendants(self, cid: str) -> list[str]:
         """子树全 id（含自身；多父 DAG 防环）。"""
@@ -642,11 +665,9 @@ class DataLayer:
             if r["id"] in has_parent:
                 continue
             ids = self._cat_descendants(r["id"])
-            ph = ",".join("?" * len(ids))
-            count = self._conn.execute(
-                "SELECT count(DISTINCT ec.entry_id) FROM entry_categories ec"
-                " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
-                f" WHERE ec.category_id IN ({ph})", ids).fetchone()[0]
+            count = self._consumable_count(ids)
+            if count == 0:
+                continue    # 空类剪枝（第三十六批）：无可消费条目的大类不进总览
             nodes.append({"id": f"c:{r['id']}", "name": r["name"],
                           "kind": "category", "value": count})
         return {"nodes": nodes, "links": []}
@@ -668,13 +689,16 @@ class DataLayer:
         entries = self._conn.execute(
             "SELECT DISTINCT e.id, e.title, e.locator FROM entries e"
             f" JOIN entry_categories ec ON ec.entry_id=e.id"
-            f" WHERE ec.category_id IN ({ph}) AND e.status='active'"
+            f" WHERE ec.category_id IN ({ph}) AND e.status='active'" + _consumable("e") +
             " ORDER BY e.created_at DESC LIMIT ?", (*sub_ids, limit)).fetchall()
         entry_ids = [e["id"] for e in entries]
         nodes: list[dict[str, Any]] = [
             {"id": f"c:{a}", "name": cats.get(a, "?"), "kind": "category", "ctx": True}
             for a in anc_ids]
         for cid in sub_ids:
+            # 空类剪枝（第三十六批）：子树内无可消费条目的子类不进下钻图；焦点根保留
+            if cid != category_id and self._consumable_count(self._cat_descendants(cid)) == 0:
+                continue
             nodes.append({"id": f"c:{cid}", "name": cats.get(cid, "?"), "kind": "category"})
         from urllib.parse import urlsplit
         entry_nodes: list[dict[str, Any]] = []
@@ -707,6 +731,7 @@ class DataLayer:
         pat = self._like_pattern(q)
         matched_entries = self._conn.execute(
             "SELECT id, title, locator FROM entries WHERE status='active'"
+            + _consumable("entries") +
             " AND title LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?",
             (pat, limit)).fetchall()
         matched_cats = [r["id"] for r in self._conn.execute(
@@ -759,9 +784,9 @@ class DataLayer:
 
     def _entry_row(self, entry_id: str) -> sqlite3.Row | None:
         return self._conn.execute(
-            "SELECT id, title, locator FROM entries WHERE id=? AND status='active'",
+            "SELECT id, title, locator FROM entries WHERE id=? AND status='active'"
+            + _consumable("entries"),
             (entry_id,)).fetchone()
-
     def radiate(self, node_id: str, per_channel: int = 8) -> dict[str, Any] | None:
         """焦点一跳邻域（放射模式数据源）。
 
@@ -805,11 +830,13 @@ class DataLayer:
             if cat is None:
                 return None
             focus = {"id": node_id, "name": cat["name"], "kind": "category"}
-            # child：子分类
+            # child：子分类（空类剪枝：子树内无可消费条目的子类不出）
             children = self._conn.execute(
                 "SELECT c.id, c.name FROM category_parents cp"
                 " JOIN categories c ON c.id=cp.category_id WHERE cp.parent_id=?"
                 " ORDER BY c.name", (raw_id,)).fetchall()
+            children = [r for r in children
+                        if self._consumable_count(self._cat_descendants(r["id"])) > 0]
             for r in children[:per_channel]:
                 add_node(f"c:{r['id']}", r["name"], "category", "child")
             cut("child", len(children))
@@ -817,6 +844,7 @@ class DataLayer:
             atts = self._conn.execute(
                 "SELECT e.id, e.title, e.locator, ec.origin FROM entry_categories ec"
                 " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
+                + _consumable("e") +
                 " WHERE ec.category_id=? ORDER BY e.created_at DESC", (raw_id,)).fetchall()
             for r in atts[:per_channel]:
                 add_node(f"e:{r['id']}", (r["title"] or r["locator"])[:40], "entry",
@@ -943,6 +971,7 @@ class DataLayer:
             atts = self._conn.execute(
                 "SELECT e.id, e.title, e.locator, ec.origin FROM entry_categories ec"
                 " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
+                + _consumable("e") +
                 " WHERE ec.category_id=? ORDER BY e.created_at DESC LIMIT ?",
                 (raw_id, limit)).fetchall()
             for r in atts:
@@ -1121,7 +1150,7 @@ class DataLayer:
         sql = (
             "SELECT DISTINCT e.* FROM entries e"
             f" JOIN entry_categories ec ON ec.entry_id = e.id"
-            f" WHERE ec.category_id IN ({marks}) AND e.status=?"
+            f" WHERE ec.category_id IN ({marks}) AND e.status=?" + _consumable("e")
         )
         params: list[Any] = [*category_ids, status]
         if source_type:
@@ -1164,7 +1193,7 @@ class DataLayer:
             return []
         esc = self._escape_like(host)
         rows = self._conn.execute(
-            "SELECT * FROM entries WHERE status='active'"
+            "SELECT * FROM entries WHERE status='active'" + _consumable("entries") +
             "   AND (locator LIKE ? ESCAPE '\\' OR locator = ? OR locator = ?)"
             " ORDER BY exported_at DESC LIMIT ?",
             (f"%://{esc}/%", f"https://{host}", f"http://{host}", limit),
@@ -1208,7 +1237,10 @@ class DataLayer:
         if row is None:
             return None
         items = self._conn.execute(
-            "SELECT * FROM thread_items WHERE thread_id=? ORDER BY position, rowid",
+            "SELECT i.* FROM thread_items i WHERE i.thread_id=?"
+            " AND EXISTS (SELECT 1 FROM entries e WHERE e.id=i.entry_id"
+            "   AND e.status='active'" + _consumable("e") + ")"
+            " ORDER BY i.position, i.rowid",
             (thread_id,),
         ).fetchall()
         return Thread(id=row["id"], name=row["name"], note=row["note"],
@@ -1437,7 +1469,9 @@ class DataLayer:
                     " snippet(entries_fts, 0, '[', ']', '…', 12) AS snip,"
                     " bm25(entries_fts) AS rank"
                     " FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid"
-                    " WHERE entries_fts MATCH ? ORDER BY rank LIMIT ?",
+                    " WHERE entries_fts MATCH ? AND e.status='active'"
+                    + _consumable("e") +
+                    " ORDER BY rank LIMIT ?",
                     (match, limit),
                 ).fetchall()
                 return [SearchHit(r["id"], r["title"], r["locator"], r["snip"], r["rank"])
@@ -1455,14 +1489,14 @@ class DataLayer:
         rows = self._conn.execute(
             "SELECT e.id, e.title, e.locator, substr(COALESCE(e.inline_content,''),1,80) AS snip,"
             " 1.0 AS rank FROM entries e"
-            " WHERE e.status='active' AND (e.title LIKE ? ESCAPE '\\'"
+            " WHERE e.status='active'" + _consumable("e") + " AND (e.title LIKE ? ESCAPE '\\'"
             "    OR e.native_path LIKE ? ESCAPE '\\'"
             "    OR e.inline_content LIKE ? ESCAPE '\\')"
             " UNION"
             " SELECT e.id, e.title, e.locator, substr(COALESCE(e.inline_content,''),1,80) AS snip,"
             " 1.0 AS rank FROM entries e"
             " JOIN content_fts c ON c.content_hash = e.content_hash"
-            " WHERE e.status='active' AND c.text LIKE ? ESCAPE '\\'"
+            " WHERE e.status='active'" + _consumable("e") + " AND c.text LIKE ? ESCAPE '\\'"
             " LIMIT ?",
             (like, like, like, like, limit),
         ).fetchall()

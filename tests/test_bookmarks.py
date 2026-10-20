@@ -132,8 +132,12 @@ def test_sync_bookmarks_end_to_end(cfg, dl, registries, tmp_path, bookmarks_json
     assert src["entries"] == 5 and src["created"] == 5 and src["archived"] == 0
     # 「PostgreSQL 教程」标题命中规则关键词 postgres → 技术开发/数据库
     assert src["classified"] >= 1
-    pg = [e for e in dl.search_fts("PostgreSQL") if e.title == "PostgreSQL 教程"]
-    assert pg, "入库条目应可被 FTS 检索到"
+    # FTS 消费面守卫（第三十六批）：SQLite 条目（内容页，未打标）可检索；
+    # PostgreSQL/Redis 的 /docs/ 尾斜杠目录页被 L0 守卫打 not_knowledge → 不进消费页
+    sq = [e for e in dl.search_fts("SQLite") if e.title == "SQLite 官方文档"]
+    assert sq, "未打标条目应可被 FTS 检索到"
+    assert not [e for e in dl.search_fts("PostgreSQL") if e.title == "PostgreSQL 教程"]
+    assert [e for e in dl.list_by_value_flag("not_knowledge") if e.title == "PostgreSQL 教程"]
 
     # 二跑幂等：无新建、无归档
     stats2 = run_sync(cfg, dl, locators, semantics, full=True)

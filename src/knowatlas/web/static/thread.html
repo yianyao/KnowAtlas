@@ -55,6 +55,7 @@
 </head>
 <body>
 <aside>
+  <div style="margin-bottom:8px"><a href="/index.html" style="color:#4a9eff;font-size:13px">← 返回工作台</a></div>
   <h1>🧵 串联工作区</h1>
   <small>主题聚合召回 + 线索串联（完整方案 §9.4）。跨源散落的知识，按主题串成可复用的阅读路径。</small>
   <button id="new-thread" class="btn primary">＋ 新建线索</button>
@@ -141,10 +142,16 @@ function entryLine(e) {
 
 // ---- 线索列表 ----
 async function loadThreadList() {
-  const data = await (await fetch("/api/threads")).json();
   const box = document.getElementById("thread-list");
-  if (!data.threads.length) {
-    box.innerHTML = "<small>还没有线索。点「新建线索」，或先做一次主题召回。</small>";
+  let data;
+  try {
+    data = await (await fetch("/api/threads")).json();
+  } catch {                       // 加载失败明示可重试，不停留在「加载中…」
+    box.innerHTML = `<small>线索列表加载失败——确认 serve 在跑后<a href="javascript:location.reload()" style="color:#4a9eff">刷新重试</a>。</small>`;
+    return;
+  }
+  if (!data.threads || !data.threads.length) {
+    box.innerHTML = "<small>默认空。还没有线索——点「新建线索」，或先在右侧做一次主题召回再固化。</small>";
     return;
   }
   box.innerHTML = data.threads.map(t =>

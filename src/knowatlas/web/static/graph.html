@@ -117,12 +117,13 @@ function showCard(d, cx, cy) {
   }
 }
 chart.on("mouseover", p => {
-  if (p.dataType === "edge" || !p.data || !p.data.kind) return;
+  // 弹窗卡只对条目节点出（第三十六批用户定调：大类/域名不承载具体知识，无概要与原文）
+  if (p.dataType === "edge" || !p.data || p.data.kind !== "entry") return;
   const native = p.event && p.event.event;    // 原生鼠标事件 → 视口坐标
   showCard(p.data, native ? native.clientX : 0, native ? native.clientY : 0);
 });
 chart.on("mouseout", p => {
-  if (p.dataType === "edge" || !p.data || !p.data.kind) return;
+  if (p.dataType === "edge" || !p.data || p.data.kind !== "entry") return;
   hideCardSoon();
 });
 

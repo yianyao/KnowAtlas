@@ -853,3 +853,56 @@
 - 节点 ECharts tooltip 已抑制（返回空串），边 tooltip 保留
 - pytest 185 项全绿（+1）；canary 不变（无 DDL / 注册表变动）
 - 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
+
+### 0.2.0 第三十六批（2026-10-20，变更工单）：消费面守卫 + 工作区回退/兜底 + 大类弹窗豁免 + uv.lock 补账
+
+**来源**：用户实图批注三条 + uv.lock 遗留问询。
+①关系图总览出现无条目空类节点，且「已舍弃/失效/待清理」条目仍会出现在
+下钻/放射/反查/路径固化/串联工作区等**知识消费页**——非活跃知识不该被探索到；
+②thread.html「少了回退」+ 列表加载失败停在「加载中…」无兜底；
+③大类节点不需要弹窗卡（不承载具体知识的顶层/中间节点，没有概要与原文）；
+④uv.lock 遗留：第二十八批 `uv add`（markitdown 及可选依赖组）时新版 uv 重写了
+锁文件（python 3.14 解析标记 + 传递依赖 cobble 等），pyproject 已提交而锁没跟上。
+
+**旧 → 新**
+
+1. **消费面守卫**（db.py，统一口径；管理页——待清理候选/失效链接/归档检索——不受影响）：
+   判据 = `status='active'`（既有）且 `meta.value_flag != 'not_knowledge'`（待清理）
+   且 `meta.link_status != 'dead'`（永久失效；error=疑似临时不判死）。落到全部
+   消费读路径：graph overview/subtree/search/v0、radiate/reverse、search_fts
+   （含 FTS 分支补上此前缺失的 status 过滤）、entries_by_host、
+   get_entries_for_categories、get_thread items（线索里自动隐藏非活跃条目）。
+   **空类剪枝**：overview 只出子树内可消费条目 >0 的一级大类；subtree/放射 child
+   通道同理剪无可消费条目的子类（焦点根与祖先链上下文保留）。
+2. **thread.html**：顶部加「← 返回工作台」；loadThreadList 加 try/catch 兜底
+   （加载失败明示可刷新，不再停在「加载中…」）。
+3. **graph.html**：弹窗卡只对条目节点出（分类/域名节点悬浮不再弹卡——点击行为
+   不变：分类下钻/放射，域名放射；边的关联解释 tooltip 保留）。
+4. **uv.lock**：`uv lock --check` 通过（锁与 pyproject 一致）后单独 chore 提交。
+
+**复检探针**（实现后逐条命中）
+
+- 打 not_knowledge / dead 标的条目：不出现在 overview/subtree/search_graph/radiate/
+  reverse/search_fts/entries_by_host/get_thread；管理页 list_entries_by_value/link 照出
+- 无可消费条目的一级大类不出现在 overview；子类剪枝后焦点根仍在
+- status='rejected' 同样不出现（既有 active 过滤 + 本批守卫叠加）
+- thread.html 加载失败显示错误态；有回退链接（静态检查）
+- graph.html 悬浮分类/域名节点无弹窗（静态检查）
+- pytest 全绿（+消费守卫测试）；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20 收口，全命中）**
+
+- 守卫测试 6 项（tests/test_consumable_guard.py）：not_knowledge / dead 条目在
+  overview/subtree/search_graph/radiate/reverse/search_fts/entries_by_host/get_thread
+  全部不可见；纯脏类（只挂非活跃条目）不进总览；空子类剪枝且焦点根保留；
+  非活跃条目自身不能当放射焦点（404）；管理页 list_by_value_flag /
+  list_by_link_status 照常全量
+- 既有测试修正 1 处：test_sync_bookmarks_end_to_end 原断言「PostgreSQL 教程
+  可 FTS」属旧世界——其 /docs/ 尾斜杠目录页本就被 L0 守卫打 not_knowledge
+  （index_subdir），本批起按口径进不了消费页；改断言 SQLite 条目可检索 +
+  PostgreSQL 待清理不可检索 + 管理页可见
+- 真实库副本冒烟：待清理 6 / 永久失效 0；overview 由 6 类剪至 4 类且全部
+  value>0（截图批注的空类节点消失）；「PostgreSQL」FTS 返回未打标条目；
+  放射正常
+- 三页 serve 实跑 200；pytest 191 项全绿（+6 守卫 -0）；canary 不变
+- 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）
