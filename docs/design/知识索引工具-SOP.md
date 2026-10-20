@@ -219,6 +219,28 @@ simhash 近似与 embedding 余弦后置（误合成本高于漏合，待真实�
 - 手动存量扫描：`uv run python -m knowatlas ksync --dedupe-scan`（加 `--dry-run` 只出
   报告不写库）。扫描同时摘「死标」——主条目被舍弃/待清理/归档后，副条目自动回归消费面。
 
+### 2.10 邮件源（maildir，0.2.0 第三十九批）
+
+**接入方式（不碰邮箱凭证）**：先用外部同步工具（如 offlineimap）把邮箱落成本地
+maildir，再在 `config/knowatlas.toml` 配置：
+
+```toml
+[sources.mail]
+enabled = true
+accounts = { work = { path = "D:/Mail/work" } }   # maildir 根目录
+```
+
+支持标准 maildir（cur/new/tmp）与一层子文件夹（文件夹名入 meta.mailbox），兼容
+目录直落 .eml 的导出形态。报错「maildir 路径不存在/没找到 mailbox」时检查该 path。
+
+**行为**：每封邮件 = 一个条目（source_key = 账号:Message-ID，重同步幂等）；正文双轨——
+增量正文（剥引用后，检索/摘要干净）进 inline_content，全量正文进 content_store（FTS
+完整）；同会话邮件（In-Reply-To/References 链或 Subject 归一一致）自动还原为
+thread_type='source' 的会话线程（串联工作区可见，📮 前缀命名）。
+
+**故障处理**：解析失败的邮件跳过并计数（stats.skipped_parse），不中断同步；单源上限
+5000 封（超出计 stats.truncated，提高上限需改适配器 _MAX_MESSAGES）。
+
 ---
 
 ## 3. 新增一个知识源（SOP-A）

@@ -66,13 +66,13 @@ def _seed_entries(dl: DataLayer) -> list[Entry]:
 def test_fresh_db_gets_latest_schema(tmp_path):
     dl = DataLayer(tmp_path / "fresh.db")
     try:
-        assert dl.init_schema() == latest_version() == 2
+        assert dl.init_schema() == latest_version() == 3
         conn = sqlite3.connect(tmp_path / "fresh.db")
         try:
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-            assert {"threads", "thread_items"} <= tables
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert {"threads", "thread_items", "conv_messages"} <= tables
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
         finally:
             conn.close()
     finally:
@@ -84,7 +84,7 @@ def test_old_db_upgrades_without_data_loss(tmp_path):
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
     conn.executescript(load_initial_schema())
-    conn.execute("PRAGMA user_version = 1")
+    conn.execute("PRAGMA user_version = 2")
     conn.execute(
         "INSERT INTO entries (id, source_type, title, locator, meta, exported_at, status)"
         " VALUES ('aabbccddeeff0011','manual','旧条目','https://old.example/x','{}',"
@@ -94,11 +94,11 @@ def test_old_db_upgrades_without_data_loss(tmp_path):
 
     dl = DataLayer(db)
     try:
-        assert dl.init_schema() == 2
+        assert dl.init_schema() == 3
         e = dl.get_entry("aabbccddeeff0011")
         assert e is not None and e.title == "旧条目"
         # 迁移幂等：再初始化不报错不重复建表
-        assert dl.init_schema() == 2
+        assert dl.init_schema() == 3
     finally:
         dl.close()
 

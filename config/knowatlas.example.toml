@@ -92,7 +92,7 @@ deepseek_api_key_env   = "KNOWATLAS_LLM_API_KEY"
 # ---- 知识源 ----
 # 分源原则：按"数据形态"分，不按"目录"分。同一个目录（如 D:/Data/百卓）既有普通文档
 # 又有 .emmx 脑图时，folders 和 emmx 两个源都把该目录填进各自的 roots 即可，互不冲突。
-# 目前已实现：manual / bookmarks / folders / emmx；其余源为后续版本占位。
+# 目前已实现：manual / bookmarks / folders / emmx / mail；其余源为后续版本占位。
 
 [sources.bookmarks]
 # 浏览器书签。browsers 里列了哪个浏览器，paths 里就要给哪个浏览器的 Bookmarks 文件路径
@@ -128,13 +128,13 @@ enabled = false
 roots = []
 
 [sources.mail]
-# 邮件源（M2 计划，当前未实现，占位）。两种接法二选一：
-# maildir_root = 本地邮件归档目录（Maildir 格式，邮件客户端导出的本地副本）
-# imap_host    = 邮箱的 IMAP 服务器地址（在邮箱客户端/网页设置里查，如 imap.qq.com；
-#                邮箱当然不在本地——这里填的就是远端服务器地址，凭证走环境变量）
+# 邮件源（0.2.0 第三十九批已实现）：本项目不做 IMAP 直连、不碰邮箱凭证——
+# 先用外部同步工具（如 offlineimap）把邮箱落成本地 maildir，再指向该目录。
+# accounts.<账号名>.path = 该账号的 maildir 根目录；支持标准 maildir（cur/new/tmp）
+# 与一层子文件夹（文件夹名入 meta.mailbox），也兼容目录直落 .eml 的导出形态。
+# 会自动还原会话线程（In-Reply-To/Subject 归一）落串联工作区 thread_type='source'。
 enabled = false
-maildir_root = ""
-imap_host = ""
+accounts = { work = { path = "" } }      # 示例：accounts = { work = { path = "D:/Mail/work" } }
 
 [sources.db]
 enabled = false

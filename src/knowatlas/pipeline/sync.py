@@ -25,6 +25,7 @@ from typing import Any
 from ..adapters.bookmark import collect_bookmarks
 from ..adapters.emmx import collect_emmx
 from ..adapters.folder import collect_folders
+from ..adapters.maildir import collect_maildirs
 from ..errors import AdapterError, DegradedParseError, FetchError
 from ..ids import content_hash
 from ..models import Entry, FetchResult
@@ -32,7 +33,7 @@ from ..registry.capability import FetchContext
 from ..semantic.base import SemanticInput, TaskContext
 from .kadd import ensure_category_path
 from .dedupe import dedupe_entries, scan_and_merge
-
+from .mail_threads import rebuild_mail_threads
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -42,10 +43,11 @@ _BATCH_COLLECTORS: dict[str, Any] = {
     "bookmarks": collect_bookmarks,
     "folders": collect_folders,
     "emmx": collect_emmx,
+    "mail": collect_maildirs,
 }
 # 配置名 → source_type（archive_missing 按条目来源类型做删除检测）
 _SOURCE_TYPE_BY_NAME: dict[str, str] = {
-    "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx"}
+    "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx", "mail": "mail"}
 
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000
@@ -449,6 +451,23 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             if any(getattr(old, f) != getattr(e, f) for f in fields):
                 updated_ids.add(e.id)
         result = dl.upsert_entries(entries)
+        # mail 源附加处理（0.2.0 第三十九批）：全量正文进 content_store +
+        # conv_messages 落库 + 原始会话线程还原（幂等，重复同步不重建）
+        mail_stats: dict[str, Any] = {}
+        if name == "mail":
+            full_bodies: dict[str, str] = out.stats.pop("_full_bodies", {})
+            convs = out.stats.pop("conv_messages", [])
+            stored_count = 0
+            for eid, text in full_bodies.items():
+                e = dl.get_entry(eid)
+                if e is not None and e.content_hash \
+                        and dl.get_content(e.content_hash) is None:
+                    dl.put_content(FetchResult(
+                        text=text, content_hash=e.content_hash,
+                        fetcher="maildir", fetched_at=_now_iso()))
+                    stored_count += 1
+            mail_stats["contents_stored"] = stored_count
+            mail_stats.update(rebuild_mail_threads(dl, convs, run_id))
         if revived_ids:
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
@@ -463,7 +482,8 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         src_stats: dict[str, Any] = {
             "entries": len(entries),
             "created": result.created, "updated": result.updated,
-            "unchanged": result.unchanged, "deduped": deduped, **cat, **out.stats,
+            "unchanged": result.unchanged, "deduped": deduped, **mail_stats,
+            **cat, **out.stats,
         }
         if full:
             archived = dl.archive_missing(

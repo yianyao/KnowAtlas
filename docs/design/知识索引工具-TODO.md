@@ -102,13 +102,18 @@ reader: 执行者（人与 agent）
         content store；抓到的条目照常走分类链路
       - 探针：一个有系列文章的书签种子扩散出同系列条目且带 seed_entry_id；扩散候选被
         价值守卫拦截的不产生条目；重复扩散不产生重复条目（canonical 去重）
-- [ ] 邮件适配器（IMAP 同步工具落 maildir → 本地解析；邮箱文件夹/发件人/时间入 meta）
-      - 探针：凭证错误的报错信息明确指向配置项
+- [x] 邮件适配器（0.2.0 第三十九批：本项目**不做 IMAP 直连、不碰凭证**——外部同步工具
+      （offlineimap 等）落 maildir → 本地解析；邮箱账号/文件夹/发件人/时间入 meta）✅
+      - 探针：凭证错误的报错信息明确指向配置项 ✅（路径缺失/非 maildir 的 AdapterError
+        message+hint 均指向 sources.mail accounts.<账号名>.path；
+        tests/test_maildir.py::test_missing_path_error_points_to_config）
       - 线程增补（完整方案 §9.4 第三十一批）：还原原始会话线程（In-Reply-To/References
-        + Subject 归一化）落 threads(thread_type='source') + conv_messages；引用剥离走
-        quote_strip（mail-parser-reply 底座 + 中文回复头自补规则，适配器本身不调 LLM）
-      - 探针：同一回复链多封邮件还原为一条 source 线程、轮次顺序正确；多层引用邮件
-        剥离后增量正文不含引用块且锚点指向被引用轮
+        + Subject 归一化）落 threads(thread_type='source') + conv_messages（迁移 003）
+        ✅；引用剥离走 quote_strip（mail-parser-reply 底座【开源核实：PyPI 1.36，MIT，
+        零依赖】+ 中文回复头自补规则【zh 词典缺「在…写道：」的「在」前缀与
+        「------ 原始邮件 ------」分隔】，适配器本身不调 LLM）✅
+      - 探针：同一回复链多封邮件还原为一条 source 线程、轮次顺序正确 ✅；多层引用邮件
+        剥离后增量正文不含引用块且锚点指向被引用轮 ✅（tests/test_maildir.py 12 项）
 
 ## Phase 3 — 在线源（M3）
 

@@ -1025,3 +1025,71 @@ simhash 近似与 embedding 余弦（M4）误合成本高于漏合（合并伤�
   二次扫描 merged=0 幂等 ✓
 - pytest 200 项全绿（+7 dedupe）；九个变更文件 UTF-8 无 BOM + LF；canary 不变
   （无 DDL/注册表变动，dedupe_master 走 meta 键）
+
+### 0.2.0 第三十九批（2026-10-20，变更工单）：邮件适配器——maildir 解析 + 会话线程还原 + 引用剥离
+
+**来源**：TODO Phase 2 邮件适配器条目（IMAP 同步工具落 maildir → 本地解析）。
+设计定调：本项目**不做 IMAP 直连、不碰凭证**——用外部同步工具（offlineimap 等）
+把邮箱落成 maildir，适配器只解析本地文件；凭证问题的最小面 = 路径配置错误，
+报错明确指向 `sources.mail` 配置项（探针①）。
+
+**依赖（开源轮子核实）**：mail-parser-reply（PyPI 1.36，MIT，零运行时依赖，
+月下载 379K，GitHub alfonsrv/mail-parser-reply）作引用剥离底座——多语言回复头
+识别，中文（zh）标记 untested → 本项目自补中文回复头规则（「在…写道：」「发件人：」等），
+双保险：库不可用/解析失败降级自研规则（"> " 引用行 + 中文头）。
+
+**旧 → 新**
+
+1. **迁移 003_mails.sql**（canary ddl 升版）：`conv_messages` 表——id（Message-ID
+   归一，缺省 sha1 兜底）、entry_id、in_reply_to、subject_norm（归一化主题）、
+   sent_at、thread_id（FK threads，可空；持久化映射保证重复同步幂等）。
+2. **adapters/maildir.py**：maildir 目录（root/{cur,new,tmp} 与一层子文件夹，
+   文件夹名入 meta.mailbox）逐 .eml 解析（email 标准库 policy.default）：
+   RFC2047 中文标题解码、From/To/Date、text/plain 正文（无则 text/html 剥标签降级）。
+   source_key = `{account}:{message_id}`（Message-ID 缺省 sha1(raw) 兜底，幂等）；
+   locator = `mail://{account}/{message_id}`（mail scheme 契约既有预留）；
+   created_at = Date 头。meta 记 account/mailbox/from/to/date/message_id。
+   正文双轨：**inline_content = 增量正文**（quote_strip 剥引用后，检索摘要干净）、
+   content_store = 全量正文（FTS 全文完整），content_hash = 全量 hash（跨源去重可用）。
+   目录不存在/不是 maildir → AdapterError 指向 `sources.mail` 配置项（探针①）。
+3. **pipeline/mail_threads.py**：Subject 归一化（去 Re:/Fwd:/回复:/转发:/答复: 等前缀链）
+   + 线程分组（in_reply_to/references 链优先归到根 Message-ID；无引用头时
+   account+subject_norm 归组）→ 组内 ≥2 封建 threads(thread_type='source')，
+   thread_items 按 sent_at 排序 relation_type='seq'；conv_messages.thread_id 持久化，
+   已映射的重复同步跳过（幂等）。引用剥离 quote_strip：mail-parser-reply 底座 +
+   中文头自补 + 自研降级。
+4. **sync.py / cli.py**：_BATCH_COLLECTORS 加 "mails"；upsert 后对 mail 源调
+   _rebuild_mail_threads；stats 记 threads_built / messages_staged。
+   依赖：uv add mail-parser-reply（pyproject 主依赖 + uv.lock）。
+5. **db.py**：upsert_conv_messages / list_conv_messages（唯一碰 SQL 处）。
+6. **canary**：ddl 摘要升版（003 新表即契约面）；SOURCE_TYPES/SCHEMES 无变化
+   （mail 既有预留）。
+
+**复检探针**（实现后逐条命中）
+
+- maildir fixture 解析：中文标题/发件人/时间/正文正确入 meta 与正文；幂等 unchanged
+- 目录不存在 → AdapterError 报错文本含 `sources.mail`（探针①）
+- A→B(In-Reply-To)→C(References) 还原为一条 source 线程，轮次按时间序正确（探针②）
+- 无引用头但 Subject 同链（原文 vs Re:）归入同一线程；不同主题不混
+- 多层引用邮件：增量正文不含 "> " 引用块与中文回复头行；锚点=in_reply_to 指向被引用轮（探针③）
+- conv_messages.thread_id 持久化：重复同步不重复建线程
+- canary ddl 新值落常量；pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-20，全命中）**
+
+- tests/test_maildir.py 12 项：解析（中文标题 RFC2047/发件人/时间/正文/meta）/
+  子文件夹 mailbox / 探针①路径报错（message+hint 均指 sources.mail accounts）/
+  禁用源空返回 / source_key 幂等 / Subject 归一化与 Message-ID 归一 /
+  quote_strip 三形态（英文 wrote:/中文「在…写道：」/QQ 邮箱「原始邮件」分隔）/
+  无引用邮件原文兜底 / 探针② A→B→C 一条 source 线程轮次时间序 / 无引用头
+  Subject 同链归组且不同主题不混 / 单封不建线程 / 端到端 ksync（含 content_store
+  全量正文 + 增量 inline + 线程 + 二跑幂等）
+- 开发期修的三个 bug（测试钉住）：①create_thread 返回 Thread 与 list_threads 的
+  dict 取 id 方式不一致；②引用链通道给无引用消息也赋了组键 → subject 通道永轮空；
+  ③引用链组未收编根消息（A 落单成 subj 组，线程只有 B/C 两封）
+- 配置键统一：契约预留 sources.mail（config_keys 摘要不变），_collectors/适配器/
+  测试统一用 "mail"；_validate_enabled_sources 的 mail 必填校验改为 accounts.*.path
+- 真实库副本迁移冒烟：user_version 2→3 自动升版，1839 条 active 无损，检索正常
+- pytest 212 项全绿（+12 邮件）；canary ddl 升版 567685343650（003 新表），
+  test_threads 迁移断言升 3 并纳入 conv_messages 表检查
+- 变更文件 UTF-8 无 BOM + LF（字节扫描见收尾记录）

@@ -1468,6 +1468,39 @@ class DataLayer:
         return [{"id": r["id"], "name": r["name"], "thread_type": r["thread_type"]}
                 for r in rows]
 
+    # ---- 会话消息（0.2.0 第三十九批：邮件源原始会话线程还原） ----
+
+    def upsert_conv_messages(self, messages: Sequence[dict[str, Any]]) -> None:
+        """批量落 conv_messages（邮件适配器；键=message_id 归一，幂等覆盖）。"""
+        with self.transaction() as conn:
+            for m in messages:
+                conn.execute(
+                    "INSERT INTO conv_messages (id, entry_id, in_reply_to,"
+                    " subject_norm, sent_at, thread_id) VALUES (?,?,?,?,?,?)"
+                    " ON CONFLICT(id) DO UPDATE SET entry_id=excluded.entry_id,"
+                    " in_reply_to=excluded.in_reply_to,"
+                    " subject_norm=excluded.subject_norm, sent_at=excluded.sent_at,"
+                    " thread_id=COALESCE(conv_messages.thread_id, excluded.thread_id)",
+                    (m["id"], m["entry_id"], m.get("in_reply_to"),
+                     m.get("subject_norm", ""), m.get("sent_at"), m.get("thread_id")),
+                )
+
+    def list_conv_messages(self) -> list[dict[str, Any]]:
+        """全部会话消息（线程分组用）。"""
+        rows = self._conn.execute(
+            "SELECT id, entry_id, in_reply_to, subject_norm, sent_at, thread_id"
+            " FROM conv_messages ORDER BY sent_at, id").fetchall()
+        return [{"id": r["id"], "entry_id": r["entry_id"],
+                 "in_reply_to": r["in_reply_to"], "subject_norm": r["subject_norm"],
+                 "sent_at": r["sent_at"], "thread_id": r["thread_id"]} for r in rows]
+
+    def set_conv_thread(self, message_ids: Sequence[str], thread_id: str) -> None:
+        """把消息映射到线程（分组结果持久化）。"""
+        with self.transaction() as conn:
+            conn.executemany(
+                "UPDATE conv_messages SET thread_id=? WHERE id=?",
+                [(thread_id, mid) for mid in message_ids])
+
     # ---- 检索 ----
 
     def search_fts(self, query: str, limit: int = 50) -> list[SearchHit]:

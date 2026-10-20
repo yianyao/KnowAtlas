@@ -28,6 +28,7 @@ dependencies = [
     "xlrd",
     "python-pptx",
     "pdfplumber",
+    "mail-parser-reply>=1.36",
 ]
 
 [project.optional-dependencies]

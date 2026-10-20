@@ -94,7 +94,8 @@ def _validate_enabled_sources(data: dict) -> None:
         "bookmarks": lambda s: any(bool(v) for v in (s.get("paths") or {}).values()),
         "folders": lambda s: bool(s.get("roots")),
         "emmx": lambda s: bool(s.get("roots")),
-        "mail": lambda s: bool(s.get("maildir_root")),
+        "mail": lambda s: any(bool((s.get("accounts") or {}).get(a, {}).get("path") if isinstance(a_sec, dict) else a_sec)
+                              for a, a_sec in (s.get("accounts") or {}).items()),
         "db": lambda s: bool(s.get("sqlite_paths") or s.get("postgres_dsn")),
         "session": lambda s: bool(s.get("harvester_dirs")),
         "bilibili": lambda s: bool(s.get("up_mid")) and bool(s.get("sessdata_env")),
