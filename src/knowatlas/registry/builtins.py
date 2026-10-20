@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 from ..fetchers import file_reader, http_simple
-from ..semantic.tasks import classify_coarse, classify_deep, tag_keywords
+from ..semantic.tasks import (
+    classify_coarse, classify_deep, tag_keywords, thread_suggest, topic_recall,
+)
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
 
@@ -34,4 +36,7 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
     semantics.register(classify_coarse.SPEC, classify_coarse.run)
     semantics.register(classify_deep.SPEC, classify_deep.run)
     semantics.register(tag_keywords.SPEC, tag_keywords.run)
+    # 串联工作区（完整方案 §9.4）：召回型/建议型任务，查询驱动签名（见各自模块 docstring）
+    semantics.register(topic_recall.SPEC, topic_recall.run)
+    semantics.register(thread_suggest.SPEC, thread_suggest.run)
     return locators, semantics

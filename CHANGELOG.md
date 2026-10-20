@@ -628,3 +628,71 @@
 - §9.4 含 thread_type / conv_messages / mail-parser-reply / quote_strip / delta_summarize / thread_digest
 - TODO Phase 2 含「线程增补」，Phase 3 含「conv_messages」，Phase 4 含「quote_strip」
 - 变更文件 UTF-8 无 BOM + LF（字节扫描通过）
+
+### 0.2.0 第三十二批（2026-10-20，变更工单）：Thread 串联工作区（主题工作区）落地——M4 用户最高优先项
+
+**来源**：用户 2026-10-20 定调 Phase 4 优先序「Thread 串联工作区 > 放射导航增强 > 统一入口工作台；
+词云/时间线顺延」；契约草案见完整方案 §9.4（0.2.0 第二十六批）+ thread_type 增列（第三十一批）。
+痛点：「知道要什么，但相关知识散落多个源多个条目，串联困难」。
+
+**旧 → 新**
+
+1. **数据模型**（migrations/002_threads.sql，随 schema canary 升版）：
+   - 新表 `threads(id, name, note, thread_type, created_at, updated_at)`——thread_type
+     默认 `curated`（用户串联线索）；`source`（邮件/AI 会话源还原）随 Phase 2/3 适配器使用，
+     本批不建 conv_messages（属适配器批次，YAGNI）。
+   - 新表 `thread_items(id, thread_id, entry_id, position, relation_type, note)`——
+     线索内有序条目；relation_type 开放枚举，首现定义 seq/because/prereq/contrast（新增走 CHANGELOG）。
+   - 迁移机制升级（只进不前纪律不变）：schema.py 由「单文件 001」改为按序发现
+     `migrations/NNN_*.sql`；db.py init_schema 顺序应用所有待定迁移并逐版置 user_version；
+     库版本高于代码时明确报错（旧代码开新库不给静默错数据）。
+2. **数据层方法**（db.py，写操作全部落 task_log，task_name=threads）：
+   create_thread / get_thread / list_threads / update_thread / delete_thread；
+   add_thread_item（position 默认追加尾位，同线索去重）/ remove_thread_item /
+   move_thread_item（重排序号紧凑化）/ update_thread_item / threads_for_entry。
+   models.py 新增 Thread / ThreadItem dataclass 与 THREAD_TYPES。
+3. **语义任务**（注册表新增两项，互不依赖、可独立关闭）：
+   - `topic_recall`（纯规则、零费用）：输入主题词或节点 id（c:<分类id>/e:<条目id>），
+     四路召回——FTS 命中、同分类路径共现、同 host 聚类、同线索显式关联；每条结果带
+     relation_reason（`fts` / `cocategory:<路径>` / `same_host:<host>` / `thread:<线索名>`），
+     按 source_type 分组。语义相似通道（LLM/embedding）按 §9.4 为可选项，留待 M4 embedding
+     接入，本批不建死代码。
+   - `thread_suggest`（LLM 后置）：输入线索条目集，LLM 按「概念→步骤→注意事项」建议初始
+     排序；ctx.llm 为 None 或调用失败 → 按原序返回并记 llm_used=false（纯规则降级，
+     不阻塞保存）。
+   - TaskContext 新增可选字段 datalayer（召回型任务需要读库；既有任务不传不受影响）。
+4. **Web API**（api.py，写端点全部过 check_write_access；审计走数据层）：
+   GET /api/threads；POST /api/threads（支持 entry_ids 一并入库=路径固化）；
+   GET /api/threads/{id}；POST /api/threads/{id}/update|delete|items|items/{iid}/remove|
+   items/{iid}/move|suggest；POST /api/recall（只读，无令牌）；GET /api/entries/{id}/threads。
+5. **UI**：新增 static/thread.html 串联工作区（线索列表 + 主题召回 + 线索编辑器 +
+   LLM 建议排序）；index.html 侧栏加入口，检索结果视图加「🧵 固化为线索」（探索路径一键沉淀）。
+
+**复检探针**（实现后逐条命中）
+
+- 新库 init_schema 后 threads/thread_items 存在且 user_version=2；旧库（user_version=1）
+  再次打开自动应用 002 且既有数据无损
+- 线索 CRUD + 条目增删移 + 重开库不丢（持久化探针）
+- 同线索重复加同一条目被拒；删除线索级联清 items
+- topic_recall 对种子数据产出跨源条目且每条带 relation_reason；节点 id 输入（c:/e:）生效
+- thread_suggest 在 llm=None 时原序降级；mock LLM 返回顺序被应用且不丢条目
+- 全部写端点无令牌 403；recall 无令牌可读
+- test_canary 的 ddl 与 capabilities 摘要随工单升版后全绿
+- 变更文件 UTF-8 无 BOM + LF（字节扫描通过）
+
+**复检结果**（2026-10-20 落地当日）
+
+- 测试 **169 项全绿**（155 + 14）：tests/test_threads.py 覆盖迁移新库/旧库升级/库高于代码
+  报错、CRUD 持久化（重开不丢）、条目规则（去重/夹紧/紧凑/级联/白名单）、重排集合校验、
+  召回四通道与 relation_reason、节点 id 输入、suggest 降级与 LLM 应用（含漏号补齐）、
+  Web API 全端点与写守卫、recall 免令牌。
+- test_canary 已升版：ddl=865bbbd1078e（全量迁移拼接）、capabilities=bb91f4917209
+  （新增 topic_recall@1.0.0 / thread_suggest@1.0.0）。
+- 真实库冒烟（data/knowledge.db 副本，1866 active）：001→002 迁移无损；「Python」召回
+  8 条跨源命中，示范 channels=['fts','cocategory:技术开发/后端','same_host:docs.python.org']；
+  线索 CRUD 与 threads_for_entry 正常。
+- 修复过程发现并钉住的两个问题：① thread_suggest 初版按编号序而非 LLM 建议序收集
+  （回归测试 test_thread_suggest_applies_llm_order 钉住）；② topic_recall 线程通道
+  最初豁免种子导致线程内共现种子丢关联解释（与 cocategory/same_host 口径统一）。
+- 关联件同步：TODO Phase 4「串联工作区」标 [x]；SOP 增 §2.5 串联工作区用法；
+  交接文档状态快照与待办刷新；契约草案 §9.4 的 thread_type 列已随 002 落库。

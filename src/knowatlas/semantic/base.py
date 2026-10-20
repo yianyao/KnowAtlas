@@ -36,3 +36,4 @@ class TaskContext:
     embedder: Any | None = None  # optional 依赖缺失时为 None
     known_paths: frozenset[str] = frozenset()  # 现有分类路径（任务须优先归并）
     config: Any | None = None    # Config 访问器（任务读取自身参数如 llm.max_batch）
+    datalayer: Any | None = None  # DataLayer（召回型任务读库用，如 topic_recall；分类任务不传）

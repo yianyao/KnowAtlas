@@ -1,6 +1,7 @@
 """schema canary（完整方案 §11.2）：对六类契约面计算稳定摘要，任一漂移即红。
 
 改动任一项都必须先写变更工单，改完后更新 CANARY 常量（用 pytest -s 输出的 current 值）。
+DDL 摘要源 = 全部迁移按序拼接（0.2.0 第三十二批：新表即契约面，002_threads 纳管）。
 """
 
 from __future__ import annotations
@@ -15,19 +16,19 @@ from knowatlas.models import SCHEMES, SOURCE_TYPES, Entry
 from knowatlas.registry.builtins import build_registries
 
 CANARY: dict[str, str] = {
-    "ddl": "ea4f9188327a",
+    "ddl": "865bbbd1078e",
     "source_types": "385f0e75f779",
     "schemes": "40123837bf71",
     "entry_fields": "1a9d42828612",
     "config_keys": "31d80a965903",
-    "capabilities": "bd4c782ec5e0",
+    "capabilities": "bb91f4917209",
 }
 
 
 def _current() -> dict[str, str]:
     locators, semantics = build_registries(None)
     return {
-        "ddl": kschema.digest(kschema.load_initial_schema()),
+        "ddl": kschema.digest(kschema.load_all_migrations()),
         "source_types": kschema.digest("\n".join(SOURCE_TYPES)),
         "schemes": kschema.digest("\n".join(SCHEMES)),
         "entry_fields": kschema.digest("\n".join(f.name for f in dataclasses.fields(Entry))),

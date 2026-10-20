@@ -21,6 +21,13 @@ SCHEMES = (
     "http", "https", "file", "mail", "ima", "txdoc", "emmx", "db", "session", "wxfav", "bili",
 )
 
+# §9.4 threads.thread_type：curated=用户串联线索 / source=源还原的原始会话线程
+# （邮件/AI 会话多轮；随 Phase 2/3 适配器 + conv_messages 落库，本批仅建表预留）
+THREAD_TYPES = ("curated", "source")
+
+# §9.4 thread_items.relation_type：开放枚举——首现定义如下，新增取值走 CHANGELOG 工单
+RELATION_TYPES = ("seq", "because", "prereq", "contrast")
+
 
 def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -117,3 +124,33 @@ class SearchHit:
     locator: str
     snippet: str
     rank: float
+
+
+@dataclass(frozen=True)
+class ThreadItem:
+    """线索内条目与顺序（完整方案 §9.4）。id 由数据层生成，禁止手工指定。"""
+
+    id: str
+    thread_id: str
+    entry_id: str
+    position: int
+    relation_type: str = "seq"
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Thread:
+    """串联线索（主题工作区，完整方案 §9.4）。
+
+    thread_type=curated 为用户串联（本批 UI 入口建立）；source 为源还原的原始
+    会话线程（邮件/AI 会话，随适配器批次落 conv_messages）。items 仅 get_thread
+    填充（按 position 升序）；列表视图不展开。
+    """
+
+    id: str
+    name: str
+    note: str | None
+    thread_type: str
+    created_at: str
+    updated_at: str
+    items: tuple[ThreadItem, ...] = ()

@@ -378,6 +378,226 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                                 status_code=404)
         return detail
 
+    # ---- Thread 串联工作区（完整方案 §9.4，0.2.0 第三十二批） ----
+
+    def _thread_payload(thread) -> dict:
+        """线索详情：items 展开为条目信息（标题/来源/状态），position 即阅读序。"""
+        items: list[dict[str, Any]] = []
+        if thread.items:
+            entries = {e.id: e for e in
+                       dl.get_entries_by_ids([i.entry_id for i in thread.items])}
+            for it in thread.items:
+                e = entries.get(it.entry_id)
+                items.append({
+                    "item_id": it.id, "entry_id": it.entry_id, "position": it.position,
+                    "relation_type": it.relation_type, "note": it.note,
+                    "title": e.title if e else "（条目已不存在）",
+                    "locator": e.locator if e else "",
+                    "source_type": e.source_type if e else "",
+                    "status": e.status if e else "",
+                })
+        return {"id": thread.id, "name": thread.name, "note": thread.note,
+                "thread_type": thread.thread_type, "created_at": thread.created_at,
+                "updated_at": thread.updated_at, "items": items}
+
+    @app.get("/api/threads")
+    def list_threads(thread_type: str | None = None):
+        return {"threads": dl.list_threads(thread_type=thread_type)}
+
+    @app.post("/api/threads")
+    async def create_thread(request: Request):
+        """新建线索；entry_ids 一并入库 = 探索路径一键固化（§9.4 路径固化）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        try:
+            thread = dl.create_thread(str(body.get("name", "")),
+                                      note=body.get("note"))
+        except Exception as exc:  # ContractError 等 → 400
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        added: list[str] = []
+        skipped: list[str] = []
+        for raw in body.get("entry_ids") or []:
+            eid = str(raw).strip()
+            if not eid:
+                continue
+            try:
+                dl.add_thread_item(thread.id, eid)
+                added.append(eid)
+            except Exception:
+                skipped.append(eid)  # 不存在/重复——不阻塞其余条目入库
+        payload = _thread_payload(dl.get_thread(thread.id))
+        payload["added"] = added
+        payload["skipped"] = skipped
+        return payload
+
+    @app.get("/api/threads/{thread_id}")
+    def get_thread(thread_id: str):
+        thread = dl.get_thread(thread_id)
+        if thread is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "线索不存在"}},
+                                status_code=404)
+        return _thread_payload(thread)
+
+    @app.post("/api/threads/{thread_id}/update")
+    async def update_thread(thread_id: str, request: Request):
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        try:
+            dl.update_thread(thread_id, name=body.get("name"), note=body.get("note"))
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"id": thread_id}
+
+    @app.post("/api/threads/{thread_id}/delete")
+    async def delete_thread(thread_id: str, request: Request):
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        try:
+            dl.delete_thread(thread_id)
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"id": thread_id, "deleted": True}
+
+    @app.post("/api/threads/{thread_id}/items")
+    async def add_thread_item(thread_id: str, request: Request):
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        try:
+            item = dl.add_thread_item(thread_id, str(body.get("entry_id", "")),
+                                      relation_type=str(body.get("relation_type", "seq")),
+                                      note=body.get("note"))
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"item_id": item.id, "entry_id": item.entry_id, "position": item.position,
+                "relation_type": item.relation_type}
+
+    @app.post("/api/threads/{thread_id}/items/{item_id}/remove")
+    async def remove_thread_item(thread_id: str, item_id: str, request: Request):
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        try:
+            dl.remove_thread_item(thread_id, item_id)
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"id": thread_id, "removed": item_id}
+
+    @app.post("/api/threads/{thread_id}/items/{item_id}/update")
+    async def update_thread_item(thread_id: str, item_id: str, request: Request):
+        """改线索条目属性：relation_type（顺承/因果/前置/对比…）与 note。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        relation_type = body.get("relation_type")
+        note = body.get("note")
+        if relation_type is None and note is None:
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "至少给 relation_type 或 note 之一"}},
+                status_code=400)
+        try:
+            dl.update_thread_item(thread_id, item_id,
+                                  relation_type=str(relation_type) if relation_type is not None else None,
+                                  note=note)
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"id": thread_id, "item_id": item_id}
+
+    @app.post("/api/threads/{thread_id}/items/{item_id}/move")
+    async def move_thread_item(thread_id: str, item_id: str, request: Request):
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        try:
+            position = int(body.get("position", 0))
+        except (TypeError, ValueError):
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": "position 必须是整数"}},
+                                status_code=400)
+        try:
+            dl.move_thread_item(thread_id, item_id, position)
+        except Exception as exc:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(exc)}},
+                                status_code=400)
+        return {"id": thread_id, "item_id": item_id, "position": position}
+
+    @app.post("/api/threads/{thread_id}/suggest")
+    async def suggest_thread(thread_id: str, request: Request):
+        """thread_suggest：LLM 建议阅读顺序并应用（llm 不可用 = 原序，不写库）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        thread = dl.get_thread(thread_id)
+        if thread is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "线索不存在"}},
+                                status_code=404)
+        if not thread.items:
+            return {"id": thread_id, "llm_used": False, "applied": False,
+                    "order": [], "rationale": "线索为空，无排序对象"}
+        from ..semantic.base import TaskContext
+        from ..semantic.llm import LlmClient
+
+        entries = {e.id: e for e in
+                   dl.get_entries_by_ids([i.entry_id for i in thread.items])}
+        items: list[dict[str, Any]] = []
+        for it in thread.items:
+            e = entries.get(it.entry_id)
+            if e is None:
+                continue
+            body_text = e.inline_content or ""
+            if not body_text and e.content_hash:
+                body_text = dl.get_content(e.content_hash) or ""
+            items.append({"entry_id": e.id, "title": e.title,
+                          "body": body_text[:200], "native_path": e.native_path})
+        _, suggest = semantics.resolve_task("thread_suggest")
+        result = suggest(items, thread.name,
+                         TaskContext(run_id="web-threads", llm=LlmClient.from_config(cfg),
+                                     config=cfg, datalayer=dl))
+        applied = False
+        if result.get("llm_used"):
+            try:
+                dl.reorder_thread_items(thread_id, result["order"])
+                applied = True
+            except Exception:
+                applied = False  # 条目集过期等——建议仍返回供前端手动应用
+        return {"id": thread_id, "order": result["order"],
+                "rationale": result.get("rationale", ""),
+                "llm_used": result.get("llm_used", False), "applied": applied,
+                "error": result.get("error")}
+
+    @app.post("/api/recall")
+    async def recall(request: Request):
+        """topic_recall 多路召回（只读，无需写令牌）：主题词或 c:/e: 节点 id。"""
+        body = await request.json()
+        topic = str(body.get("topic", "")).strip()
+        try:
+            limit = max(1, min(int(body.get("limit", 60)), 200))
+        except (TypeError, ValueError):
+            limit = 60
+        from ..semantic.base import TaskContext
+
+        _, recall_task = semantics.resolve_task("topic_recall")
+        return recall_task(topic, TaskContext(run_id="web-recall", datalayer=dl), limit=limit)
+
+    @app.get("/api/entries/{entry_id}/threads")
+    def entry_threads(entry_id: str):
+        """条目挂在哪些线索里（UI 徽标）。"""
+        return {"threads": dl.threads_for_entry(entry_id)}
+
     @app.get("/api/search")
     def search(q: str = "", mode: str = "fts"):
         hits = dl.search_fts(q)

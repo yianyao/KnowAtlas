@@ -25,4 +25,6 @@ def test_unknown_scheme_rejected(registries):
 def test_builtin_specs_present(registries):
     locators, semantics = registries
     assert {"http", "https", "file"} == {s.name for s in locators.specs()}
-    assert {"classify_coarse", "classify_deep", "tag_keywords"} == {s.name for s in semantics.specs()}
+    # topic_recall / thread_suggest：串联工作区语义任务（0.2.0 第三十二批，§9.4）
+    assert {"classify_coarse", "classify_deep", "tag_keywords",
+            "topic_recall", "thread_suggest"} == {s.name for s in semantics.specs()}

@@ -59,6 +59,7 @@
   <input id="search" placeholder="全文检索（≥3 字走 FTS，两字词自动兜底）">
   <button id="staged-btn">📥 暂存区（未分类条目）</button>
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（结构关系 v0）</a>
+  <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
   <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
   <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
   <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
@@ -395,6 +396,19 @@ document.getElementById("search").addEventListener("change", async (e) => {
       ).join("")
     : "<small>无命中。</small>";
   attachCatChips();  // 检索结果也带分类定位徽标
+  // 路径固化（§9.4）：这次探索（检索词 + 命中集）一键沉淀为线索，去串联工作区继续编排
+  const ids = data.hits.map(h => h.entry_id);
+  if (ids.length) {
+    box.insertAdjacentHTML("beforeend",
+      `<button id="solidify-btn" style="margin-top:12px;padding:6px 14px;cursor:pointer">🧵 把这 ${ids.length} 条结果固化为线索</button>`);
+    document.getElementById("solidify-btn").onclick = async () => {
+      const name = (prompt("线索名称：", "检索：" + q) || "").trim();
+      if (!name) return;
+      const res = await writeJSON("/api/threads", { name, entry_ids: ids });
+      if (res.error) { alert("失败：" + res.error.message); return; }
+      location.href = "/thread.html?id=" + res.id;
+    };
+  }
 });
 
 // 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌

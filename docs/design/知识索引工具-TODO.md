@@ -132,11 +132,16 @@ reader: 执行者（人与 agent）
       （气泡大小=子树 active 数）；搜索框按条目标题/分类名出相关子图（只带命中条目+分类链，
       不扩散拉全子树）；点分类下钻子树（祖先链灰底作上下文），点条目打开原文；
       旧 v0 全量力导图（/api/graph）保留兼容。剩余：共现/相似度语义边随 M2/M4 接入）
-- [ ] 串联工作区（主题工作区，契约草案见完整方案 §9.4——用户 2026-10-20 定调最高优先：
+- [x] 串联工作区（主题工作区，契约草案见完整方案 §9.4——用户 2026-10-20 定调最高优先：
       痛点「知道要什么但散落各处难串联」）——threads/thread_items 表 + topic_recall 多路召回
       （FTS/共现/同源/显式关联/语义相似，每条带 relation_reason）+ 线索编辑保存复用 +
-      thread_suggest 排序建议
-      - 探针：输入主题聚合出跨源条目（带关联解释）；串成线索保存后重开不丢；探索路径可固化
+      thread_suggest 排序建议——2026-10-20 完成（0.2.0 第三十二批）：迁移 002 落
+      threads/thread_items（thread_type 列就绪，source 型随邮件/AI 会话适配器用）；
+      DataLayer 线索 CRUD + 条目增删移（task_log 审计）；topic_recall 四路纯规则召回
+      （fts/cocategory/same_host/thread，语义相似通道留待 M4 embedding）；thread_suggest
+      LLM 排序建议（llm 缺失原序降级）；Web API 端点组 + static/thread.html 工作区 +
+      index.html 入口与「固化为线索」；14 项测试 + canary 升版
+      - 探针：输入主题聚合出跨源条目（带关联解释）✅；串成线索保存后重开不丢 ✅（持久化测试）；探索路径可固化 ✅（POST /api/threads entry_ids + 检索视图按钮）
 - [ ] 放射导航增强（在关系图三视图上迭代，不推翻）：边带 relation_reason、导航栈与面包屑、
       Top-N 渐进披露（防毛球）、条目反查可达焦点（双向）、空层降级
       - 探针：放射出去的每个节点能回答「为什么和当前焦点关联」；面包屑任一级可回跳
