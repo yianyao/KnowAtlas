@@ -27,7 +27,9 @@ from .schema import USER_VERSION, load_initial_schema
 
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _ORIGINS = ("prior", "rule", "embedding", "llm", "manual")
-# H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖
+# H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
+# meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
+# value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
 _SOURCE_FIELDS = (
     "title", "locator", "locator_canonical", "native_path",
     "inline_content", "content_hash", "created_at",
@@ -130,7 +132,12 @@ class DataLayer:
         """按 id INSERT .. ON CONFLICT（H3 覆盖纪律见模块 docstring 与完整方案 §3.5）。
 
         updated 判定 = 源字段与库中值有真实差异（exported_at 刷新不计入 updated）。
-        meta 中 manual_ 前缀键视为人工键，更新时保留旧值、不被源数据覆盖。
+        meta 合并语义（0.2.0 第十八批修正，修机器后处理键被同步抹掉的 bug）：
+        入库 meta = {**旧 meta, **新 meta}——源自带的键（source_type/browser/
+        native_path/mind_path 等）以源为准覆盖；**源不设置而库中已有的键原样保留**，
+        含 manual_ 人工键与同步后机器写入的 value_flag / value_flag_reason /
+        link_status / fetch_backend 等（否则每次同步都会把「待清理候选」标记、
+        体检结论抹掉并造成 updated 翻转抖动）。updated 判定同样按合并后的 meta 比。
         """
         created = updated = unchanged = 0
         ids: list[str] = []
@@ -150,15 +157,13 @@ class DataLayer:
                     )
                     created += 1
                 else:
-                    # 人工键保留（manual_ 前缀）
+                    # 浅合并：源键覆盖旧值；源不设置的键（机器/人工后处理）保留
                     old_meta = json.loads(row["meta"])
-                    merged = dict(e.meta)
-                    for k, v in old_meta.items():
-                        if k.startswith("manual_"):
-                            merged[k] = v
+                    merged = {**old_meta, **e.meta}
+                    merged_json = _meta_json(merged)
                     changed = (
                         any(row[f] != getattr(e, f) for f in _SOURCE_FIELDS)
-                        or row["meta"] != meta_json
+                        or row["meta"] != merged_json
                     )
                     if changed:
                         conn.execute(
@@ -166,7 +171,7 @@ class DataLayer:
                             " native_path=?, inline_content=?, content_hash=?, meta=?,"
                             " created_at=?, exported_at=? WHERE id=?",
                             (e.title, e.locator, e.locator_canonical, e.native_path,
-                             e.inline_content, e.content_hash, _meta_json(merged),
+                             e.inline_content, e.content_hash, merged_json,
                              e.created_at, _now(), e.id),
                         )
                         updated += 1
@@ -618,7 +623,7 @@ class DataLayer:
             conn.execute("UPDATE entries SET meta=? WHERE id=?", (_meta_json(meta), entry_id))
 
     def list_by_value_flag(self, value_flag: str, limit: int = 500) -> list[Entry]:
-        """按价值标记列出条目（meta.value_flag；not_knowledge = LLM 判非知识，待用户清理）。"""
+        """按价值标记列出条目（meta.value_flag；not_knowledge = 规则或 LLM 判非知识，待用户清理）。"""
         rows = self._conn.execute(
             "SELECT * FROM entries WHERE status='active'"
             "   AND json_extract(meta, '$.value_flag')=? ORDER BY rowid LIMIT ?",

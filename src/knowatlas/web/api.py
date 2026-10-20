@@ -201,17 +201,20 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/not-knowledge")
     def not_knowledge():
-        """待清理候选：LLM 判为「非具体知识」（站点门户/资源列表/纯资源）的条目。
+        """待清理候选：判为「非具体知识」（站点门户/资源列表/纯资源）的条目。
 
-        仅标记不自动舍弃——保留决定权在用户。
+        两个来源：L0 价值守卫（URL 结构规则，meta.value_flag_reason 记原因：
+        resource_file / portal_homepage / index_subdir）与 LLM 语义判断
+        （classify_deep kind=non，无 reason）。仅标记不自动舍弃——保留决定权在用户。
         """
         return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
-                             "source_type": e.source_type}
+                             "source_type": e.source_type,
+                             "reason": e.meta.get("value_flag_reason")}
                             for e in dl.list_by_value_flag("not_knowledge")]}
 
     @app.post("/api/entries/{entry_id}/unflag")
     async def unflag_entry(entry_id: str, request: Request):
-        """用户否决 LLM 的非知识判定：清除 value_flag（保留决定权在用户）。"""
+        """用户否决非知识判定（规则或 LLM）：置 value_flag=ok，之后两者都不再标记。"""
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard

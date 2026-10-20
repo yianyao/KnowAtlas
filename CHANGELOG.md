@@ -321,3 +321,42 @@
 - **自愈**：写请求遇 403 自动重取一次会话再重试（serve 重启换令牌后自愈）；
   指纹提示（第十六批）保留在启动日志与 /api/token-hint 供核对。
 - **测试**：会话 Cookie 免手工通过守卫、错误 Cookie 仍拒 2 项；全量 71 项通过。
+
+### 新增（0.2.0 第十八批：L0 价值守卫——「进去就是资源/首页/子目录页」不再花 LLM 判断）
+
+- **用户定调（2026-10-20）**：收藏夹里大量条目"进去就是一个资源，或者是网站首页或
+  某个子目录页面"，此类条目**URL 结构一眼可判，不需要 LLM 语义判断**。实测画像
+  （390 条书签）：站点首页 81、列表/导航子页 42、资源直链 1、内容页 266——
+  结构规则覆盖了约 1/3 的书签存量。
+- **`semantic/value_guard.py`（新）`judge_value(locator)`**：纯函数零 IO，三类规则——
+  `resource_file`（path 尾段扩展名 ∈ RESOURCE_EXTS：压缩包/安装包/镜像/媒体/图片/
+  二进制库；**PDF/电子书/Office 不判**——可解析正文的知识资源）、`portal_homepage`
+  （http(s) path 为空或 "/"）、`index_subdir`（http(s) path 以 "/" 结尾且非根）。
+  防误杀：内容页（.html/无尾斜杠/GitHub 仓库页）不判；畸形 netloc 不抛异常。
+- **classify_coarse 接入 L0（SPEC 1.1.0→1.2.0，canary 同步升版）**：命中条目直接短路
+  ——不占 L1/L2/L3、**不调 LLM**（省 token 且防漏判）；tags 与 LLM kind=non 同构
+  （`not_knowledge` + `value_reason:<规则>`）；`value_flag=ok`（用户否决）不短路。
+  L0 短路条目显式排除出 L3 pending——**修了 tag 被 LLM 输出覆盖的 bug**。
+- **`ksync --value-scan` 价值体检**（cli + `pipeline/sync._value_scan`）：只扫存量
+  active 条目的 URL 结构打标（`value_flag=not_knowledge` + `value_flag_reason`），
+  进 Web UI「待清理候选」（舍弃/保留决定权在用户，仅标记不动手）；
+  **零费用、不动分类树、不调 LLM**——与 `--reclassify`（全量重分类）分工明确；
+  支持 `--dry-run` 只出报告；已标记条目只补 reason 不重复计数。
+- **Web**：`/api/not-knowledge` 透出 `reason` 字段；「待清理候选」视图按
+  资源文件/站点首页/列表子页显示来源徽标；侧栏文案改「规则/LLM 判非知识」。
+
+### 修正（0.2.0 第十八批同批：机器后处理 meta 被同步抹掉的 bug）
+
+- **症状**：L0/LLM 打标（或 kcheck 体检）写入 meta 的 `value_flag`/`link_status`，
+  在下一次 `ksync` 时被 upsert **整串 meta 覆盖**抹掉，并因 `row["meta"] !=
+  meta_json` 误判 updated——每次同步都"翻转抖动"（旧 LLM 标记路径同样中招）。
+- **根因**：upsert 更新时只保留 `manual_` 前缀键，其余 meta 键以源数据为准。
+- **修法**（`datalayer/db.upsert_entries`）：meta 合并语义改为 `{**旧, **新}`——
+  源自带键（source_type/browser/native_path/mind_path 等）以源覆盖，**源不设置
+  而库中已有的键（机器/人工后处理）原样保留**；updated 判定改按合并后的 meta 比。
+- **顺带对齐字段清单漂移**：`pipeline/sync._SOURCE_FIELDS` 补 `created_at`，
+  与 `datalayer/db._SOURCE_FIELDS` 真正一致（原注释声称一致实则漏一项）。
+- **`_flag_value` 改读库**：同步路径的条目 meta 来自采集器、不含后处理键，
+  用户否决必须读库才能看到——否则 Web UI 点过「是知识，保留」后会被同步重新打标。
+- **回归测试**：打标后二次同步 unchanged 不翻转 + flag/reason 保留；用户否决后
+  源变化触发重分类不重新打标。**测试新增 36 项，全量 107 项通过**。

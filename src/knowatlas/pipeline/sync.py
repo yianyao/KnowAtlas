@@ -10,8 +10,9 @@
 纪律：
 - K1：同步默认不抓正文（fetch.on_sync=false）——--fetch-limit N 显式开启，本次最多 N 条
   缺正文的 http 条目走 fetch_with_fallback 补抓；
-- 分类只跑 classify_coarse（L1 先验 + L2 规则，未命中进暂存区，绝不硬猜），
-  且只对本次新建条目执行——unchanged 条目幂等跳过，不重复挂分类；
+- 分类只跑 classify_coarse（L0 价值守卫 + L1 先验 + L2 规则 + L3 LLM，未命中进暂存区，
+  绝不硬猜），且只对本次新建条目执行——unchanged 条目幂等跳过，不重复挂分类；
+- --value-scan：只跑 L0 价值守卫给存量条目打标（零费用，不动分类树）；
 - 适配器抛 AdapterError → 跳过该源、其余源继续（完整方案 §10.1）。
 """
 
@@ -48,14 +49,38 @@ _SOURCE_TYPE_BY_NAME: dict[str, str] = {
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000
 
-
-_INLINE_LIMIT = 4096
-_TRUNCATED_AT = 4000
-
 # 与 datalayer.db._SOURCE_FIELDS 保持一致（upsert 的 updated 判定字段）——
 # 改动任一处必须同步另一处并跑全量测试
 _SOURCE_FIELDS = ("title", "locator", "locator_canonical", "native_path",
-                  "inline_content", "content_hash")
+                  "inline_content", "content_hash", "created_at")
+
+
+def _flag_value(dl: Any, entry: Entry, out: Any) -> bool:
+    """把「非知识」结论落进 meta（value_flag=not_knowledge + value_flag_reason）。
+
+    tag 来源两条路：L0 价值守卫（value_guard，结构性规则，带 reason）与 LLM
+    kind=non（classify_deep，语义判断，无 reason）——统一经本函数落库，语义同构。
+    返回是否本次新标记（已标记 / 用户已否决 value_flag=ok 的不重复写）。
+    用户否决以**库中** meta 为准（采集器产出的 entry.meta 不含后处理键，
+    同步路径必须读库才能看到 Web UI 里点过的「是知识，保留」）。
+    保留决定权在用户：仅标记，不自动舍弃（not_knowledge 只进待清理候选）。
+    """
+    if "not_knowledge" not in out.tags:
+        return False
+    current = dl.get_entry(entry.id)
+    if current is not None and current.meta.get("value_flag") == "ok":
+        return False  # 用户已否决——机器结论不再覆盖人的决定
+    reason = next((t.split(":", 1)[1] for t in out.tags
+                   if t.startswith("value_reason:")), None)
+    if current is not None and current.meta.get("value_flag") == "not_knowledge":
+        if reason and current.meta.get("value_flag_reason") != reason:
+            dl.merge_meta(entry.id, {"value_flag_reason": reason})  # 旧 LLM 标记补原因
+        return False
+    patch: dict[str, Any] = {"value_flag": "not_knowledge"}
+    if reason:
+        patch["value_flag_reason"] = reason
+    dl.merge_meta(entry.id, patch)
+    return True
 
 
 def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids: set[str],
@@ -81,11 +106,10 @@ def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids
     ]
     outputs = classify(inputs, TaskContext(run_id=run_id, known_paths=known,
                                            llm=LlmClient.from_config(cfg), config=cfg))
-    classified = staged = 0
+    classified = staged = flagged = 0
     for entry, out in zip(targets, outputs):
-        if "not_knowledge" in out.tags and entry.meta.get("value_flag") != "ok":
-            # LLM 判非知识 → 待清理候选；用户已否决（value_flag=ok）的不再标记
-            dl.merge_meta(entry.id, {"value_flag": "not_knowledge"})
+        if _flag_value(dl, entry, out):
+            flagged += 1
         if entry.id in updated_ids:
             # 旧机器分类清理：书签换文件夹等场景下避免新旧分类并存
             for link in dl.get_entry_categories(entry.id):
@@ -100,7 +124,8 @@ def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids
                                classification.origin, run_id)
         classified += 1
     return {"classified": classified, "staged": staged,
-            "reclassified": sum(1 for e in targets if e.id in updated_ids)}
+            "reclassified": sum(1 for e in targets if e.id in updated_ids),
+            "flagged_not_knowledge": flagged}
 
 
 def _apply_content(entry: Entry, text: str, content_hash_hex: str,
@@ -197,7 +222,7 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
             dl.detach_category(e.id, link["category_id"])
     # 候选 = 人工挂接路径 ∪ 大类骨架（完整旧路径不进候选，防顺手归并碎片类目）
     known = frozenset(dl.manual_category_paths() | root_names)
-    classified = staged = 0
+    classified = staged = flagged = 0
     max_batch = int(cfg.get("llm.max_batch", 20) or 20)
     for i in range(0, len(targets), max_batch):
         chunk = targets[i:i + max_batch]
@@ -208,9 +233,8 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
             TaskContext(run_id=run_id, known_paths=known, llm=llm, config=cfg),
         )
         for e, out in zip(chunk, outputs):
-            if "not_knowledge" in out.tags and e.meta.get("value_flag") != "ok":
-                # LLM 判非知识 → 待清理候选；用户已否决的不再标记
-                dl.merge_meta(e.id, {"value_flag": "not_knowledge"})
+            if _flag_value(dl, e, out):
+                flagged += 1
             if not out.classifications:
                 staged += 1
                 continue
@@ -232,24 +256,70 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
     stats = {"reclassify_total": len(targets), "classified": classified,
              "staged": staged, "llm_used": llm is not None,
              "dropped_empty_categories": [d[1] for d in dropped],
-             "pruned_fragments": len(moved)}
+             "pruned_fragments": len(moved), "flagged_not_knowledge": flagged}
     dl.log_task(_now_iso(), "sync", "reclassify", "all",
                 {k: v for k, v in stats.items()})
+    return stats
+
+
+def _value_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
+    """价值体检（L0 价值守卫，零费用）：扫全部 active 条目的 URL 结构，
+    命中「资源直链/站点首页/列表子页」即置 meta.value_flag=not_knowledge
+    + value_flag_reason，进 Web UI 待清理候选（仅标记，舍弃决定权在用户）。
+
+    与 --reclassify 的分工：不重跑分类、不动分类树、不调 LLM、零费用——
+    存量条目的非知识标记用这条通道补，不必为打标重型跑一遍全量重分类。
+    - value_flag=ok（用户否决）与已 rejected 的条目跳过；
+    - 已被 LLM 标记过但缺 reason 的条目只补 reason，不重复计数；
+    - dry_run=True 只出报告不写库。
+    """
+    from ..semantic.value_guard import judge_value
+
+    entries = dl.list_entries(status="active", limit=10000)
+    by_reason: dict[str, int] = {}
+    flagged = reasons_filled = 0
+    for e in entries:
+        if e.meta.get("value_flag") == "ok":
+            continue
+        reason = judge_value(e.locator)
+        if reason is None:
+            continue
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        if e.meta.get("value_flag") == "not_knowledge":
+            if e.meta.get("value_flag_reason") != reason:
+                if not dry_run:
+                    dl.merge_meta(e.id, {"value_flag_reason": reason})
+                reasons_filled += 1
+            continue
+        flagged += 1
+        if not dry_run:
+            dl.merge_meta(e.id, {"value_flag": "not_knowledge",
+                                 "value_flag_reason": reason})
+    stats = {"value_scan_total": len(entries), "new_flagged": flagged,
+             "matched_total": sum(by_reason.values()),
+             "reasons_filled": reasons_filled, "by_reason": by_reason,
+             "dry_run": dry_run}
+    dl.log_task(_now_iso(), "sync", "value_scan", "all", stats)
     return stats
 
 
 def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              full: bool = False, source: str | None = None, dry_run: bool = False,
              limit: int | None = None, fetch_limit: int | None = None,
-             reclassify: bool = False) -> dict[str, Any]:
+             reclassify: bool = False, value_scan: bool = False) -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
+    value_scan=True 时跳过源收集，只跑 L0 价值守卫打标（零费用，见 _value_scan）。
     """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
     dl.start_run(run_id, kind)
     stats: dict[str, Any] = {"sources": {}}
+    if value_scan:
+        stats["value_scan"] = _value_scan(dl, dry_run)
+        dl.finish_run(run_id, stats)
+        return {"run_id": run_id, **stats}
     if reclassify:
         stats["reclassify"] = _reclassify_all(cfg, dl, semantics, run_id)
         dl.finish_run(run_id, stats)

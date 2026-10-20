@@ -53,7 +53,7 @@
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（结构关系 v0）</a>
   <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
   <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
-  <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（LLM 判非知识）</a>
+  <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
   <div id="tree">加载中…</div>
 </aside>
 <dialog id="move-dialog">
@@ -253,20 +253,22 @@ document.getElementById("nonk-link").onclick = async (e) => {
   refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
   document.getElementById("crumb").textContent =
-    "🔬 待清理候选——LLM 判为「非具体知识」（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
+    "🔬 待清理候选——规则或 LLM 判为「非具体知识」（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
   document.getElementById("filter").style.display = "none";
   const data = await (await fetch("/api/not-knowledge")).json();
+  const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页" };
   const box = document.getElementById("hits");
   box.innerHTML = data.entries.length
     ? data.entries.map(x =>
         `<div class="entry"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
         + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + (x.reason ? `<span class="badge" title="结构规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
         + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
         + `<button class="keep-btn" data-id="${x.id}">↩是知识，保留</button></div>`).join("")
-    : "<small>没有待清理候选。跑一次 ksync --reclassify 让 LLM 全量评估。</small>";
+    : "<small>没有待清理候选。跑一次 ksync --value-scan（纯规则、零费用）或 ksync --reclassify（LLM 全量评估）。</small>";
   bindEntryButtons();
   document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
-    // 保留：清除 value_flag（重评时 LLM 可能再次标记；保留动作记录在 task_log）
+    // 保留：置 value_flag=ok（之后规则与 LLM 都不再标记它；保留动作记录在 task_log）
     await writeJSON(`/api/entries/${b.dataset.id}/unflag`, {});
     e.target.click();
   });
