@@ -186,7 +186,10 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         is_file = e.locator.startswith("file://")
         if e.locator_canonical is None and not is_file:
             continue  # 非 http 且非 file，无正文可抓
-        if e.content_hash and dl.get_content(e.content_hash) is not None:
+        # 「已抓过」判定必须读库：传入的 entries 是采集器视图（content_hash 恒为
+        # None），用它会每轮重复抓同一批文件、烧光尝试预算（0.2.0 第二十五批修）
+        stored = dl.get_entry(e.id)
+        if stored and stored.content_hash and dl.get_content(stored.content_hash) is not None:
             continue  # 正文已在 content_store（抓过一次不重复抓）
         attempts += 1
         try:
