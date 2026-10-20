@@ -168,3 +168,87 @@ def test_rejects_oversized_inline_content(dl):
 
 def test_source_type_whitelist_shape():
     assert "manual" in SOURCE_TYPES and "bili" in SOURCE_TYPES
+
+
+# ---- get_tree 的 count（子树 active 条目数；UI 默认隐藏空枝的依据） ----
+
+def test_tree_count_reflects_subtree_active(dl):
+    """A（1 active 直挂）→ B（1 active + 1 archived 直挂）：A.count=2, B.count=1。"""
+    e_a = make_entry(source_key="https://e.com/ra", locator="https://e.com/ra")
+    e_b1 = make_entry(source_key="https://e.com/b1", locator="https://e.com/b1")
+    e_b2 = make_entry(source_key="https://e.com/b2", locator="https://e.com/b2")
+    dl.upsert_entries([e_a, e_b1, e_b2])
+    a = dl.create_category("A", [], "manual")
+    b = dl.create_category("B", [a.id], "manual")
+    dl.attach_category(e_a.id, a.id, 1.0, "manual", "run")
+    dl.attach_category(e_b1.id, b.id, 1.0, "manual", "run")
+    dl.attach_category(e_b2.id, b.id, 1.0, "manual", "run")
+    dl.set_status([e_b2.id], "rejected")  # 舍弃的不计数
+    tree = {n["name"]: n for n in dl.get_tree()}
+    assert tree["A"]["count"] == 2
+    assert tree["A"]["children"][0]["count"] == 1
+
+
+def test_tree_count_zero_for_emptied_category(dl):
+    """条目被全部舍弃/归档后 count=0（节点仍在，UI 默认隐藏、勾选可见）。"""
+    e = make_entry()
+    dl.upsert_entries([e])
+    a = dl.create_category("A", [], "manual")
+    dl.attach_category(e.id, a.id, 1.0, "manual", "run")
+    assert dl.get_tree()[0]["count"] == 1
+    dl.set_status([e.id], "archived")
+    assert dl.get_tree()[0]["count"] == 0
+
+
+def test_tree_count_multi_parent_counts_entry_under_each_parent(dl):
+    """多父 DAG：同一 active 条目挂在两个父下，两边 count 都含它。"""
+    e = make_entry()
+    dl.upsert_entries([e])
+    x = dl.create_category("X", [], "manual")
+    y = dl.create_category("Y", [], "manual")
+    dl.attach_category(e.id, x.id, 1.0, "manual", "run")
+    dl.attach_category(e.id, y.id, 1.0, "manual", "run")
+    tree = {n["name"]: n for n in dl.get_tree()}
+    assert tree["X"]["count"] == 1 and tree["Y"]["count"] == 1
+
+
+# ---- get_tree 的 count（子树 active 条目数；UI 默认隐藏空枝的依据） ----
+
+def test_tree_count_reflects_subtree_active(dl):
+    """A（1 active 直挂）→ B（1 active + 1 archived 直挂）：A.count=2, B.count=1。"""
+    e_a = make_entry(source_key="https://e.com/ra", locator="https://e.com/ra")
+    e_b1 = make_entry(source_key="https://e.com/b1", locator="https://e.com/b1")
+    e_b2 = make_entry(source_key="https://e.com/b2", locator="https://e.com/b2")
+    dl.upsert_entries([e_a, e_b1, e_b2])
+    a = dl.create_category("A", [], "manual")
+    b = dl.create_category("B", [a.id], "manual")
+    dl.attach_category(e_a.id, a.id, 1.0, "manual", "run")
+    dl.attach_category(e_b1.id, b.id, 1.0, "manual", "run")
+    dl.attach_category(e_b2.id, b.id, 1.0, "manual", "run")
+    dl.set_status([e_b2.id], "rejected")  # 舍弃的不计数
+    tree = {n["name"]: n for n in dl.get_tree()}
+    assert tree["A"]["count"] == 2
+    assert tree["A"]["children"][0]["count"] == 1
+
+
+def test_tree_count_zero_for_emptied_category(dl):
+    """条目被全部舍弃/归档后 count=0（节点仍在，UI 默认隐藏、勾选可见）。"""
+    e = make_entry()
+    dl.upsert_entries([e])
+    a = dl.create_category("A", [], "manual")
+    dl.attach_category(e.id, a.id, 1.0, "manual", "run")
+    assert dl.get_tree()[0]["count"] == 1
+    dl.set_status([e.id], "archived")
+    assert dl.get_tree()[0]["count"] == 0
+
+
+def test_tree_count_multi_parent_counts_entry_under_each_parent(dl):
+    """多父 DAG：同一 active 条目挂在两个父下，两边 count 都含它。"""
+    e = make_entry()
+    dl.upsert_entries([e])
+    x = dl.create_category("X", [], "manual")
+    y = dl.create_category("Y", [], "manual")
+    dl.attach_category(e.id, x.id, 1.0, "manual", "run")
+    dl.attach_category(e.id, y.id, 1.0, "manual", "run")
+    tree = {n["name"]: n for n in dl.get_tree()}
+    assert tree["X"]["count"] == 1 and tree["Y"]["count"] == 1

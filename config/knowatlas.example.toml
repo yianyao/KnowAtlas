@@ -22,10 +22,22 @@ server_port  = 8420                  # Web 服务端口
 # 不设该环境变量时，serve 启动会自动生成一次会话令牌并打印在日志里，照着粘贴即可；
 # 想固定令牌就自己设环境变量：值自己定，任意非空字符串均可，建议 20 位以上随机串
 # （PowerShell 永久设置：setx KNOWATLAS_WEB_TOKEN "你的口令" —— 设完重开终端再启动 serve）。
+# 两个容易踩的坑（都会让网页写操作报「写操作需 token 头」）：
+#   ① 设完环境变量必须重开终端并重启 serve —— serve 只在启动时读一次；
+#   ② 同名变量在"系统级/用户级"只能有一处：用户级优先，两处都设时以用户级为准，
+#      另一处设了不算数。serve 启动日志会打印"指纹"，网页报错时也显示服务端指纹，
+#      两边一致才说明配成了。
 token_env    = "KNOWATLAS_WEB_TOKEN"
 
 [llm]                                  # 语义分类用的大模型（OpenAI 兼容接口均可接）
 # 只在语义判断时调用（L1 先验/L2 规则命中不消耗 LLM）；key 未设则静默跳过，不影响其他功能
+# 换供应商只改三行——base_url / api_key_env / model，代码零改动（客户端就是标准
+# OpenAI 兼容的 POST {base_url}/chat/completions）。已试过的接法：
+#   DeepSeek 官方：base_url="https://api.deepseek.com/v1"        model="deepseek-chat"
+#   硅基流动：    base_url="https://api.siliconflow.cn/v1"      model="deepseek-ai/DeepSeek-V3"
+#     （硅基流动 API Key 在 https://cloud.siliconflow.cn 申请；key 只进环境变量不入本文件。
+#       与 DeepSeek key 并存互不覆盖的配法：另设一个环境变量名，如
+#       setx KNOWATLAS_LLM_API_KEY_SF "sk-你的硅基key"，再把 api_key_env 指过去）
 enabled        = true
 base_url       = "https://api.deepseek.com/v1"
 api_key_env    = "KNOWATLAS_LLM_API_KEY"   # 环境变量名；本机已设 DeepSeek key

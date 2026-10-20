@@ -632,7 +632,12 @@ class DataLayer:
         return [self._row_to_entry(r) for r in rows]
 
     def get_tree(self) -> list[dict[str, Any]]:
-        """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。"""
+        """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。
+
+        每个节点带 count = 该子树（含自身、含多父重复出现）的 active 条目数——
+        供 UI 默认隐藏空枝：分类节点本身不删（可能只是条目被舍弃/归档后清空），
+        但不再占视线；用户勾选「显示空分类」后可见。
+        """
         cats = {r["id"]: dict(r) for r in
                 self._conn.execute("SELECT * FROM categories").fetchall()}
         children: dict[str | None, list[str]] = {}
@@ -645,11 +650,30 @@ class DataLayer:
         for cid, p in paths.items():
             first_path.setdefault(cid, p)
 
+        # active 直挂映射（一次查询拿全，Python 侧自底向上聚合子树数）
+        own: dict[str, set[str]] = {}
+        for r in self._conn.execute(
+                "SELECT ec.category_id, ec.entry_id FROM entry_categories ec"
+                " JOIN entries e ON e.id=ec.entry_id WHERE e.status='active'"):
+            own.setdefault(r["category_id"], set()).add(r["entry_id"])
+        memo: dict[str, set[str]] = {}
+
+        def subtree_entries(cid: str) -> set[str]:
+            if cid in memo:
+                return memo[cid]
+            memo[cid] = set()  # 防环占位（多父 DAG 无环时可被后续覆盖）
+            acc = set(own.get(cid, ()))
+            for k in children.get(cid, []):
+                acc |= subtree_entries(k)
+            memo[cid] = acc
+            return acc
+
         def build(cid: str) -> dict[str, Any]:
             c = cats[cid]
             return {
                 "id": cid, "name": c["name"], "origin": c["origin"],
                 "path": first_path.get(cid, c["name"]),
+                "count": len(subtree_entries(cid)),
                 "children": [build(k) for k in sorted(children.get(cid, []))],
             }
 

@@ -20,6 +20,7 @@
   .tree-node > .row > .name { cursor: pointer; }
   .tree-node > .row > .name:hover { text-decoration: underline; }
   .tree-node > .row > .name.active { font-weight: 700; }
+  .tree-node > .row > .name.empty { opacity: .5; font-style: italic; }
   .tree-node > .row > .ops { display: none; gap: 2px; }
   .tree-node > .row:hover > .ops { display: inline-flex; }
   .ops button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
@@ -54,6 +55,9 @@
   <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
   <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
   <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
+  <label style="display:block;margin:8px 0 0;font-size:12px;opacity:.7;user-select:none">
+    <input type="checkbox" id="show-empty-cats"> 显示空分类（条目已清空的）
+  </label>
   <div id="tree">加载中…</div>
 </aside>
 <dialog id="move-dialog">
@@ -80,6 +84,7 @@
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
 let currentCat = null; // 当前选中分类 id
 let refreshCurrent = null; // 当前视图刷新器——写操作成功后局部刷新，不跳转
+let showEmptyCats = localStorage.getItem("knowatlas-show-empty") === "1"; // 空分类默认不占视线
 
 function token() { return localStorage.getItem("knowatlas_token") || ""; }
 // 页面打开时向服务端要一次同源写凭据（服务端种 HttpOnly Cookie，浏览器自动携带）。
@@ -113,7 +118,10 @@ async function writeJSON(url, body) {
 async function loadTree() {
   const data = await (await fetch("/api/tree")).json();
   pathToId = {};
-  const collect = (nodes) => { for (const n of nodes) { pathToId[n.path] = n.id; collect(n.children); } };
+  // 下拉（移动/合并目标）只收非空分类——把条目搬进/合进空分类没有意义
+  const collect = (nodes) => { for (const n of nodes) {
+    if (n.count) pathToId[n.path] = n.id;
+    collect(n.children); } };
   collect(data.tree);
   document.getElementById("catlist").innerHTML =
     Object.keys(pathToId).map(p => `<option value="${p}">`).join("");
@@ -121,11 +129,14 @@ async function loadTree() {
   box.textContent = "";
   const render = (nodes, parent) => {
     for (const n of nodes) {
+      if (!n.count && !showEmptyCats) continue;  // 空枝默认隐藏；分类不删，勾选后可见
       const div = document.createElement("div");
       div.className = "tree-node";
       const row = document.createElement("div"); row.className = "row";
       const name = document.createElement("span");
-      name.className = "name" + (n.id === currentCat ? " active" : "");
+      name.className = "name" + (n.id === currentCat ? " active" : "")
+                     + (n.count ? "" : " empty");
+      if (!n.count) name.title = "该分类（含子分类）下暂无 active 条目";
       name.textContent = n.name;
       name.onclick = () => showCategory(n.id);
       const ops = document.createElement("span"); ops.className = "ops";
@@ -349,6 +360,13 @@ document.getElementById("search").addEventListener("change", async (e) => {
 });
 
 // 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
+const _emptyCb = document.getElementById("show-empty-cats");
+_emptyCb.checked = showEmptyCats;
+_emptyCb.onchange = (e) => {
+  showEmptyCats = e.target.checked;
+  localStorage.setItem("knowatlas-show-empty", showEmptyCats ? "1" : "0");
+  loadTree();
+};
 ensureSession().then(loadTree);
 </script>
 </body>
