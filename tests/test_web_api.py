@@ -149,3 +149,31 @@ def test_write_guard_rejects_bad_cookie(cfg, dl, registries):
         assert w.status_code == 403
     finally:
         os.environ.pop("KNOWATLAS_TEST_TOKEN", None)
+
+
+# ---- 关系图三视图端点（0.2.0 第二十二批） ----
+
+def test_graph_view_endpoints(client, dl):
+    from knowatlas.models import Entry
+    es = [Entry.build(source_type="bookmark", source_key=f"edge:{i}",
+                      title=f"搜索样本{i}", locator=f"https://gv.example/{i}",
+                      locator_canonical=f"https://gv.example/{i}", native_path="书签栏")
+          for i in range(2)]
+    dl.upsert_entries(es)
+    a = dl.create_category("图谱大类", [], "rule")
+    b = dl.create_category("图谱子类", [a.id], "rule")
+    dl.attach_category(es[0].id, a.id, 1.0, "prior", "r1")
+    dl.attach_category(es[1].id, b.id, 1.0, "prior", "r1")
+
+    ov = client.get("/api/graph/overview").json()
+    root = next(n for n in ov["nodes"] if n["name"] == "图谱大类")
+    assert root["kind"] == "category" and root["value"] == 2  # 子树 active 计数
+
+    sub = client.get(f"/api/graph/subtree?category_id={a.id}").json()
+    assert {n["name"] for n in sub["nodes"] if n["kind"] == "category"} >= {"图谱大类", "图谱子类"}
+    assert client.get("/api/graph/subtree?category_id=nope").status_code == 404
+
+    sr = client.get("/api/graph/search?q=搜索样本").json()
+    assert {n["name"] for n in sr["nodes"] if n["kind"] == "entry"} == {"搜索样本0", "搜索样本1"}
+    assert {n["name"] for n in sr["nodes"] if n["kind"] == "category"} >= {"图谱大类"}
+    assert client.get("/api/graph/search?q=").json()["nodes"] == []

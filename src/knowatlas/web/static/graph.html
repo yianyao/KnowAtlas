@@ -8,8 +8,12 @@
   :root { color-scheme: light dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
          display: flex; flex-direction: column; height: 100vh; }
-  header { padding: 8px 16px; display: flex; gap: 16px; align-items: center; }
-  header a { color: #4a9eff; text-decoration: none; }
+  header { padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header a, header button { color: #4a9eff; text-decoration: none; background: none;
+         border: 1px solid #4a9eff55; border-radius: 4px; padding: 2px 8px; cursor: pointer;
+         font-size: 13px; }
+  #q { padding: 3px 8px; border: 1px solid #8886; border-radius: 4px; font-size: 13px; }
+  #crumb { font-size: 13px; }
   #tip { color: #888; font-size: 12px; }
   #chart { flex: 1; }
 </style>
@@ -17,42 +21,58 @@
 <body>
 <header>
   <a href="/index.html">← 返回分类树</a>
-  <strong>知识关系图（v0：结构关系）</strong>
+  <strong>知识关系图</strong>
+  <input id="q" placeholder="搜条目标题 / 分类名，回车出子图" size="30">
+  <button id="home">大类总览</button>
+  <span id="crumb"></span>
   <span id="tip">加载中…</span>
 </header>
 <div id="chart"></div>
 <script>
-fetch("/api/graph").then(r => r.json()).then(data => {
-  const color = { category: "#4a9eff", entry: "#7ba7d7", domain: "#999" };
-  const size = { category: 26, entry: 7, domain: 10 };
-  const nodes = data.nodes.map(n => ({
-    id: n.id, name: n.name,
-    symbolSize: size[n.kind] || 7,
-    itemStyle: { color: color[n.kind] || "#7ba7d7" },
-    label: { show: n.kind !== "entry" || false, fontSize: n.kind === "category" ? 13 : 10 },
-    kind: n.kind,
-  }));
+const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
+                     llm: "语义判断", manual: "人工校正", embedding: "向量聚类" };
+const KIND_NAME = { category: "分类", entry: "条目", domain: "域名" };
+const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
+const qBox = document.getElementById("q");
+const crumb = document.getElementById("crumb");
+const tip = document.getElementById("tip");
+
+// node.id 约定：c:<分类id> / e:<条目id> / d:<域名>；分类节点可下钻，条目可打开
+function render(data, crumbText) {
+  const nodes = data.nodes.map(n => {
+    const size = n.kind === "category"
+      ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)   // 总览气泡按 count
+      : (n.kind === "domain" ? 10 : 7);
+    return {
+      id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
+      symbolSize: size,
+      itemStyle: { color: n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
+                     : n.kind === "domain" ? "#999" : "#7ba7d7",
+                   opacity: n.ctx ? 0.55 : 1 },
+      label: { show: n.kind === "category" || n.kind === "domain"
+                    || (n.kind === "entry" && data.nodes.length <= 50),
+               fontSize: n.kind === "category" ? 13 : 10,
+               color: n.ctx ? "#6b7f94" : undefined },
+    };
+  });
+  const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
   const links = data.links.map(l => ({
-    source: l.source, target: l.target,
+    source: l.source, target: l.target, kind: l.kind,
     lineStyle: { color: l.kind === "same_host" ? "rgba(160,160,160,.35)" : "rgba(74,158,255,.45)",
                  width: l.kind === "same_host" ? 1 : 1.6, curveness: 0.1 },
   }));
-  document.getElementById("tip").textContent =
-    `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length} / 条目 ${nodes.filter(n=>n.kind==="entry").length} / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}。语义级关系（正文引用、相似度）随 M2/M4 接入。`;
-  const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
-  const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
-  const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
-                       llm: "语义判断", manual: "人工校正" };
+  crumb.textContent = crumbText;
+  tip.textContent =
+    `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length}` +
+    ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}` +
+    ` / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}` +
+    `。点分类下钻 / 点条目打开原文 / 回车搜索。`;
   chart.setOption({
     tooltip: { formatter: p => {
-      if (p.dataType === "edge") {
-        const kind = KIND_LABEL[p.data.kind] || p.data.kind || "";
-        return `${nameOf[p.data.source] || p.data.source}<br>— ${kind} →<br>${nameOf[p.data.target] || p.data.target}`;
-      }
-      return `${p.data.name}（${({category: "分类", entry: "条目", domain: "域名"})[p.data.kind] || p.data.kind}）`;
+      if (p.dataType === "edge")
+        return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →<br>${nameOf[p.data.target] || p.data.target}`;
+      return `${p.data.name}（${KIND_NAME[p.data.kind] || p.data.kind}）`;
     } },
-    legend: { data: ["category", "entry", "domain"],
-              formatter: k => ({category: "分类", entry: "条目", domain: "域名"})[k] },
     series: [{
       type: "graph", layout: "force", roam: true, draggable: true,
       force: { repulsion: 90, edgeLength: [30, 120], gravity: 0.08 },
@@ -60,9 +80,53 @@ fetch("/api/graph").then(r => r.json()).then(data => {
       emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
       label: { position: "right" },
     }],
-  });
-  window.addEventListener("resize", () => chart.resize());
+  }, { notMerge: true });   // 视图切换整体替换，防旧节点残留
+}
+
+async function showOverview() {
+  qBox.value = "";
+  const data = await (await fetch("/api/graph/overview")).json();
+  if (!data.nodes.length) {
+    tip.textContent = "还没有一级大类——先跑 ksync 建分类。";
+    render({ nodes: [], links: [] }, "");
+    return;
+  }
+  render(data, "大类总览——点大类下钻，或输入关键字搜索");
+}
+
+async function showSubtree(categoryId) {
+  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}`);
+  if (r.status === 404) { tip.textContent = "分类不存在（可能已删）。"; return; }
+  const data = await r.json();
+  const rootName = (data.nodes.find(n => n.id === "c:" + categoryId) || {}).name || categoryId;
+  render(data, `子树：${rootName}（祖先链为灰底上下文）`);
+}
+
+async function doSearch(q) {
+  if (!q.trim()) { showOverview(); return; }
+  const data = await (await fetch(`/api/graph/search?q=${encodeURIComponent(q.trim())}`)).json();
+  if (!data.nodes.length) {
+    render(data, `搜索「${q.trim()}」`);
+    tip.textContent = `没有命中条目或分类——换个关键字（只搜条目标题与分类名）。`;
+    return;
+  }
+  render(data, `搜索「${q.trim()}」——只含命中条目及其分类链`);
+}
+
+chart.on("click", p => {
+  const d = p.data;
+  if (!d) return;
+  if (d.kind === "category" && String(d.id).startsWith("c:")) showSubtree(String(d.id).slice(2));
+  else if (d.kind === "entry" && d.locator) window.open(d.locator, "_blank", "noopener");
 });
+
+qBox.addEventListener("keydown", e => {
+  if (e.key === "Enter") doSearch(qBox.value);
+  if (e.key === "Escape") showOverview();
+});
+document.getElementById("home").onclick = showOverview;
+window.addEventListener("resize", () => chart.resize());
+showOverview();
 </script>
 </body>
 </html>

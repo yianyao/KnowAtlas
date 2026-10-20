@@ -417,3 +417,30 @@
 - **测试**：test_llm_pool.py 重写扩到 15 项（failover 全路径、5xx 跳同后端 key、4xx 不切、
   聚合只带指纹、旧消息兼容、扁平配置兼容、数组表解析与覆盖、无 key 后端跳过），
   另做端到端真 TOML 验证（DeepSeek 优先 + 硅基双 key 兜底）；**全量 125 项通过**。
+
+### 新增/UI（0.2.0 第二十二批：关系图改三视图——大类总览 → 搜索子图/子树下钻）
+
+- **用户定调（2026-10-20，附截图）**：主图按树节点定大类没意见，但「图谱开始只显示大类，
+  给个搜索框，输入关键字再只显示关键字相关的」——即**搜索驱动的按需子图**，取代
+  一次渲染 438 节点的全量力导（采纳，比纯树形下钻更好：搜索直达，不用逐层点）。
+- **数据层三视图（`datalayer/db.py`）**：
+  - `get_graph_overview()`：只含一级大类节点，value = 子树 active 条目数（气泡大小依据）；
+  - `get_graph_subtree(cid, limit=120)`：子孙分类 + 挂接条目（近 limit 条，带 locator）
+    + 祖先链灰底上下文；分类不存在返回 None → 404；
+  - `search_graph(q, limit=80)`：条目标题 / 分类名 LIKE 命中（`%/_` 转义防注入语义），
+    只带命中条目 + 其直挂分类 + 祖先链——**不扩散拉全子树**，子图小而相关；
+    同域名 ≥2 条仍聚出域名节点（与 v0 口径一致）。
+- **API**：`/api/graph/overview`、`/api/graph/subtree`、`/api/graph/search`；
+  旧 `/api/graph` 保留兼容。
+- **前端 `graph.html` 重写**：初始渲染大类气泡（大小 ∝ 子树条目数）；搜索框回车出子图
+  （Esc 回总览）；点分类下钻（`notMerge` 整体替换防旧节点残留）；点条目 `window.open`
+  原文；视图提示语随状态更新。
+- **配置核实（用户截图两问）**：①多后端**书写顺序即优先级**——用户 config 硅基在前即
+  优先用硅基，注册表注入实测 2 后端就绪 + 真实小调用走硅基 DeepSeek-V4.1-Flash 返回成功；
+  ②`max_batch` **只认 `[llm]` 扁平键**，写进 `[[llm.backends]]` 块会被静默忽略
+  （消费方是 sync/classify_deep 的 `cfg.get("llm.max_batch")`，与供应商无关）——已把
+  用户 config 里的 max_batch 移回 [llm]，example.toml 注明；另发现 config 引用的
+  `KNOWATLAS_LLM_API_KEY_SF2` 两级注册表均未设（该后端 key 池暂只有 SF1 一把 key，
+  未设变量被静默跳过，属预期；SF2 留作第二把 key 的槽位）。
+- **测试**：+4 数据层（总览根计数 / 子树定位与 locator / 搜索命中与分类链与转义 /
+  同域聚合）+1 端点（overview/subtree/404/search/空 q），**全量 130 项通过**。

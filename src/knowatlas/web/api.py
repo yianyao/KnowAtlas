@@ -227,8 +227,30 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
-        """关系图数据（结构关系 v0：分类挂接 + 同域名）。"""
+        """关系图数据（结构关系 v0：分类挂接 + 同域名）。保留兼容；新视图见下。"""
         return dl.get_graph_data(max_entries=max_entries)
+
+    @app.get("/api/graph/overview")
+    def graph_overview():
+        """大纲图（初始视图）：只含一级大类，value = 子树 active 条目数。"""
+        return dl.get_graph_overview()
+
+    @app.get("/api/graph/subtree")
+    def graph_subtree(category_id: str, limit: int = 120):
+        """下钻图：某分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文。"""
+        data = dl.get_graph_subtree(category_id, limit=limit)
+        if data is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "分类不存在"}},
+                                status_code=404)
+        return data
+
+    @app.get("/api/graph/search")
+    def graph_search(q: str = "", limit: int = 80):
+        """搜索驱动子图：条目标题 / 分类名命中 + 各自分类链与挂接边（按需加载）。"""
+        q = q.strip()
+        if not q:
+            return {"query": q, "nodes": [], "links": []}
+        return dl.search_graph(q, limit=limit)
 
     @app.post("/api/entries/{entry_id}/recategorize")
     async def recategorize(entry_id: str, request: Request):

@@ -543,6 +543,177 @@ class DataLayer:
                 links.append({"source": m, "target": domain_id, "kind": "same_host"})
         return {"nodes": nodes, "links": links}
 
+    # ---- 关系图三视图（0.2.0 第二十二批：总览 → 搜索/下钻按需子图） ----
+    # 用户定调：全量力导一次渲染会拖垮——初始只显示一级大类；搜索框按关键字出
+    # 相关子图；点分类节点下钻子树。全部按需加载，服务端裁剪。
+
+    def _cat_descendants(self, cid: str) -> list[str]:
+        """子树全 id（含自身；多父 DAG 防环）。"""
+        down: dict[str, list[str]] = {}
+        for r in self._conn.execute("SELECT category_id, parent_id FROM category_parents"):
+            down.setdefault(r["parent_id"], []).append(r["category_id"])
+        ids, stack, seen = [cid], [cid], {cid}
+        while stack:
+            x = stack.pop()
+            for k in down.get(x, []):
+                if k not in seen:
+                    seen.add(k)
+                    ids.append(k)
+                    stack.append(k)
+        return ids
+
+    def _cat_ancestors(self, cid: str) -> list[str]:
+        """祖先链 id（自父到根；多父取全部父，BFS 向上，防环）。"""
+        up: dict[str, list[str]] = {}
+        for r in self._conn.execute("SELECT category_id, parent_id FROM category_parents"):
+            up.setdefault(r["category_id"], []).append(r["parent_id"])
+        out: list[str] = []
+        stack, seen = list(up.get(cid, [])), {cid}
+        while stack:
+            x = stack.pop()
+            if x in seen:
+                continue
+            seen.add(x)
+            out.append(x)
+            stack.extend(up.get(x, []))
+        return out
+
+    @staticmethod
+    def _like_pattern(q: str) -> str:
+        """LIKE 模式（转义 %/_，配 ESCAPE '\\' 使用）。"""
+        return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+    def _host_group_links(self, entry_nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """匹配条目间的同域名聚合（≥2 条才出域名节点）——与 v0 口径一致。"""
+        from urllib.parse import urlsplit
+
+        members: dict[str, list[str]] = {}
+        for n in entry_nodes:
+            host = n.get("host") or ""
+            if host:
+                members.setdefault(host, []).append(n["id"])
+        nodes: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        for host, ids in members.items():
+            if len(ids) < 2:
+                continue
+            nodes.append({"id": f"d:{host}", "name": host, "kind": "domain"})
+            for m in ids:
+                links.append({"source": m, "target": f"d:{host}", "kind": "same_host"})
+        return nodes, links
+
+    def get_graph_overview(self) -> dict[str, Any]:
+        """大纲图：只含一级大类节点，value = 子树 active 条目数（前端按它定气泡大小）。"""
+        has_parent = {r["category_id"] for r in
+                      self._conn.execute("SELECT category_id FROM category_parents")}
+        nodes: list[dict[str, Any]] = []
+        for r in self._conn.execute("SELECT id, name FROM categories ORDER BY name"):
+            if r["id"] in has_parent:
+                continue
+            ids = self._cat_descendants(r["id"])
+            ph = ",".join("?" * len(ids))
+            count = self._conn.execute(
+                "SELECT count(DISTINCT ec.entry_id) FROM entry_categories ec"
+                " JOIN entries e ON e.id=ec.entry_id AND e.status='active'"
+                f" WHERE ec.category_id IN ({ph})", ids).fetchone()[0]
+            nodes.append({"id": f"c:{r['id']}", "name": r["name"],
+                          "kind": "category", "value": count})
+        return {"nodes": nodes, "links": []}
+
+    def get_graph_subtree(self, category_id: str, limit: int = 120) -> dict[str, Any] | None:
+        """子树下钻图：该分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文。
+
+        条目节点带 locator（前端点击可打开原链接）；分类不存在返回 None。
+        """
+        cat = self._conn.execute(
+            "SELECT id, name FROM categories WHERE id=?", (category_id,)).fetchone()
+        if cat is None:
+            return None
+        cats = {r["id"]: r["name"] for r in
+                self._conn.execute("SELECT id, name FROM categories").fetchall()}
+        sub_ids = self._cat_descendants(category_id)
+        anc_ids = [a for a in self._cat_ancestors(category_id) if a not in sub_ids]
+        ph = ",".join("?" * len(sub_ids))
+        entries = self._conn.execute(
+            "SELECT DISTINCT e.id, e.title, e.locator FROM entries e"
+            f" JOIN entry_categories ec ON ec.entry_id=e.id"
+            f" WHERE ec.category_id IN ({ph}) AND e.status='active'"
+            " ORDER BY e.created_at DESC LIMIT ?", (*sub_ids, limit)).fetchall()
+        entry_ids = [e["id"] for e in entries]
+        nodes: list[dict[str, Any]] = [
+            {"id": f"c:{a}", "name": cats.get(a, "?"), "kind": "category", "ctx": True}
+            for a in anc_ids]
+        for cid in sub_ids:
+            nodes.append({"id": f"c:{cid}", "name": cats.get(cid, "?"), "kind": "category"})
+        from urllib.parse import urlsplit
+        entry_nodes: list[dict[str, Any]] = []
+        for e in entries:
+            host = urlsplit(e["locator"]).hostname or ""
+            entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
+                                "kind": "entry", "locator": e["locator"], "host": host})
+        nodes.extend(entry_nodes)
+        links: list[dict[str, Any]] = []
+        if entry_ids:
+            eph = ",".join("?" * len(entry_ids))
+            for r in self._conn.execute(
+                    f"SELECT entry_id, category_id, origin FROM entry_categories"
+                    f" WHERE entry_id IN ({eph}) AND category_id IN ({ph})",
+                    (*entry_ids, *sub_ids)):
+                links.append({"source": f"e:{r['entry_id']}", "target": f"c:{r['category_id']}",
+                              "kind": r["origin"]})
+        d_nodes, d_links = self._host_group_links(entry_nodes)
+        nodes.extend(d_nodes)
+        links.extend(d_links)
+        return {"root": category_id, "nodes": nodes, "links": links}
+
+    def search_graph(self, q: str, limit: int = 80) -> dict[str, Any]:
+        """搜索驱动子图：条目标题 / 分类名命中 + 各自分类链与挂接边（按需加载）。
+
+        只带命中条目、其直挂分类与祖先链——不扩散拉全子树，保证子图小而相关。
+        """
+        from urllib.parse import urlsplit
+
+        pat = self._like_pattern(q)
+        matched_entries = self._conn.execute(
+            "SELECT id, title, locator FROM entries WHERE status='active'"
+            " AND title LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT ?",
+            (pat, limit)).fetchall()
+        matched_cats = [r["id"] for r in self._conn.execute(
+            "SELECT id FROM categories WHERE name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 20",
+            (pat,))]
+        cats = {r["id"]: r["name"] for r in
+                self._conn.execute("SELECT id, name FROM categories").fetchall()}
+        nodes: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        entry_ids = [e["id"] for e in matched_entries]
+        entry_nodes: list[dict[str, Any]] = []
+        for e in matched_entries:
+            host = urlsplit(e["locator"]).hostname or ""
+            entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
+                                "kind": "entry", "locator": e["locator"], "host": host})
+        nodes.extend(entry_nodes)
+        # 命中分类节点（含其祖先链，保证能看见大类归属）
+        involved: set[str] = set(matched_cats)
+        for cid in matched_cats:
+            involved.update(self._cat_ancestors(cid))
+        if entry_ids:
+            eph = ",".join("?" * len(entry_ids))
+            for r in self._conn.execute(
+                    f"SELECT entry_id, category_id, origin FROM entry_categories"
+                    f" WHERE entry_id IN ({eph})", entry_ids):
+                cid = r["category_id"]
+                links.append({"source": f"e:{r['entry_id']}", "target": f"c:{cid}",
+                              "kind": r["origin"]})
+                involved.add(cid)
+                involved.update(self._cat_ancestors(cid))
+        for cid in involved:
+            if cid in cats:
+                nodes.append({"id": f"c:{cid}", "name": cats[cid], "kind": "category"})
+        d_nodes, d_links = self._host_group_links(entry_nodes)
+        nodes.extend(d_nodes)
+        links.extend(d_links)
+        return {"query": q, "nodes": nodes, "links": links}
+
     def delete_empty_categories(self, *, protect_manual: bool = True) -> list[str]:
         """删除「空壳」分类：无条目挂接且无子类。返回被删的 (id, name) 名单。
 

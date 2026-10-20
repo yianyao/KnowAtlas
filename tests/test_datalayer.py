@@ -252,3 +252,67 @@ def test_tree_count_multi_parent_counts_entry_under_each_parent(dl):
     dl.attach_category(e.id, y.id, 1.0, "manual", "run")
     tree = {n["name"]: n for n in dl.get_tree()}
     assert tree["X"]["count"] == 1 and tree["Y"]["count"] == 1
+
+
+# ---- 关系图三视图（0.2.0 第二十二批：总览 → 搜索/下钻按需子图） ----
+
+def _graph_fixture(dl):
+    """A(大类) → B(子类)；A 挂 1 条目、B 挂 2 条目（同 host）+1 archived。"""
+    es = [make_entry(source_key=f"https://h.com/{i}", locator=f"https://h.com/{i}",
+                     title=f"条目{i}") for i in range(3)]
+    es.append(make_entry(source_key="https://x.com/gone", locator="https://x.com/gone",
+                         title="已归档"))
+    dl.upsert_entries(es)
+    a = dl.create_category("大类A", [], "rule")
+    b = dl.create_category("子类B", [a.id], "rule")
+    dl.attach_category(es[0].id, a.id, 1.0, "prior", "r1")
+    dl.attach_category(es[1].id, b.id, 1.0, "prior", "r1")
+    dl.attach_category(es[2].id, b.id, 1.0, "llm", "r1")
+    dl.attach_category(es[3].id, b.id, 1.0, "rule", "r1")
+    dl.set_status([es[3].id], "archived")
+    return a, b, es
+
+
+def test_graph_overview_roots_only_with_subtree_count(dl):
+    a, b, es = _graph_fixture(dl)
+    data = dl.get_graph_overview()
+    assert [n["name"] for n in data["nodes"]] == ["大类A"]  # 只含一级大类
+    assert data["nodes"][0]["value"] == 3  # A(1) + B 子树 active(2)，archived 不计
+
+
+def test_graph_subtree_entries_ancestors_and_locator(dl):
+    a, b, es = _graph_fixture(dl)
+    data = dl.get_graph_subtree(a.id)
+    assert data is not None
+    kinds = {n["id"]: n for n in data["nodes"]}
+    assert set(kinds) == ({f"c:{a.id}", f"c:{b.id}"}
+                          | {f"e:{e.id}" for e in es[:3]} | {"d:h.com"})  # 同域聚合节点
+    # 条目带 locator（前端点击打开原文）
+    assert kinds[f"e:{es[1].id}"]["locator"] == "https://h.com/1"
+    # 挂接边连子树内分类；同域边连域名节点——均不出子树范围
+    assert all(l["target"].startswith(("c:", "d:")) for l in data["links"])
+    assert dl.get_graph_subtree("nonexistent0") is None
+
+
+def test_graph_search_matches_title_and_category_with_chain(dl):
+    a, b, es = _graph_fixture(dl)
+    # 标题命中
+    data = dl.search_graph("条目1")
+    ids = {n["id"] for n in data["nodes"]}
+    assert f"e:{es[1].id}" in ids and f"c:{a.id}" in ids  # 命中条目 + 祖先大类
+    # 分类名命中：出该分类与其祖先，但不扩散全子树条目
+    data = dl.search_graph("子类B")
+    ids = {n["id"] for n in data["nodes"]}
+    assert f"c:{b.id}" in ids and f"c:{a.id}" in ids
+    assert f"e:{es[0].id}" not in ids  # A 的其他条目不因搜到 B 而涌入
+    # LIKE 通配符转义：字面 % 不当通配符用
+    assert dl.search_graph("%")["nodes"] == []
+
+
+def test_graph_search_groups_same_host(dl):
+    es = [make_entry(source_key=f"https://z.com/{i}", locator=f"https://z.com/{i}",
+                     title=f"同站{i}") for i in range(2)]
+    dl.upsert_entries(es)
+    data = dl.search_graph("同站")
+    assert any(n["kind"] == "domain" and n["name"] == "z.com" for n in data["nodes"])
+

@@ -63,7 +63,9 @@ base_url       = "https://api.deepseek.com/v1"
 api_key_env    = "KNOWATLAS_LLM_API_KEY"   # 环境变量名；本机已设 DeepSeek key
 model          = "deepseek-chat"
 temperature    = 0.2
-max_batch      = 20                    # 每次批量送给 LLM 的条目数（控成本）
+max_batch      = 20                    # 每次批量送给 LLM 的条目数（控成本）。
+                                       # 只认 [llm] 扁平键——写进 [[llm.backends]] 块里
+                                       # 会被静默忽略；与用哪家供应商无关，放全局即可
 
 [embedding]                             # 可选级；依赖缺失自动降级
 enabled  = false
