@@ -457,3 +457,25 @@
   （只读、≤100 id、声明在 `/api/entries/{entry_id}` 之前防路径参数吞掉 "linkage"）。
   双向联动①（点树看条目）M0.5 已有。Phase 1「分类树 UI 完整版」勾结。
 - **测试**：+1（linkage 批量/空 id/路由顺序），**全量 131 项通过**。
+
+### 新增（0.2.0 第二十四批：DeepSeek Fetch 升级抓取后端接入——M2 第一项落地）
+
+- **外部事实核实（2026-10-20 检索）**：DeepSeek Fetch API 于 2026-10-17 官方上线——
+  `POST https://api.deepseek.com/v1/tools/fetch`，Bearer 鉴权，返回 {title, content(markdown)}；
+  5 元/千次成功请求（失败/超时/空结果不计费）；账号级 5 QPS + 域级限速。设计文档命名押中。
+- **`fetchers/http_deepseek.py` 实装（替换原占位 stub）**：
+  - 429 指数退避（0.8s 起步 ×2，fetch.max_retries 次）；其余非 200 直接抛——失败不计费，
+    重试同请求无益的 4xx 更不该烧钱；
+  - 请求前客户端预检 URL（http/https、≤8192 字符）——不合规请求不发出；
+  - key 走环境变量：新配置键 `fetch.deepseek_api_key_env`（默认 KNOWATLAS_LLM_API_KEY，
+    与 LLM 后端共用同一把 DeepSeek key）+ `fetch.deepseek_base_url`（canary config_keys
+    摘要已重录 31d80a965903）；key 本体不入配置/日志（铁律）；
+  - 空正文（目标站反爬/无正文）明确报错并注明按规范不计费。
+- **升级路由**：`fetch_with_fallback` 挂点早已就绪（simple 失败：HTTP≥400/正文过短/提取
+  失败 → fallback_backend）；用户 config 的 fallback_backend 由空改为 deepseek 启用。
+  K1 纪律不变：同步默认不抓，抓取只发生在 kadd / ksync --fetch-limit。
+- **真实冒烟**：升级路由触发 ✅、鉴权 ✅、200 解析 ✅（api-docs.deepseek.com 真实抓回
+  1173 字符 Markdown）；知乎/B站连 DeepSeek 自家抓取器也被拒（404 failed to fetch /
+  超时）——符合官方「受目标站点访问策略影响」，错误透明、失败不计费。
+- **测试**：+7（全 mock：升级路由端到端 / 429 退避序列 0.8s,1.6s / 429 耗尽 / 非 429 不重试 /
+  空正文 / 缺 key 带 hint 不发请求 / 坏 URL 预检不发请求），**全量 138 项通过**。

@@ -78,8 +78,8 @@ reader: 执行者（人与 agent）
 
 > Gate：DeepSeek Fetch 后端 + 邮件适配器跑通；同一 URL 跨源只抓一次正文并正确合并（attach_locator，双 locator 可跳转）；默认全量同步不触发任何抓取。
 
-- [ ] http 内容获取器 · DeepSeek Fetch 后端（可插拔：默认 simple，超时/正文过短/已知难站自动升级；429 指数退避；hash 缓存保证同一 URL 不重复计费）
-      - 探针：mock 一个 simple 失败的 URL，自动走 DeepSeek 且内容入 content store
+- [x] http 内容获取器 · DeepSeek Fetch 后端（可插拔：默认 simple，超时/正文过短/已知难站自动升级；429 指数退避；hash 缓存保证同一 URL 不重复计费）——2026-10-20 完成（0.2.0 第二十四批）：Fetch API 2026-10-17 官方上线（POST /v1/tools/fetch 返回 Markdown，5 元/千次成功请求，仅成功计费），接入 fetchers/http_deepseek.py（429 指数退避 0.8s×2ⁿ、URL 预检 ≤8192、key 复用 KNOWATLAS_LLM_API_KEY）；fetch_with_fallback 升级路由早已就绪，用户 config 已启用 fallback_backend=deepseek
+      - 探针：mock 一个 simple 失败的 URL，自动走 DeepSeek 且内容入 content store ✅（7 项 mock 测试）+ 真实冒烟（升级路由/鉴权/200 解析全通；知乎/B站连 DeepSeek 抓取器也过不去，属官方「受目标站点访问策略影响」，错误透明不计费）
 - [ ] kadd 联动补全：手动粘贴的 URL 自动抓正文并跑语义分类（M0.5 已建条目，此处补全链路）
       - 探针：kadd 一个文章 URL，同步结束后该条目有正文且离开暂存区（或被明确标记无法抓取）
 - [ ] content store（正文按 content_hash 缓存，fetcher 只抓一次）

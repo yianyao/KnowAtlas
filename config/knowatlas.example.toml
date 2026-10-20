@@ -82,6 +82,13 @@ max_retries       = 3
 on_sync           = false               # K1：同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
 max_fetch_per_run = 50
 
+# DeepSeek Fetch 升级后端（0.2.0 第二十四批接入；2026-10-17 官方上线）：
+# simple 失败（HTTP≥400 / 正文过短 / 提取失败）的 URL 自动升级到这里，
+# 返回 Markdown 正文。5 元/千次成功请求（失败/空结果不计费）；账号级 5 QPS + 域级限速，
+# 429 按上面的 max_retries 指数退避。key 只进环境变量（默认复用 LLM 的 DeepSeek key）。
+deepseek_base_url      = "https://api.deepseek.com"
+deepseek_api_key_env   = "KNOWATLAS_LLM_API_KEY"
+
 # ---- 知识源 ----
 # 分源原则：按"数据形态"分，不按"目录"分。同一个目录（如 D:/Data/百卓）既有普通文档
 # 又有 .emmx 脑图时，folders 和 emmx 两个源都把该目录填进各自的 roots 即可，互不冲突。
