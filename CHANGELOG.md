@@ -500,3 +500,35 @@
 - **Web**：待清理候选 reasonLabel 新增 无法访问/解析失败/乱码 三种来源徽标。
 - **测试 +4**（is_garbled 阈值、失败/乱码/成功三路端到端、用户否决不被覆盖），
   **全量 141 项通过**。
+
+### 运维记录（0.2.0 第二十五批续：路径 A 实跑——暂存区清零完成）
+
+- **执行**：`ksync --source folders --full --fetch-limit N` 分 6 轮（500/700/900/2000/1000/1200），
+  每轮额度被失败重试消耗后追加；期间修了三个实跑暴露的 bug（见上）。
+- **重大事实：folder 条目全量换 id**——此前百卓目录用临时 config（roots=D:/Data/百卓）
+  入库，id 按相对路径派生；本次真实 config（roots=D:/Data）下 rel 路径多一层 `百卓/` 前缀，
+  2613 条全部按新建处理，旧 1040 条被删除检测归档。**人工资产核查：归档条目上人工挂接 0、
+  value_flag=ok 否决 0——无损失**；55 条用户已拒绝的旧 folder 条目按 locator 映射
+  （file://x → file://百卓/x）把拒绝决定迁移到新条目（task_log 留痕 rekey_migrate）。
+- **终态（2026-10-20 12:45 实测）**：folder active 2558，有正文 1464，缺正文且未打标仅 2；
+  挂接 1758 / 暂存 800。全库 active 3576；**待清理候选 1408**（unparseable 1076 + LLM 判非知识
+  303 + unreachable 28 + garbled 1）；rejected 348。
+- **unparseable 1076 的构成**：git/code 仓库内的 vendor 测试样例与坏 Office 文件
+  （phpoffice samples、specSkill fixtures 等）——正是用户铁律「不是可用的知识」的典型，
+  全部进待清理候选等用户一键处置。经验：代码仓库目录不适合按 include_exts 白名单收
+  （样例数据文件噪音高），后续可考虑 exclude_globs 按 vendor/samples 目录级排除。
+- 书签源的 http 补抓（约 30s/条的知乎类超时）未在本轮跑，留待后台单独执行。
+
+### 变更工单（0.2.0 第二十六批：方案增补——主题工作区与放射导航契约草案，纯文档）
+
+- **来源**：用户与外部讨论收敛的交互方案（放射导航 + 串联工作区双模式）要求对账现状、
+  判定取舍、整理进方案。
+- **对账结论**：三层两契约、书签/文件夹/脑图适配、FTS、三级流水线、L0 价值守卫、
+  关系图三视图、DeepSeek Fetch（外部稿排第三阶段，实际第二十四批已落地）均已实现；
+  **真增量 = Thread 串联工作区（数据模型 threads/thread_items + topic_recall +
+  thread_suggest）与放射导航机制增强（relation_reason/导航栈面包屑/Top-N/双向反查）**；
+  负反馈表设计预留不建（价值侧已有 value_flag=ok）；统一入口工作台为 UI 迭代项。
+- **命名纠偏**：外部稿 CLI `atlas`、`knowatlas.db` 为未实施的旧称——实际
+  `python -m knowatlas` + `data/knowledge.db`（完整方案 §9.4 已注明）。
+- **落点**：完整方案新增 §9.4（契约草案，标注「实现时字段变更走 CHANGELOG 工单」）；
+  TODO Phase 4 新增三待办（串联工作区最高优先 > 放射增强 > 统一入口），词云/时间线顺延。
