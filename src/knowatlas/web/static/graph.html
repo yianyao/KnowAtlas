@@ -29,6 +29,15 @@
   #revpanel .rkind { display: inline-block; border: 1px solid #8886; border-radius: 3px;
                      padding: 0 4px; margin-right: 4px; font-size: 11px; color: #888; }
   #revpanel a { color: #4a9eff; }
+  /* 节点弹窗卡（第三十五批）：固定弹窗不跟鼠标，可移入保持，点按钮进原文 */
+  #nodecard { position: fixed; width: 300px; max-width: 90vw; z-index: 9;
+              border: 1px solid #8886; border-radius: 6px; padding: 8px 10px;
+              background: inherit; font-size: 13px; box-shadow: 0 2px 12px #0007; }
+  #nodecard .ct { font-weight: 600; margin-bottom: 4px; }
+  #nodecard .cp { color: #888; font-size: 12px; margin: 2px 0; }
+  #nodecard .cs { margin: 6px 0; font-size: 12px; line-height: 1.5;
+                  max-height: 130px; overflow: auto; white-space: pre-wrap; }
+  #nodecard .copen { display: inline-block; margin-top: 2px; color: #4a9eff; }
 </style>
 </head>
 <body>
@@ -49,6 +58,7 @@
 </header>
 <div id="chart"></div>
 <div id="revpanel" hidden></div>
+<div id="nodecard" hidden></div>
 <script>
 const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
                      llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
@@ -63,6 +73,58 @@ const crumb = document.getElementById("crumb");
 const tip = document.getElementById("tip");
 const revpanel = document.getElementById("revpanel");
 const expandBtn = document.getElementById("expand");
+
+// ---- 节点弹窗卡（第三十五批）：悬浮固定弹窗显示概要；移入保持/移开即隐/点按钮进原文 ----
+const nodecard = document.getElementById("nodecard");
+const summaryCache = new Map();   // entry_id -> snippet（重复悬浮不重复请求）
+let cardHideTimer = null, cardKey = null;
+
+function hideCardSoon() {         // 用户口径③：鼠标走（节点与弹窗都离开），弹窗隐
+  clearTimeout(cardHideTimer);
+  cardHideTimer = setTimeout(() => { nodecard.hidden = true; }, 250);
+}
+function keepCard() { clearTimeout(cardHideTimer); }
+nodecard.addEventListener("mouseenter", keepCard);
+nodecard.addEventListener("mouseleave", hideCardSoon);
+
+function showCard(d, cx, cy) {
+  keepCard();
+  cardKey = String(d.id);
+  const info = [];
+  if (d.path) info.push(`<div class="cp">路径：${d.path}</div>`);
+  if (d.reasons && d.reasons.length)
+    info.push(`<div class="cp">关联：${d.reasons.join("；")}</div>`);
+  nodecard.innerHTML =
+    `<div class="ct">${d.name}（${KIND_NAME[d.kind] || d.kind}）</div>` + info.join("")
+    + (d.kind === "entry" ? `<div class="cs">概要加载中…</div>` : "")
+    + (d.locator ? `<a class="copen" href="${d.locator}" target="_blank" rel="noopener">▶ 打开原文 ↗</a>` : "");
+  // 视口内夹紧：不跟鼠标跑，出了屏幕边缘往回拉
+  nodecard.style.left = Math.min(cx + 14, window.innerWidth - 320) + "px";
+  nodecard.style.top = Math.min(cy + 14, window.innerHeight - 200) + "px";
+  nodecard.hidden = false;
+  if (d.kind === "entry") {
+    const eid = String(d.id).slice(2);
+    const fill = txt => {
+      const el = nodecard.querySelector(".cs");
+      if (el && cardKey === String(d.id)) el.textContent = txt || "（无正文摘要）";
+    };
+    if (summaryCache.has(eid)) fill(summaryCache.get(eid));
+    else fetch(`/api/entries/${eid}/summary`).then(r => r.ok ? r.json() : null).then(s => {
+      if (!s) return;
+      summaryCache.set(eid, s.snippet);
+      fill(s.snippet);
+    }).catch(() => {});
+  }
+}
+chart.on("mouseover", p => {
+  if (p.dataType === "edge" || !p.data || !p.data.kind) return;
+  const native = p.event && p.event.event;    // 原生鼠标事件 → 视口坐标
+  showCard(p.data, native ? native.clientX : 0, native ? native.clientY : 0);
+});
+chart.on("mouseout", p => {
+  if (p.dataType === "edge" || !p.data || !p.data.kind) return;
+  hideCardSoon();
+});
 
 // ---- 导航栈 + 面包屑（总览/搜索/子树/放射统一压栈，任一级回跳） ----
 const nav = [];          // {label, load(push)}
@@ -84,6 +146,7 @@ function renderBread() {
 // node.id 约定：c:<分类id> / e:<条目id> / d:<域名>；分类节点可下钻，条目可打开
 function render(data, crumbText, opts = {}) {
   lastData = data;
+  nodecard.hidden = true;    // 视图重渲染强制收起弹窗，防残留
   const radiateView = !!opts.radiate;
   const reasonOn = document.getElementById("showReason").checked;
   const nodes = data.nodes.map(n => {
@@ -135,15 +198,9 @@ function render(data, crumbText, opts = {}) {
   expandBtn.style.display = truncParts.length ? "" : "none";
   chart.setOption({
     tooltip: { formatter: p => {
-      if (p.dataType === "edge") {
-        const why = p.data.reason ? `<br>关联理由：${p.data.reason}` : "";
-        return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
-      }
-      const d = p.data, lines = [`${d.name}（${KIND_NAME[d.kind] || d.kind}）`];
-      if (d.path) lines.push(`路径：${d.path}`);
-      if (d.reasons && d.reasons.length) lines.push("关联：" + d.reasons.join("；"));
-      if (d.locator) lines.push(`<a href="${d.locator}" target="_blank" rel="noopener" style="color:#4a9eff">打开原文 ↗</a>`);
-      return lines.join("<br>");
+      if (p.dataType !== "edge") return "";   // 节点走 #nodecard 弹窗卡（tooltip 移不上去点链接，用户批注）
+      const why = p.data.reason ? `<br>关联理由：${p.data.reason}` : "";
+      return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
     } },
     series: [{
       type: "graph", layout: "force", roam: true, draggable: true,

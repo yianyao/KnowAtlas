@@ -630,6 +630,26 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         """条目挂在哪些线索里（UI 徽标）。"""
         return {"threads": dl.threads_for_entry(entry_id)}
 
+    @app.get("/api/entries/{entry_id}/summary")
+    def entry_summary(entry_id: str):
+        """条目轻量概要（关系图弹窗卡用）：完整 detail 含全文，悬浮场景过重。
+
+        服务端截断 snippet 至 400 字符，防大文件整段进响应。
+        """
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        content = dl.get_content(entry.content_hash) if entry.content_hash else ""
+        snippet = " ".join((content or "").split())[:400]
+        return {
+            "id": entry.id, "title": entry.title, "locator": entry.locator,
+            "source_type": entry.source_type, "created_at": entry.created_at,
+            "snippet": snippet,
+            "categories": [{"path": c["path"] or c["name"]}
+                           for c in dl.get_entry_categories(entry_id)],
+        }
+
     @app.get("/api/search")
     def search(q: str = "", mode: str = "fts"):
         hits = dl.search_fts(q)

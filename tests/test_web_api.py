@@ -215,3 +215,51 @@ def test_entries_linkage_batch(client, dl):
     assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}}
     # "linkage" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
     assert client.get("/api/entries/linkage").status_code == 200
+
+
+def test_entry_summary_endpoint(client, dl):
+    """关系图弹窗卡概要：轻端点截断 snippet、无正文返回空串、未知 404、免令牌。"""
+    from knowatlas.models import Entry, FetchResult
+    e = Entry.build(source_type="manual", source_key="sum1", title="概要条目",
+                    locator="https://x.example/a", locator_canonical="https://x.example/a",
+                    content_hash="hash-sum-001")
+    dl.upsert_entries([e])
+    dl.put_content(FetchResult(text="第一段  摘要正文\n第二段 " + "长" * 500,
+                               content_hash="hash-sum-001",
+                               fetcher="test", fetched_at="2026-10-20T00:00:00+08:00"))
+    r = client.get(f"/api/entries/{e.id}/summary")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "概要条目"
+    assert len(body["snippet"]) == 400 and "  " not in body["snippet"]  # 截断+空白归一
+    assert body["locator"] == "https://x.example/a"
+    # 无正文条目 → 空串而非报错
+    e2 = Entry.build(source_type="manual", source_key="sum2", title="无正文",
+                     locator="https://x.example/b", locator_canonical="https://x.example/b")
+    dl.upsert_entries([e2])
+    assert client.get(f"/api/entries/{e2.id}/summary").json()["snippet"] == ""
+    assert client.get("/api/entries/nope1234567890ab/summary").status_code == 404
+
+
+def test_entry_summary_endpoint(client, dl):
+    """关系图弹窗卡概要：轻端点截断 snippet、无正文返回空串、未知 404、免令牌。"""
+    from knowatlas.models import Entry, FetchResult
+    e = Entry.build(source_type="manual", source_key="sum1", title="概要条目",
+                    locator="https://x.example/a", locator_canonical="https://x.example/a",
+                    content_hash="hash-sum-001")
+    dl.upsert_entries([e])
+    dl.put_content(FetchResult(text="第一段  摘要正文\n第二段 " + "长" * 500,
+                               content_hash="hash-sum-001",
+                               fetcher="test", fetched_at="2026-10-20T00:00:00+08:00"))
+    r = client.get(f"/api/entries/{e.id}/summary")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "概要条目"
+    assert len(body["snippet"]) == 400 and "  " not in body["snippet"]  # 截断+空白归一
+    assert body["locator"] == "https://x.example/a"
+    # 无正文条目 → 空串而非报错
+    e2 = Entry.build(source_type="manual", source_key="sum2", title="无正文",
+                     locator="https://x.example/b", locator_canonical="https://x.example/b")
+    dl.upsert_entries([e2])
+    assert client.get(f"/api/entries/{e2.id}/summary").json()["snippet"] == ""
+    assert client.get("/api/entries/nope1234567890ab/summary").status_code == 404
