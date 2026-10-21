@@ -1724,3 +1724,25 @@ exact 0/prefix 0/miss 4，**暴露两条规则误判**（GooglePythonStyleGuide
 wal/shm 活跃即真实读写）；**运维坑记录**：agent sandbox 只许写工作区+
 Temp，serve 读写用户目录需非沙箱进程（dangerouslyDisableSandbox）——
 用户终端跑 serve 不受影响。
+
+## 0.2.0 第五十四批：Phase 4 侦察收口（补勾 ×2 + L3 few-shot 来自回归集）
+
+**侦察结论**：Phase 4 未勾项里两条早已在产线（规则分类器=L1/L2、FTS5+jieba=
+001_init 建表+词云），quote_strip 第三十九批已实现，L3 兜底 0.2.0 提前接入
+——真缺失只有：few-shot 注入（本批）、delta_summarize/thread_digest（下一批）、
+embedding+聚类+混合检索+语义边（再下一批）。
+
+1. **补勾**（TODO）：规则分类器、FTS5 全文检索+jieba 两条转 [x]（注明实现
+   出处与「两字词 LIKE 兜底已在 search_fts 落地、测试钉住」事实核查——初版
+   补勾文案误写「trigram 已覆盖两字查询」，trigram 3 字符滑窗对两字查询零
+   命中，已纠正）。
+2. **L3 few-shot**（classify_deep v1.1.0）：`_few_shots(datalayer)` 从
+   regress_cases 取最近 12 条人工确认样例（_case_line 与 _entry_line 同口径
+   拼行），注入 prompt【人工校正示例】段；system prompt 增第 5 条（归类口径
+   向示例对齐）。kadd/sync×2 三处 TaskContext 透传 datalayer。任何异常
+   （无 dl/无表/库异常）安全降级为无示例——few-shot 是增益不是依赖。
+3. **canary**：capabilities bb91f4917209 → 074a5d9a6582（SPEC v1.0.0→1.1.0）。
+
+**验证**：pytest 285 全绿（283→285：few-shot 注入断言 + 降级安全 ×2）；
+回归重跑路径（run_regress ctx.llm 恒 None）不受影响——few-shot 只在 L3
+实际执行时读取。

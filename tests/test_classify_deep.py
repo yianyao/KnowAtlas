@@ -146,3 +146,36 @@ def test_emmx_mind_path_in_prompt():
     # mind_path 与标题相同时不重复输出
     inp.meta["mind_path"] = "类型参数化"
     assert "脑图路径" not in classify_deep._entry_line(1, inp)
+
+
+def test_few_shots_from_regress_cases_inject_prompt(cfg, dl):
+    """few-shot 来自回归集：人工确认样例注入 LLM prompt 的【人工校正示例】段（第五十四批）。"""
+    e = Entry.build(source_type="bookmark", source_key="edge:fs1", title="SQLite WAL 详解",
+                    locator="https://db.example/wal", locator_canonical="https://db.example/wal",
+                    inline_content="WAL 模式读写并发")
+    dl.upsert_entries([e])
+    dl.add_regress_case(e.id, "技术开发/数据库")
+    shots = classify_deep._few_shots(dl)
+    assert len(shots) == 1
+    line, path = shots[0]
+    assert path == "技术开发/数据库"
+    assert "标题:SQLite WAL 详解" in line and "域名:db.example" in line
+    # 注入 prompt：classify_batch 带 few_shots 时 user 消息含示例段
+    llm = FakeLlm(mapping={})
+    inputs = [SemanticInput(entry_id="e2", title="无关页", body=None, native_path=None,
+                            meta={"source_type": "bookmark", "locator": "https://x.example/a"})]
+    classify_deep.classify_batch(inputs, frozenset({"技术开发/数据库"}), llm, few_shots=shots)
+    assert "【人工校正示例】" in llm.calls[0]
+    assert "标题:SQLite WAL 详解 | 域名:db.example" in llm.calls[0]
+    assert "→ 技术开发/数据库" in llm.calls[0]
+
+
+def test_few_shots_safe_degradations():
+    """无 datalayer / 空样例 → 空列表，分类照常（few-shot 是增益不是依赖）。"""
+    assert classify_deep._few_shots(None) == []
+
+    class BoomDl:
+        def list_regress_cases(self):
+            raise RuntimeError("库异常")
+
+    assert classify_deep._few_shots(BoomDl()) == []

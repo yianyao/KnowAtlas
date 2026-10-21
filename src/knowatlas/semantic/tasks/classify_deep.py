@@ -7,6 +7,9 @@
 - ctx.llm 为 None（未启用 / key 未设）→ 全部返回空 classifications（进暂存区），
   行为退化为 M0.5，绝不硬猜；
 - 候选路径 = 现有分类路径（known_paths，优先归并），允许 LLM 提议新路径；
+- few-shot 来自回归集 regress_cases（0.2.0 第五十四批：用户人工确认过的
+  「标题/域名/路径 → 分类」样例注入 prompt，让 LLM 向人工口径对齐）；
+  经 ctx.datalayer 读取（无 dl / 无表 / 异常一律安全降级为无示例）；
 - 批量请求（llm.max_batch，默认 20）控成本；单批失败只损失该批（进暂存区），不中断。
 """
 
@@ -22,9 +25,12 @@ SPEC = CapabilitySpec(
     name="classify_deep",
     input_contract={"SemanticInput": "list（title/body/native_path/meta.source_type）"},
     output_contract={"SemanticOutput": "list；classifications 为空 = 无法归类"},
-    version="1.0.0",
-    description="L3 LLM 语义分类：标题+域名+路径 → 分类路径（conf 自评，origin=llm）",
+    version="1.1.0",
+    description="L3 LLM 语义分类：标题+域名+路径 → 分类路径（conf 自评，origin=llm；"
+                "few-shot 来自回归集人工校正样例）",
 )
+
+_FEW_SHOT_LIMIT = 12  # 注入 prompt 的回归样例上限（控 token，取最近确认的）
 
 _SYSTEM_PROMPT = (
     "你是个人知识库的分类器。根据条目的标题、URL 域名和文件夹路径判断它属于哪个分类，"
@@ -38,6 +44,8 @@ _SYSTEM_PROMPT = (
     "non = 只是指向站点门户/导航首页/资源列表/纯资源文件本身（音乐、安装包）等，"
     "作为知识条目没有保留价值。\n"
     "4. path 无法判断时输出 \"?\"；conf 为 0 到 1 的置信度。\n"
+    "5. 若给出【人工校正示例】，这是用户手工确认过的正确归类——"
+    "同类内容的走向与二级粒度优先向示例对齐。\n"
     '只输出 JSON 数组，格式：[{"i":1,"path":"技术开发/数据库","conf":0.9,"kind":"knowledge"}]，'
     "不要输出任何其他文字。"
 )
@@ -69,15 +77,60 @@ def _entry_line(idx: int, inp: SemanticInput) -> str:
     return " | ".join(parts)
 
 
+def _case_line(case: dict) -> str:
+    """回归样例 → 提示行（与 _entry_line 同口径：标题/域名/文件/文件夹/摘要）。"""
+    from urllib.parse import urlsplit
+
+    parts = [f"标题:{str(case.get('title') or '')[:60]}"]
+    locator = str(case.get("locator") or "")
+    if locator.startswith(("http://", "https://")):
+        try:
+            host = urlsplit(locator).hostname or ""
+        except ValueError:
+            host = ""
+        if host:
+            parts.append(f"域名:{host}")
+    elif locator.startswith("file://"):
+        parts.append(f"文件:{locator.removeprefix('file://')[:60]}")
+    if case.get("native_path"):
+        parts.append(f"文件夹:{str(case['native_path'])[:60]}")
+    if case.get("inline_content"):
+        parts.append(f"摘要:{str(case['inline_content'])[:120]}")
+    return " | ".join(parts)
+
+
+def _few_shots(datalayer: Any) -> list[tuple[str, str]]:
+    """回归集 → few-shot 样例（最近确认的 _FEW_SHOT_LIMIT 条）；任何异常降级为空。"""
+    if datalayer is None:
+        return []
+    try:
+        cases = datalayer.list_regress_cases()
+    except Exception:  # 无表/库异常——few-shot 是增益不是依赖，绝不因此断分类
+        return []
+    shots: list[tuple[str, str]] = []
+    for case in cases[-_FEW_SHOT_LIMIT:]:
+        path = str(case.get("expected_path") or "").strip().strip("/")
+        title = str(case.get("title") or "").strip()
+        if not path or not title:
+            continue
+        shots.append((_case_line(case), path))
+    return shots
+
+
 def classify_batch(inputs: list[SemanticInput], known_paths: frozenset[str],
-                   llm: Any, max_batch: int = 20) -> list[SemanticOutput]:
+                   llm: Any, max_batch: int = 20,
+                   few_shots: list[tuple[str, str]] | None = None) -> list[SemanticOutput]:
     """批量 LLM 分类；返回与 inputs 等长的 SemanticOutput 列表。"""
     outputs: list[SemanticOutput] = [SemanticOutput(classifications=[]) for _ in inputs]
     batches = math.ceil(len(inputs) / max_batch) if inputs else 0
     candidates = "\n".join(sorted(known_paths)) or "（暂无，可自由提议「一级/二级」路径）"
+    shots_block = ""
+    if few_shots:
+        lines = "\n".join(f"- {line} → {path}" for line, path in few_shots)
+        shots_block = f"\n【人工校正示例】（用户手工确认的正确归类）\n{lines}\n"
     for b in range(batches):
         chunk = inputs[b * max_batch:(b + 1) * max_batch]
-        user = ("【候选分类路径】\n" + candidates + "\n\n【条目列表】\n"
+        user = ("【候选分类路径】\n" + candidates + "\n" + shots_block + "\n【条目列表】\n"
                 + "\n".join(_entry_line(i + 1, inp) for i, inp in enumerate(chunk)))
         try:
             arr = extract_json_array(llm.chat(_SYSTEM_PROMPT, user))
@@ -113,4 +166,5 @@ def run(inputs: list[SemanticInput], ctx: TaskContext) -> list[SemanticOutput]:
             max_batch = int(ctx.config.get("llm.max_batch", 20))
         except (TypeError, ValueError):
             max_batch = 20
-    return classify_batch(inputs, ctx.known_paths, ctx.llm, max_batch)
+    return classify_batch(inputs, ctx.known_paths, ctx.llm, max_batch,
+                          few_shots=_few_shots(ctx.datalayer))

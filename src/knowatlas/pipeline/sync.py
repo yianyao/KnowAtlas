@@ -111,7 +111,8 @@ def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids
         for e in targets
     ]
     outputs = classify(inputs, TaskContext(run_id=run_id, known_paths=known,
-                                           llm=LlmClient.from_config(cfg), config=cfg))
+                                           llm=LlmClient.from_config(cfg), config=cfg,
+                                           datalayer=dl))
     classified = staged = flagged = 0
     for entry, out in zip(targets, outputs):
         if _flag_value(dl, entry, out):
@@ -313,7 +314,8 @@ def _reclassify_all(cfg: Any, dl: Any, semantics: Any, run_id: str) -> dict[str,
             [SemanticInput(entry_id=e.id, title=e.title, body=e.inline_content,
                            native_path=e.native_path,
                            meta={**e.meta, "locator": e.locator}) for e in chunk],
-            TaskContext(run_id=run_id, known_paths=known, llm=llm, config=cfg),
+            TaskContext(run_id=run_id, known_paths=known, llm=llm, config=cfg,
+                        datalayer=dl),
         )
         for e, out in zip(chunk, outputs):
             if _flag_value(dl, e, out):

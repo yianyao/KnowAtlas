@@ -139,15 +139,24 @@ reader: 执行者（人与 agent）
 
 > Gate：规则 → embedding → LLM 三级流水线跑通（LLM 默认云端、配置可切本地）；混合检索、词云（三态词元）、关系图（focus 模式）可用；回归集通过率记录在案。
 
-- [ ] 规则分类器（关键词/正则/先验映射补漏）
+- [x] 规则分类器（关键词/正则/先验映射补漏）——早已在产线（L1 priors.py 先验映射 +
+      L2 rules.py 关键词命中 0.8/origin=rule，kadd/sync 链路在用）；0.2.0 第五十四批
+      侦察补勾（勾选遗漏，非新实现）
 - [ ] 会话线程语义任务（完整方案 §9.4 第三十一批，后置——先规则后 LLM）：quote_strip
-      （mail-parser-reply 底座 + 中文回复头自补规则，纯规则不调 LLM）→ delta_summarize /
-      thread_digest（LLM 走 [llm] 后端池：硅基流动优先、DeepSeek 官方兜底；可独立关闭）
+      （mail-parser-reply 底座 + 中文回复头自补规则，纯规则不调 LLM；第三十九批已实现）
+      → delta_summarize / thread_digest（LLM 走 [llm] 后端池：硅基流动优先、DeepSeek
+      官方兜底；可独立关闭）——剩余即这两步
       - 探针：关闭 LLM 后 quote_strip 仍工作（纯规则降级）；thread_digest 关闭不影响检索与线程视图
 - [ ] 本地 embedding（bge-m3 类中文模型，optional 依赖）+ 聚类
-- [ ] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；few-shot 来自回归集；先聚类后命名）
+- [ ] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；先聚类后命名）——L3 已提前
+      接入（classify_deep，0.2.0）；few-shot 来自回归集第五十四批补上
       - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）
-- [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）+ jieba 关键词统计
+- [x] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）
+      + jieba 关键词统计——001_init 早已建表（trigram tokenizer + 触发器同步，
+      bm25/snippet 检索在产线）；两字词（<3 字符 trigram 零命中）走 search_fts 内
+      LIKE 兜底（H2 返工定稿，test_two_char_query_finds_content 钉住）；jieba 关键词
+      统计随词云落地（第四十三批 tf-idf top8/条聚合）；0.2.0 第五十四批侦察补勾
+      （勾选遗漏，非新实现）
 - [ ] 混合检索（关键词 + 语义，结果可解释排序理由）
 - [x] 时效/可信守卫（freshness guard，2026-10-20 用户需求：把过期的、容易误导的知识清出来）——
       与 L0 价值守卫同构的规则信号：页面/正文含 deprecated/已废弃/过期 类关键词、
