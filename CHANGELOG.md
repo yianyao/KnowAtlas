@@ -1831,3 +1831,45 @@ topic_recall 语义通道两处挂账收口）。降级纪律与 LLM 同构：[e
 - 聚类报告不建类（条目仍全部未分类）；LLM 命名 / 簇号退化两路
 - canary 新值落常量；pytest 315 全绿（298→315）；变更文件 UTF-8 无 BOM + LF
 - **bge-m3 真机冒烟未做**（模型 ~2.3GB 下载受网络影响，挂账待环境就绪单测）
+
+## 0.2.0 第五十七批：零凭证在线源（AI 会话 + 数据文件，Phase 3 前两源）
+
+**背景**：TODO Phase 3 五源中两源零凭证可先行（用户裁决）：AI 会话适配器
+（session-harvester exports 产物映射）+ 数据文件适配器（SQLite/PostgreSQL
+自省采样）。凭证类三源（B站/IMA/腾讯文档）待用户提供 cookie/token 后跟进。
+
+1. **adapters/session.py**：读 harvester exporter 产物（`<category>/<YYYY-MM>/
+   *.json`，SessionRecord 平铺结构；manifest 与坏文件跳过计数不中断）。映射：
+   source_key=session_id、locator=session://<urlencode>、native_path=分类/月份
+   （先验信号）、meta 带 harvester_source/origin/workspace/lossy/models/
+   export_file/turns。inline_content=turns 摘要（前 12 个对话轮 role:首行）；
+   全量对话正文（剔除 note/[context] 系统注入轮）经 stats["_full_bodies"] 落
+   content_store（与 mail 源同约定，fetcher=harvester_export）。
+2. **pipeline/session_threads.py**：全部轮次（含 note）落 conv_messages
+   （msg_key=session_id#序号；in_reply_to 如实 NULL——产物平铺无引用头）+
+   每会话一条 threads(thread_type='source')（🤖 标题，add_thread_item 去重
+   幂等）。thread_items 是条目级粒度，轮次顺序由 msg_key 序号 + sent_at 承载；
+   thread_digest 端点对会话线程直接可用（读条目全量正文 → 会话级摘要）。
+3. **adapters/dbfile.py**：SQLite（stdlib，mode=ro 只读，缺文件 fail loud——
+   dbmeta「绝不静默建空库」教训）+ PostgreSQL（psycopg optional，缺依赖/
+   连接失败报错含安装与配置指引）。每张用户表一条目：source_key=文件名::表名
+  （文件名作相对标识避免绝对路径入库）、locator=db://<标识>?table=<表名>、
+   inline=行数+列清单+前 5 行采样（JSON 行，bytes/超长值截断）；视图与系统表
+   排除（sqlite_%/pg_%/information_schema）。
+4. **sync.py**：_BATCH_COLLECTORS 注册 sessions/dbs；session 附加处理与 mail
+   同构（content_store + rebuild_session_threads）；**新增 _SECTION_BY_NAME**
+   ——批量源名（复数 sessions/dbs）与 config 契约节名（单数 sources.session/
+   sources.db，Phase 0 冻结）的差异映射。
+5. 测试 12 项（test_session_source 6 + test_db_source 6）：collect 映射/
+   容错/note 轮剔除、sync 端到端（content_store/conv_messages 不复制原文/
+   线程幂等二跑）、SQLite 表清单采样探针、psycopg 缺失与坏 DSN 报错指引。
+
+**复检探针**（TODO Phase 3 前两源）
+
+- AI 会话：harvester 产物目录 → 条目含 title/session_id/created_at/turns
+  摘要 ✅；conv_messages 轮次/父子关系与产物一致（含 note 全落、引用头如实
+  空）、原文不复制进 conv_messages ✅
+- 数据文件：SQLite 表清单与采样行正确进入条目 ✅；PostgreSQL 探针（docker
+  起 PG 实例）**挂账**——代码路径与报错指引有测试，真机连接待环境
+- pytest 327 全绿（315→327）；无 DDL/canary 变更（scheme 与 config 键
+  Phase 0 已冻结在案）；变更文件 UTF-8 无 BOM + LF

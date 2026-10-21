@@ -23,10 +23,12 @@ from datetime import datetime
 from typing import Any
 
 from ..adapters.bookmark import collect_bookmarks
+from ..adapters.dbfile import collect_dbs
 from ..adapters.emmx import collect_emmx
 from ..adapters.folder import collect_folders
 from ..adapters.maildir import collect_maildirs
 from ..adapters.opml import collect_opml
+from ..adapters.session import collect_sessions
 from ..errors import AdapterError, DegradedParseError, FetchError
 from ..ids import content_hash
 from ..models import Entry, FetchResult
@@ -35,6 +37,7 @@ from ..semantic.base import SemanticInput, TaskContext
 from .kadd import ensure_category_path
 from .dedupe import dedupe_entries, scan_and_merge
 from .mail_threads import rebuild_mail_threads
+from .session_threads import rebuild_session_threads
 
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
@@ -46,11 +49,15 @@ _BATCH_COLLECTORS: dict[str, Any] = {
     "emmx": collect_emmx,
     "mail": collect_maildirs,
     "opml": collect_opml,
+    "sessions": collect_sessions,   # 第五十七批：AI 会话（harvester 产物，零凭证）
+    "dbs": collect_dbs,             # 第五十七批：数据文件（sqlite/PG 自省，零凭证）
 }
 # 配置名 → source_type（archive_missing 按条目来源类型做删除检测）
 _SOURCE_TYPE_BY_NAME: dict[str, str] = {
     "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx", "mail": "mail",
-    "opml": "opml"}
+    "opml": "opml", "sessions": "session", "dbs": "db"}
+# 配置名 → config 节名（契约冻结为单数：sources.session/sources.db；其余同名）
+_SECTION_BY_NAME: dict[str, str] = {"sessions": "session", "dbs": "db"}
 
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000
@@ -527,7 +534,7 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
     for name, collector in _BATCH_COLLECTORS.items():
         if source is not None and source != name:
             continue
-        sec = cfg.get(f"sources.{name}") or {}
+        sec = cfg.get(f"sources.{_SECTION_BY_NAME.get(name, name)}") or {}
         if not sec.get("enabled"):
             continue
         try:
@@ -580,6 +587,23 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                     stored_count += 1
             mail_stats["contents_stored"] = stored_count
             mail_stats.update(rebuild_mail_threads(dl, convs, run_id))
+        # session 源附加处理（第五十七批）：全量对话正文进 content_store +
+        # 轮次落 conv_messages + 每会话一条 source 线程（与 mail 同约定，幂等）
+        if name == "sessions":
+            full_bodies: dict[str, str] = out.stats.pop("_full_bodies", {})
+            convs = out.stats.pop("conv_messages", [])
+            stored_count = 0
+            for eid, text in full_bodies.items():
+                e = dl.get_entry(eid)
+                if e is not None and e.content_hash \
+                        and dl.get_content(e.content_hash) is None:
+                    dl.put_content(FetchResult(
+                        text=text, content_hash=e.content_hash,
+                        fetcher="harvester_export", fetched_at=_now_iso()))
+                    stored_count += 1
+            mail_stats = {"contents_stored": stored_count}
+            mail_stats.update(
+                rebuild_session_threads(dl, convs, run_id))
         if revived_ids:
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),

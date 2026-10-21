@@ -121,19 +121,31 @@ reader: 执行者（人与 agent）
 
 > Gate：IMA、腾讯文档、AI 会话、B站收藏夹、数据文件接入；凭证过期与限流有明确处理并写入 SOP 故障表。
 
-- [ ] AI 会话适配器（映射 session-harvester 输出的 SessionRecord/Message 双结构）
-      - 探针：harvester 产物目录 → 条目含 title/session_id/created_at/turns 摘要
-      - 线程增补（完整方案 §9.4 第三十一批）：Message 父子/顺序关系还原为
-        threads(thread_type='source') + conv_messages（msg_key=轮次 id，parent_id 按产物结构）
-      - 探针：多轮会话入库后 conv_messages 轮次/父子关系与 harvester 产物一致；原文不复制进 conv_messages
+- [x] AI 会话适配器（映射 session-harvester 输出的 SessionRecord/Message 双结构）
+      ——0.2.0 第五十七批：adapters/session.py 读 harvester exports 结构化 .json
+      （manifest/坏文件跳过计数），条目含 title/session_id/created_at/turns 摘要
+      （前 12 轮 role:首行），全量对话正文（剔除 note/[context] 系统注入轮）落
+      content_store；每会话一条 🤖 source 线程 + conv_messages 全轮次
+      （msg_key=session_id#序号，引用头如实空——产物平铺无父子结构）
+      - 探针：harvester 产物目录 → 条目含 title/session_id/created_at/turns 摘要 ✅
+      - 线程增补（完整方案 §9.4 第三十一批）：threads(thread_type='source') +
+        conv_messages（msg_key=轮次 id）已落；thread_items 为条目级粒度，轮次
+        顺序由 msg_key 序号 + sent_at 承载（产物平铺，如实无父子）
+      - 探针：多轮会话入库后 conv_messages 轮次/父子关系与 harvester 产物一致；
+        原文不复制进 conv_messages ✅（test_session_source 端到端钉住）
 - [ ] B站收藏夹适配器（官方 API：list-all 取收藏夹列表 + resource/list 分页内容；SESSDATA 走 KNOWATLAS_BILI_SESSDATA 环境变量；收藏夹名进 native_path；简介作 inline_content；WBI 签名可开关）
       - 探针：SESSDATA 失效时报错含 F12 获取指引且旧条目保留；收藏夹名正确映射 native_path；同一视频进两个收藏夹只产一条且 meta.fav_folder_ids 含两个 id；下架视频看 attr 位保留标题级并记 meta.invalid
 - [ ] IMA 适配器（官方 OpenAPI：list_notebooks / list_notes / get_note_content；凭证走配置）
       - 探针：token 失效时报错含"重新获取 Client ID/API Key"指引
 - [ ] 腾讯文档适配器（OpenAPI v2：文件夹列表 + async-export；429 队列降速；doc/slide 导 PDF 后二次解析）
       - 探针：模拟 429 时间隔重试成功；PDF 解析失败降级标题级
-- [ ] 数据文件适配器（sqlite：schema 自省 + 采样；PostgreSQL：连接串走配置，psycopg 连接后同样 schema 自省 + 采样）
-      - 探针：连一个测试 PostgreSQL 实例（或 docker 起的），表清单与采样行正确进入条目
+- [~] 数据文件适配器（sqlite：schema 自省 + 采样；PostgreSQL：连接串走配置，psycopg
+      连接后同样 schema 自省 + 采样）——0.2.0 第五十七批：adapters/dbfile.py，
+      每用户表一条目（source_key=文件名::表名，inline=行数+列清单+前 5 行采样，
+      视图/系统表排除；SQLite mode=ro 缺文件 fail loud；psycopg 缺依赖/坏 DSN
+      报错含指引）；sync 端到端 + 二跑幂等有测试
+      - 探针：SQLite 表清单与采样行正确进入条目 ✅；连一个测试 PostgreSQL 实例
+        （或 docker 起的）真机探针**挂账**（代码路径与报错指引已测，待环境）
 
 ## Phase 4 — 语义与视图（M4）
 
