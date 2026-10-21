@@ -76,8 +76,14 @@
   <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
   <!-- 数据管理入口默认折叠（第三十七批用户定调：日常是消费数据，采集/清理只在新数据时用） -->
   <details id="mgmt" style="margin:4px 0 8px">
-    <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
-    <button id="staged-btn" style="width:100%;box-sizing:border-box;padding:6px;margin:8px 0">📥 暂存区（未分类条目）</button>
+  <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
+  <div style="display:flex;gap:6px;margin:8px 0">
+    <input id="add-url" placeholder="粘贴 http(s) 网址，手动收录（同 kadd：抓正文→归类→入树）"
+           style="flex:1;box-sizing:border-box;padding:6px">
+    <button id="add-url-btn">🔗收录</button>
+  </div>
+  <div id="add-url-out" style="font-size:12px;color:#888;margin-bottom:8px;word-break:break-all"></div>
+  <button id="staged-btn" style="width:100%;box-sizing:border-box;padding:6px;margin:8px 0">📥 暂存区（未分类条目）</button>
     <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
     <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
     <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
@@ -234,6 +240,19 @@ function entryHTML(e) {
 function bindEntryButtons() {
   document.querySelectorAll(".move-btn").forEach(b => b.onclick = () => opRecategorize(b.dataset.id, b.dataset.title));
   document.querySelectorAll(".reject-btn").forEach(b => b.onclick = () => opReject(b.dataset.id, b.dataset.title));
+  // 复制条目 ID（第四十二批）：统一注入到所有带 data-id 的条目行——
+  // 分类列表/检索/待清理/时效/聚合等全部视图自动获得，无需逐视图改模板。
+  // 主要用途：拿 id 跑 ksync --expand <entry_id> 扩散抓取。
+  document.querySelectorAll("#hits .entry[data-id]").forEach(d => {
+    if (d.querySelector(".cid-btn")) return;
+    d.insertAdjacentHTML("beforeend",
+      `<button class="cid-btn" data-id="${d.dataset.id}" title="复制条目 ID（ksync --expand 等命令用）">🆔</button>`);
+  });
+  document.querySelectorAll(".cid-btn").forEach(b => b.onclick = () => {
+    navigator.clipboard.writeText(b.dataset.id)
+      .then(() => { b.textContent = "✓"; setTimeout(() => b.textContent = "🆔", 800); })
+      .catch(() => { prompt("复制失败，请手动复制条目 ID：", b.dataset.id); });
+  });
   attachCatChips();  // 双向联动②：条目 → 分类定位徽标（所有条目视图统一挂）
 }
 // 双向联动②：条目列表点「📁分类路径」徽标 → 左树滚动定位 + 闪烁高亮。
@@ -433,6 +452,31 @@ async function showCategory(catId) {
   };
   loadTree();  // 刷新选中态
 }
+
+// 手动收录网页（第四十二批）：同 kadd 链路（POST /api/entries → ingest_url：
+// 抓正文 → 归类 → 入树）；结果显示 entry_id（可复制，直接接 ksync --expand）
+document.getElementById("add-url-btn").onclick = async () => {
+  const url = document.getElementById("add-url").value.trim();
+  const out = document.getElementById("add-url-out");
+  if (!url) { out.textContent = "先粘贴网址。"; return; }
+  out.textContent = "抓取并归类中…（页面大时需要几秒）";
+  const res = await writeJSON("/api/entries", { url });
+  if (res.__aborted) { out.textContent = ""; return; }
+  if (res.error) { out.textContent = "失败：" + res.error.message; return; }
+  const parts = [];
+  if (res.status === "duplicate") parts.push("该网址已在库中（幂等，未重复建）");
+  else parts.push(res.fetched ? "已抓取正文" : "未抓到正文（已入 URL，可用补抓通道补正文）");
+  parts.push(res.categorized ? "已归类" : "待归类（暂存区）");
+  if (res.fetch_error) parts.push("抓取提示：" + res.fetch_error);
+  out.innerHTML = `✓ ID <code style="cursor:pointer;color:#4a9eff" class="add-id" data-id="${res.entry_id}"
+    title="点击复制条目 ID（ksync --expand 用）">${res.entry_id}</code> —— ${parts.join("；")}`;
+  document.querySelector(".add-id").onclick = ev =>
+    navigator.clipboard.writeText(ev.target.dataset.id).then(() => { ev.target.textContent = "已复制 ✓"; });
+  if (res.status !== "duplicate") loadTree();  // 新条目可能带来新分类
+};
+document.getElementById("add-url").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("add-url-btn").click();
+});
 
 document.getElementById("staged-btn").onclick = async (e) => {
   refreshCurrent = () => e.target.click();  // 写操作后留在本视图

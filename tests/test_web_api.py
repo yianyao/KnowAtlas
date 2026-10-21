@@ -252,6 +252,84 @@ def test_static_pages_consumption_defaults():
     index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
     assert '<details id="mgmt"' in index          # 管理分组存在
     assert 'details id="mgmt" open' not in index  # 且默认收起（消费页优先）
-    # 四个数据管理入口都在 details 块内
-    for eid in ("staged-btn", "rejected-link", "dead-link", "nonk-link"):
+    # 五个数据管理入口都在 details 块内（第四十二批起 add-url 手动收录也在其中）
+    for eid in ("add-url", "staged-btn", "rejected-link", "dead-link", "nonk-link",
+                "fresh-link"):
         assert index.index('<details id="mgmt"') < index.index(f'id="{eid}"')
+    # 第四十二批：手动收录入口 + 复制条目 ID 统一注入（弹窗卡同款能力）
+    assert 'id="add-url-btn"' in index
+    assert "/api/entries" in index                # 收录走 kadd 同一链路
+    assert 'class="cid-btn"' in index             # 条目行复制 ID
+    assert "ccid" in graph                        # 弹窗卡 ID 行（点击复制）
+
+
+def test_manual_ingest_endpoint_idempotent(client):
+    """手动收录端点（第四十二批 UI 入口走同一链路）：抓正文入库；重复收录幂等 duplicate。"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802  stdlib 命名
+            body = ("<h1>手动收录探针页</h1>"
+                    + "<p>统一消息总线的路由与过滤实践，手动收录链路验证正文。" * 10).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # 静默
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/probe.html"
+        r1 = client.post("/api/entries", json={"url": url}, headers=_auth())
+        assert r1.status_code == 200
+        j1 = r1.json()
+        assert j1["status"] == "created" and j1["fetched"] is True
+        assert len(j1["entry_id"]) == 16
+        r2 = client.post("/api/entries", json={"url": url}, headers=_auth())
+        assert r2.status_code == 200 and r2.json()["status"] == "duplicate"
+        assert r2.json()["entry_id"] == j1["entry_id"]
+        # 缺 url → 400
+        assert client.post("/api/entries", json={}, headers=_auth()).status_code == 400
+    finally:
+        srv.shutdown()
+
+
+def test_manual_ingest_endpoint_idempotent(client):
+    """手动收录端点（第四十二批 UI 入口走同一链路）：抓正文入库；重复收录幂等 duplicate。"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802  stdlib 命名
+            body = ("<h1>手动收录探针页</h1>"
+                    + "<p>统一消息总线的路由与过滤实践，手动收录链路验证正文。" * 10).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # 静默
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{srv.server_port}/probe.html"
+        r1 = client.post("/api/entries", json={"url": url}, headers=_auth())
+        assert r1.status_code == 200
+        j1 = r1.json()
+        assert j1["status"] == "created" and j1["fetched"] is True
+        assert len(j1["entry_id"]) == 16
+        r2 = client.post("/api/entries", json={"url": url}, headers=_auth())
+        assert r2.status_code == 200 and r2.json()["status"] == "duplicate"
+        assert r2.json()["entry_id"] == j1["entry_id"]
+        # 缺 url → 400
+        assert client.post("/api/entries", json={}, headers=_auth()).status_code == 400
+    finally:
+        srv.shutdown()

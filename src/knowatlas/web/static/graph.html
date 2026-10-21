@@ -93,11 +93,21 @@ nodecard.addEventListener("mouseleave", hideCardSoon);
 // 「⧉ 复制」按钮（事件委托，卡片 innerHTML 每次重建也能响应）
 nodecard.addEventListener("click", e => {
   const btn = e.target.closest(".ccopy");
-  if (!btn) return;
-  navigator.clipboard.writeText(btn.dataset.loc || "").then(() => {
-    btn.textContent = "✓ 已复制";
-    setTimeout(() => { btn.textContent = "⧉ 复制"; }, 1200);
-  }).catch(() => { btn.textContent = "✗ 复制失败"; });
+  if (btn) {
+    navigator.clipboard.writeText(btn.dataset.loc || "").then(() => {
+      btn.textContent = "✓ 已复制";
+      setTimeout(() => { btn.textContent = "⧉ 复制"; }, 1200);
+    }).catch(() => { btn.textContent = "✗ 复制失败"; });
+    return;
+  }
+  // 复制条目 ID（第四十二批，ksync --expand 等命令用）
+  const cid = e.target.closest(".ccid");
+  if (cid) {
+    navigator.clipboard.writeText(cid.dataset.cid || "").then(() => {
+      cid.textContent = "✓ 已复制";
+      setTimeout(() => { cid.textContent = cid.dataset.cid; }, 1200);
+    }).catch(() => { cid.textContent = "✗ 复制失败"; });
+  }
 });
 
 function showCard(d, cx, cy) {
@@ -118,8 +128,11 @@ function showCard(d, cx, cy) {
       ? "本地文件（配置根相对路径），复制后在文件管理器打开"
       : "脑图节点引用，请在 MindMaster 中打开对应文件"}">${loc}</span>`
       + `<button class="ccopy" data-loc="${loc.replace(/"/g, "&quot;")}">⧉ 复制</button>`;
+  const eid = d.kind === "entry" ? String(d.id).slice(2) : "";
   nodecard.innerHTML =
     `<div class="ct">${d.name}（${KIND_NAME[d.kind] || d.kind}）</div>` + info.join("")
+    + (d.kind === "entry" ? `<div class="cp">ID：<span class="ccid" data-cid="${eid}"
+        style="cursor:pointer;color:#4a9eff" title="点击复制条目 ID（ksync --expand 等命令用）">${eid} ⧉</span></div>` : "")
     + (d.kind === "entry" ? `<div class="cs">概要加载中…</div>` : "")
     + openPart;
   // 视口内夹紧：不跟鼠标跑，出了屏幕边缘往回拉
@@ -127,7 +140,6 @@ function showCard(d, cx, cy) {
   nodecard.style.top = Math.min(cy + 14, window.innerHeight - 200) + "px";
   nodecard.hidden = false;
   if (d.kind === "entry") {
-    const eid = String(d.id).slice(2);
     const fill = txt => {
       const el = nodecard.querySelector(".cs");
       if (el && cardKey === String(d.id)) el.textContent = txt || "（无正文摘要）";

@@ -1206,3 +1206,38 @@ find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截�
 - _consumable SQL 片段与 dedupe.py Python 口径两处同步（freshness_flag!=stale）
 - canary 六面不变（无 DDL/枚举/配置键变化）；pytest 228 项全绿（+11）；
   十一个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十二批：手动收录 UI 入口 + 复制条目 ID（用户两点反馈）
+
+**背景**：①扩散抓取需要 entry_id，但 UI 不展示——加「复制 ID」；②手输 URL 抓取
+网页内容的能力（kadd / POST /api/entries）已存在但无 UI 入口——补上。
+
+**变更**
+
+1. **index.html**：
+   - 数据管理区新增「🔗 手动收录」输入框（粘贴 http(s) 网址 → POST /api/entries
+     → 走 kadd 的 ingest_url：抓正文 → 归类 → 入树），结果显示 entry_id
+     （可复制，直接接 ksync --expand）、抓取/归类状态；重复收录幂等提示。
+   - 「复制 ID」按钮（🆔）：bindEntryButtons 统一注入——所有带 data-id 的条目行
+     （分类列表/检索/待清理/时效/聚合等全部视图）自动获得，点击复制，
+     无需逐视图改模板。
+2. **graph.html**：节点弹窗卡对 entry 类型加 ID 行（显示 16 位 id，点击复制）。
+3. **api.py / 后端**：零改动（/api/entries 已有）。
+
+**复检探针**（实现后逐条命中）
+
+- index.html 出现 add-url 输入框与 🆔 注入逻辑；graph.html 弹窗卡含 ID 行
+- POST /api/entries 幂等（重复 URL 返回 status=duplicate）
+- pytest 全绿（静态页断言补新元素）；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- index.html：数据管理区出「🔗 手动收录」输入框（回车/按钮均可触发），结果行
+  显示 entry_id（点击复制，title 指引 ksync --expand）+ 抓取/归类状态 +
+  duplicate 幂等提示；bindEntryButtons 统一注入 🆔——全视图条目行自动获得
+- graph.html：entry 弹窗卡出「ID：<16 位> ⧉」行，点击复制（.ccid 独立通道，
+  与 locator 复制互不干扰）；eid 提升到 showCard 顶部消除重复声明
+- 后端零改动；POST /api/entries 幂等由 test_manual_ingest_endpoint_idempotent
+  钉死（本地 HTTP fixture：created+fetched → duplicate 同 id → 缺 url 400）
+- 静态页探针升级：五个管理入口均在 mgmt details 内 + add-url/cid-btn/ccid 断言
+- pytest 229 项全绿（+1）；四个变更文件 UTF-8 无 BOM + LF
