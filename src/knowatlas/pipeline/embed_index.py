@@ -117,13 +117,36 @@ def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
             "vectors": len(cands)}
 
 
+def _greedy_clusters(vecs: dict[str, list[float]], threshold: float
+                     ) -> list[dict[str, Any]]:
+    """贪心归簇（56 批口径，cluster_report 与 60 批 group_hits 共用）：
+    按给定顺序遍历，与已有簇心（成员均值向量）比相似度，≥threshold 归入
+    最高者，否则自立新簇。返回 [{"ids": [...], "centroid": [...]}, ...]，
+    簇序与簇内序 = 输入序（确定性）。"""
+    clusters: list[dict[str, Any]] = []
+    for eid, vec in vecs.items():
+        best, best_score = None, threshold
+        for c in clusters:
+            score = _dot(vec, c["centroid"])
+            if score >= best_score:
+                best, best_score = c, score
+        if best is None:
+            clusters.append({"ids": [eid], "centroid": list(vec)})
+        else:
+            best["ids"].append(eid)
+            n = len(best["ids"])
+            best["centroid"] = [
+                (x * (n - 1) + y) / n
+                for x, y in zip(best["centroid"], vec)]
+    return clusters
+
+
 def cluster_report(dl: Any, embedder: Any, llm: Any,
                    threshold: float = _CLUSTER_THRESHOLD) -> dict[str, Any]:
     """暂存区条目聚类 + LLM 命名候选报告（不建类，人工确认后生效）。
 
-    贪心：条目按向量序遍历，与已有簇心（成员均值向量）比相似度，
-    ≥threshold 归入最高者，否则自立新簇。LLM 可用时对每簇取成员标题+
-    摘要生成「建议分类路径」；不可用退化为「簇N（m 条）」。
+    贪心核心见 _greedy_clusters。LLM 可用时对每簇取成员标题+摘要生成
+    「建议分类路径」；不可用退化为「簇N（m 条）」。
     """
     if embedder is None:
         return {"disabled": True, "clusters": [], "unclustered": 0}
@@ -133,26 +156,14 @@ def cluster_report(dl: Any, embedder: Any, llm: Any,
         return {"clusters": [], "unclustered": 0,
                 "note": "暂存区无可聚类条目（需先 ksync --embed 建向量）"}
 
-    clusters: list[dict[str, Any]] = []  # {members:[entry], centroid:[float]}
-    for e in entries:
-        vec = blob_to_vec(dl.get_vector(e.id)["vector"])
-        best, best_score = None, threshold
-        for c in clusters:
-            score = _dot(vec, c["centroid"])
-            if score >= best_score:
-                best, best_score = c, score
-        if best is None:
-            clusters.append({"members": [e], "centroid": list(vec)})
-        else:
-            best["members"].append(e)
-            n = len(best["members"])
-            best["centroid"] = [
-                (x * (n - 1) + y) / n
-                for x, y in zip(best["centroid"], vec)]
+    by_id = {e.id: e for e in entries}
+    vecs = {e.id: blob_to_vec(dl.get_vector(e.id)["vector"]) for e in entries}
+    clusters = [[by_id[i] for i in c["ids"]]
+                for c in _greedy_clusters(vecs, threshold)]
 
     named: list[dict[str, Any]] = []
     for i, c in enumerate(clusters, 1):
-        members = c["members"]
+        members = c
         name = f"簇{i}（{len(members)} 条）"
         if llm is not None and len(members) >= 2:
             lines = "\n".join(
@@ -176,6 +187,149 @@ def cluster_report(dl: Any, embedder: Any, llm: Any,
                 "cluster_report", "run", "uncategorized",
                 {"clusters": len(named), "threshold": threshold})
     return {"clusters": named, "unclustered": 0, "threshold": threshold}
+
+
+# ---- 知识集聚合（第六十批，方案 §7.2a：查询期聚合，零数据风险） ----
+
+_EXCERPT_CAP = 120   # 组头代表条目摘句长度
+
+
+def _row(e: Any) -> dict[str, Any]:
+    return {"id": e.id, "title": e.title, "locator": e.locator,
+            "source_type": e.source_type}
+
+
+def _entry_host(locator: str) -> str:
+    """URL 条目的 host 信号；非 http(s) 返回空串（文件/会话条目无此信号）。"""
+    from urllib.parse import urlsplit
+    try:
+        parts = urlsplit(locator or "")
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https"):
+        return ""
+    return parts.hostname or ""
+
+
+def _excerpt(entries: dict[str, Any], texts: dict[str, str], rep: str) -> str:
+    src = texts.get(rep) or entries[rep].title or ""
+    return " ".join(src.split())[:_EXCERPT_CAP]
+
+
+def _word_signals(texts_by_id: dict[str, str], ids: list[str]
+                  ) -> list[dict[str, str]]:
+    from ..semantic.keywords import shared_words
+    return [{"kind": "word", "value": w} for w in
+            shared_words([texts_by_id.get(i, "") for i in ids])]
+
+
+def _path_sets(dl: Any, ids: list[str]) -> list[set[str]]:
+    """各成员的挂接路径集合（主分类信号原料；未挂接 = 空集，不造「未分类」）。"""
+    out = []
+    for i in ids:
+        links = dl.get_entry_categories(i)
+        out.append({(l["path"] or l["name"]) for l in links})
+    return out
+
+
+def _header(signals: list[dict[str, str]], entries: dict[str, Any],
+            texts: dict[str, str], rep: str, ids: list[str]) -> dict[str, Any]:
+    return {"size": len(ids), "signals": signals,
+            "excerpt": _excerpt(entries, texts, rep),
+            "excerpt_title": entries[rep].title,
+            "entries": [_row(entries[i]) for i in ids]}
+
+
+def _semantic_group(dl: Any, cluster: dict[str, Any],
+                    entries: dict[str, Any], texts: dict[str, str],
+                    vecs: dict[str, list[float]]) -> dict[str, Any]:
+    ids = cluster["ids"]
+    signals = _word_signals(texts, ids)
+    common = set.intersection(*_path_sets(dl, ids))
+    if common:  # 组内每条都挂着的最短公共路径（确定性：深度升序、同深字典序）
+        signals.append({"kind": "category",
+                        "value": min(common, key=lambda p: (p.count("/"), p))})
+    hosts = [_entry_host(entries[i].locator) for i in ids]
+    if hosts[0] and all(h == hosts[0] for h in hosts):
+        signals.append({"kind": "host", "value": hosts[0]})
+    rep = max(ids, key=lambda i: _dot(vecs[i], cluster["centroid"]))
+    return _header(signals, entries, texts, rep, ids)
+
+
+def _structural_group(cat: str, host: str, ids: list[str],
+                      entries: dict[str, Any], texts: dict[str, str]
+                      ) -> dict[str, Any]:
+    signals = _word_signals(texts, ids)
+    if cat:
+        signals.append({"kind": "category", "value": cat})
+    if host:
+        signals.append({"kind": "host", "value": host})
+    return _header(signals, entries, texts, ids[0], ids)
+
+
+def group_hits(dl: Any, entry_ids: list[str],
+               threshold: float = _CLUSTER_THRESHOLD) -> dict[str, Any]:
+    """检索命中查询期聚合成「知识集」（第六十批，方案 §7.2a 组头信号化）。
+
+    策略自动选择：≥2 条有向量 → 语义贪心聚类（_greedy_clusters，56 批
+    --cluster-report 同款阈值 0.72）；否则 → 「主分类+同 host」结构聚合
+    （v0.1 零费用口径——bge-m3 未装机/未 --embed 时检索视图仍有分组）。
+    组头 = 成员内容自身信号（共享词/分类/host/代表条目摘句），**禁发明性
+    命名**：共享词逐词验证在每个成员文本中出现（keywords.shared_words）。
+    纯查询期计算，不写任何表。不成组的条目（无向量/落单/分类 host 均无
+    共性）以 singles 平铺，供前端降级渲染。
+    """
+    seen: list[str] = []
+    for i in entry_ids:
+        if i and i not in seen:
+            seen.append(i)
+    entries = {e.id: e for e in dl.get_entries_by_ids(seen)
+               if e.status == "active"}
+    order = [i for i in seen if i in entries]
+    singles = [_row(entries[i]) for i in order]
+    if len(order) < 2:
+        return {"mode": "none", "groups": [], "singles": singles}
+    texts = {i: _entry_text(dl, entries[i]) for i in order}
+
+    vecs: dict[str, list[float]] = {}
+    for i in order:
+        v = dl.get_vector(i)
+        if v is not None:
+            vecs[i] = blob_to_vec(v["vector"])
+
+    grouped: set[str] = set()
+    groups: list[dict[str, Any]] = []
+    mode = "semantic"
+    if len(vecs) >= 2:
+        for c in _greedy_clusters(vecs, threshold):
+            if len(c["ids"]) < 2:
+                continue
+            grouped.update(c["ids"])
+            groups.append(_semantic_group(dl, c, entries, texts, vecs))
+    else:
+        mode = "structural"
+        keys: dict[tuple[str, str], list[str]] = {}
+        for i in order:
+            links = dl.get_entry_categories(i)
+            main = next((l for l in links if l["origin"] == "manual"),
+                        links[0] if links else None)
+            cat = (main["path"] or main["name"]) if main else ""
+            host = _entry_host(entries[i].locator)
+            if not cat and not host:
+                continue
+            keys.setdefault((cat, host), []).append(i)
+        for (cat, host), ids in keys.items():
+            if len(ids) < 2:
+                continue
+            grouped.update(ids)
+            groups.append(
+                _structural_group(cat, host, ids, entries, texts))
+
+    groups.sort(key=lambda g: -g["size"])  # 稳定排序：同大小保持命中序
+    singles = [_row(entries[i]) for i in order if i not in grouped]
+    return {"mode": mode,
+            "threshold": threshold if mode == "semantic" else None,
+            "groups": groups, "singles": singles}
 
 
 def _dot(a: list[float], b: list[float]) -> float:

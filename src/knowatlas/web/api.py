@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import Body, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..semantic.keywords import word_ok as _cloud_word_ok
+
 _TOKEN_HEADER = "x-knowatlas-token"
 _WRITE_COOKIE = "knowatlas_write"  # 同源自动写凭据（HttpOnly，JS 读不到明文）
 
@@ -274,51 +276,8 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     _CLOUD_PALETTE = ("#d1495b", "#e07a3c", "#c9a227", "#5f9e4e", "#2e9e83",
                       "#2b8fb3", "#3f6fb5", "#63599e", "#8d5aa8", "#b5497e",
                       "#a4485f", "#5f6b7a")
-    # 词元噪音停用词（真实库冒烟 2026-10-21：markdown 残片/数据导出占位符；
-    # 第五十八批按用户定调扩充「非知识性词汇」——网页/技术样板词 + 通用
-    # 虚词，这类词在词云里只有噪音价值，取舍原则：几乎不承载知识区分度）
-    _CLOUD_NOISE = frozenset({
-        "nan", "pass", "unnamed", "null", "none", "undefined", "na",
-        "true", "false", "nbsp", "utf", "utf8", "utf-8",
-        # URL / HTML / 文件类型样板
-        "http", "https", "html", "htm", "www", "com", "org", "net", "cn",
-        "php", "png", "jpg", "jpeg", "gif", "svg", "ico", "css", "js",
-        "json", "xml", "url", "uri", "api", "localhost", "host", "server",
-        "web", "site", "page", "index", "main", "default", "title",
-        "content", "file", "files", "image", "images", "download",
-        "version", "install", "setup", "config", "support", "help",
-        "docs", "example", "examples", "test", "user", "users", "name",
-        "value", "values", "type", "types", "data", "list", "item",
-        "items", "error", "errors", "warning", "info", "note", "notes",
-        # 英文高频虚词 / 通用 UI 词
-        "your", "you", "the", "and", "for", "with", "this", "that",
-        "from", "are", "was", "will", "can", "all", "not", "have",
-        "one", "out", "how", "what", "when", "more", "use", "used",
-        "using", "new", "home", "menu", "search", "click", "here",
-        "please", "faq", "guide", "guides",
-        # 中文高频虚词 / 通用泛词（保留具体技术名词如 内核/控制台/重启）
-        "点击", "这里", "我们", "他们", "可以", "如果", "这个", "那个",
-        "一个", "没有", "或者", "以及", "关于", "相关", "内容", "使用",
-        "进行", "通过", "以下", "上面", "下面", "当前", "选择", "操作",
-        "方法", "问题", "情况", "时间", "需要", "不能", "出现", "显示",
-        "查看", "打开", "关闭", "进入", "完成", "开始", "支持", "并且",
-        "但是", "然后", "例如",
-    })
-
-    def _cloud_word_ok(kw: str) -> bool:
-        """词元准入：至少一个字母（滤纯数字/「2024年」类）、非纯符号/标点
-        （##、--- 类 markdown 残片）、非噪音停用词、长度 ≥2（md/py 类英文短词
-        反映库构成，保留）。"""
-        import re as _re  # noqa: PLC0415 热路径外沿导入，避免模块级 re 依赖面
-        if len(kw) < 2:
-            return False
-        if not _re.search(r"[^\W\d_]", kw):       # 无任何字母
-            return False
-        if _re.fullmatch(r"[\W_]+", kw):          # 纯符号/标点
-            return False
-        if kw.lower() in _CLOUD_NOISE:
-            return False
-        return True
+    # 词元噪音表与准入规则已移 semantic/keywords.py（第六十批知识集组头共用），
+    # 本文件以 _cloud_word_ok 别名引用，行为不变。
 
     @app.get("/api/cloud")
     def cloud(category_id: str | None = None, limit: int = 60, word: str | None = None):
@@ -1060,6 +1019,21 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
              "snippet": h.snippet, "rank": h.rank} for h in hits
         ]}
+
+    @app.get("/api/sets/group")
+    def sets_group(ids: str = ""):
+        """知识集聚合（第六十批，方案 §7.2a 组头信号化；只读查询期聚合，零数据风险）。
+
+        ids=逗号分隔条目 id（≤200，检索工作台合并结果集）。组头 = 成员内容
+        自身信号（共享词/分类/host/代表条目摘句），**禁发明性命名**——共享词
+        逐词验证在每个成员文本中出现（探针：组头词可在组内任一条目验证）。
+        聚合策略自动选择：≥2 条有向量 → 语义贪心聚类（56 批 --cluster-report
+        同款，阈值 0.72）；否则 → 「主分类+同 host」结构聚合（v0.1 零费用）。
+        同步 def：批量向量/挂接查询走线程池，不占事件循环。
+        """
+        id_list = [s.strip() for s in ids.split(",") if s.strip()][:200]
+        from ..pipeline.embed_index import group_hits
+        return group_hits(dl, id_list)
 
     @app.post("/api/entries")
     def add_entry(request: Request, body: dict = Body(default={})):

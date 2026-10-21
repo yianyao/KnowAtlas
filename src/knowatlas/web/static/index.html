@@ -82,6 +82,17 @@
   .crumb span { cursor: pointer; color: #4a9eff; }
   .entry { margin: 8px 0; padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
   .entry a { font-weight: 600; }
+  /* 知识集分组（第六十批）：组头 = 成员自身信号（共享词/分类/host/摘句） */
+  .set-group { border: 1px solid #8884; border-inline-start: 3px solid #4a9eff;
+               border-radius: 6px; padding: 6px 10px 2px; margin: 12px 0; }
+  .set-head { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline;
+              margin-bottom: 4px; }
+  .set-head .badge { margin-left: 0; }
+  .sig-word { color: #2b8fb3; border-color: #2b8fb366; }
+  .sig-category { color: #4a9eff; border-color: #4a9eff66; }
+  .sig-host { color: #8d5aa8; border-color: #8d5aa866; }
+  .set-excerpt { font-size: 12px; color: #888; margin: 2px 0 8px; }
+  .set-note { display: block; margin-bottom: 6px; }
   .badge { display: inline-block; font-size: 11px; border: 1px solid #8886;
            border-radius: 4px; padding: 0 4px; margin-left: 6px; color: #888; }
   .cat-chip { display: inline-block; font-size: 11px; color: #4a9eff;
@@ -645,14 +656,17 @@ document.querySelectorAll("#view-tabs .vtab").forEach(b =>
   b.onclick = () => showView(b.dataset.view));
 
 // ---- 统一入口工作台（第三十四批，契约 §9.4：模式是视图切换，不是启动分叉） ----
-// 检索提交后同时拉 FTS 与 topic_recall，按条目去重合并，三视图共享同一份结果：
-// 聚合结果（带关联解释） / 线索（命中条目所属线索聚合） / 放射（焦点邻域持续下钻）。
-const wb = { q: "", merged: [], tab: "agg", focusId: null };
+// 检索提交后同时拉 FTS、topic_recall 与 hybrid（sim 通道，第六十批），按条目
+// 去重合并，三视图共享同一份结果：聚合结果（带关联解释；命中多时按知识集
+// 分组展示，第六十批）/ 线索（命中条目所属线索聚合） / 放射（焦点邻域持续下钻）。
+const wb = { q: "", merged: [], tab: "agg", focusId: null,
+             groups: null, singles: null, gmode: "" };
 
 function chLabel(ch) {
   if (ch.startsWith("cocategory:")) return "同分类:" + ch.slice(11);
   if (ch.startsWith("same_host:")) return "同站点:" + ch.slice(10);
   if (ch.startsWith("thread:")) return "同线索:" + ch.slice(7);
+  if (ch.startsWith("sim:")) return "语义相关 " + ch.slice(4);
   const BARE = { fts: "全文命中", attach: "挂接", same_host: "同站点",
                  thread: "同线索", child: "子分类", parent: "父分类",
                  host_member: "域内条目" };
@@ -662,20 +676,33 @@ function chLabel(ch) {
 async function doWorkbench(q) {
   showView("search");
   wb.q = q; wb.focusId = null; wb.tab = "agg";
+  wb.groups = null; wb.singles = null; wb.gmode = "";
   const box = document.getElementById("hits");
   box.innerHTML = "<small>聚合中…</small>";
-  const [fts, rec] = await Promise.all([
+  const [fts, rec, hyb] = await Promise.all([
     fetch("/api/search?q=" + encodeURIComponent(q)).then(r => r.json())
       .catch(() => ({ hits: [] })),
     fetch("/api/recall", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic: q, limit: 60 }) }).then(r => r.json())
       .catch(() => ({ hits: [] })),
+    // sim 通道（第六十批）：混合检索的语义命中并入合并结果（向量侧
+    // reasons=sim:<余弦>；embedding 未启用时该路响应降级 fts，无新信息）
+    fetch("/api/search?mode=hybrid&q=" + encodeURIComponent(q)).then(r => r.json())
+      .catch(() => ({ hits: [] })),
   ]);
   const map = new Map();
   for (const h of (fts.hits || []))
     map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
                           snippet: h.snippet || "", channels: ["fts"] });
+  for (const h of (hyb.hits || [])) {
+    const sims = (h.reasons || []).filter(r => r.startsWith("sim:"));
+    if (!sims.length) continue;              // 纯 fts 命中第一路已有
+    const ex = map.get(h.entry_id);
+    if (ex) { for (const s of sims) if (!ex.channels.includes(s)) ex.channels.push(s); }
+    else map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
+                               snippet: h.snippet || "", channels: sims });
+  }
   for (const h of (rec.hits || [])) {
     const ex = map.get(h.entry_id);
     if (ex) {
@@ -688,6 +715,21 @@ async function doWorkbench(q) {
     }
   }
   wb.merged = [...map.values()];
+  // 知识集聚合（第六十批，§7.3 分层查询）：命中多（>5）先给集概览，
+  // 少则直接给点。聚合失败/不成组 → 平铺兜底。
+  if (wb.merged.length > 5) {
+    try {
+      const g = await (await fetch("/api/sets/group?ids=" +
+        encodeURIComponent(wb.merged.map(x => x.id).join(",")))).json();
+      if (g.groups && g.groups.length) {
+        const byId = new Map(wb.merged.map(x => [x.id, x]));
+        const toCard = x => byId.get(x.id) || { ...x, channels: [], snippet: "" };
+        wb.gmode = g.mode || "";
+        wb.groups = g.groups.map(gr => ({ ...gr, entries: gr.entries.map(toCard) }));
+        wb.singles = (g.singles || []).map(toCard);
+      }
+    } catch (e) { /* 聚合不可用 → 平铺 */ }
+  }
   renderWorkbench();
 }
 
@@ -866,18 +908,47 @@ async function drillBucket(key) {
   bindEntryButtons();
 }
 
-function renderAggTab() {
-  const body = document.getElementById("wb-body");
-  if (!wb.merged.length) {
-    body.innerHTML = "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 主题多路召回）。</small>";
-    return;
-  }
-  body.innerHTML = wb.merged.map(e =>
-    `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+function entryCard(e) {
+  return `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
     + e.channels.map(ch => `<span class="badge" title="关联解释：${ch.replace(/"/g, "&quot;")}">${chLabel(ch)}</span>`).join("")
     + `<button class="wb-focus-btn" data-id="${e.id}" title="以该条目为焦点进入放射视图">🎯 放射</button>`
     + (e.snippet ? `<br><small>${e.snippet}</small>` : "")
-    + `</div>`).join("");
+    + `</div>`;
+}
+
+const SIG_TITLE = { word: "成员共享词（组内每条正文均可验证，非人工命名）",
+                    category: "成员共享分类（组内每条都挂接）",
+                    host: "成员共享站点（组内每条同源）" };
+
+function renderAggTab() {
+  const body = document.getElementById("wb-body");
+  if (!wb.merged.length) {
+    body.innerHTML = "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 语义相似 ∪ 主题多路召回）。</small>";
+    return;
+  }
+  let html = "";
+  if (wb.groups && wb.groups.length) {
+    // 集分组列表（第六十批，§7.3）：组头信号非人工命名，点组内条目即下钻
+    const note = wb.gmode === "semantic"
+      ? "语义聚类（sim 通道，阈值 0.72）" : "主分类 + 同站点";
+    html += `<small class="set-note">命中较多——先看「知识集」分组（${note}；组头 = 成员自身信号，非人工命名）：</small>`;
+    for (const g of wb.groups) {
+      html += `<div class="set-group"><div class="set-head">`
+        + g.signals.map(s =>
+            `<span class="badge sig-${s.kind}" title="${SIG_TITLE[s.kind] || s.kind}">${s.value}</span>`).join("")
+        + `<span class="badge">${g.size} 条</span></div>`
+        + (g.excerpt ? `<div class="set-excerpt" title="代表条目：${(g.excerpt_title || "").replace(/"/g, "&quot;")}">「${g.excerpt}」</div>` : "")
+        + g.entries.map(entryCard).join("")
+        + `</div>`;
+    }
+    if (wb.singles && wb.singles.length)
+      html += `<div class="set-group"><div class="set-head"><span class="badge">未成组</span>`
+        + `<span class="badge">${wb.singles.length} 条</span></div>`
+        + wb.singles.map(entryCard).join("") + `</div>`;
+  } else {
+    html = wb.merged.map(entryCard).join("");
+  }
+  body.innerHTML = html;
   body.querySelectorAll(".wb-focus-btn").forEach(b =>
     b.onclick = () => { wb.focusId = b.dataset.id; wb.tab = "radiate"; renderWorkbench(); });
   attachCatChips();  // 分类定位徽标

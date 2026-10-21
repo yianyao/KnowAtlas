@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from knowatlas.datalayer.db import DataLayer
 from knowatlas.models import Entry
 from knowatlas.pipeline.embed_index import (
-    cluster_report, embed_entries, hybrid_search,
+    cluster_report, embed_entries, group_hits, hybrid_search,
 )
 from knowatlas.semantic.base import TaskContext
 from knowatlas.semantic.embed import (
@@ -280,6 +280,120 @@ def test_cluster_report_disabled_and_empty(dl):
     es = _seed(dl, 1)  # 有条目但无向量
     report = cluster_report(dl, FakeEmbedder(), None)
     assert report["clusters"] == [] and "note" in report
+
+
+# ---- 知识集聚合 group_hits（第六十批，方案 §7.2a 组头信号化） ----
+
+def test_group_hits_semantic_shared_word_verifiable(dl):
+    """语义路径：相似向量聚组；组头共享词在**每个成员**文本中可验证（探针）。"""
+    es = [
+        Entry.build(source_type="manual", source_key="set:a", title="容器部署指南",
+                    locator="https://docs.dev.example/dep", locator_canonical=None,
+                    inline_content="容器部署前先准备镜像仓库与编排清单文件", native_path=None,
+                    meta={}),
+        Entry.build(source_type="manual", source_key="set:b", title="容器网络排错",
+                    locator="https://docs.dev.example/net", locator_canonical=None,
+                    inline_content="容器网络排错先检查桥接模式与端口映射规则", native_path=None,
+                    meta={}),
+        Entry.build(source_type="manual", source_key="set:c", title="周末菜谱",
+                    locator="https://life.example/menu", locator_canonical=None,
+                    inline_content="红烧肉做法：焯水后小火慢炖一个小时", native_path=None,
+                    meta={}),
+    ]
+    dl.upsert_entries(es)
+    dl.put_vectors([
+        {"entry_id": es[0].id, "dim": 8, "model": "fake:test",
+         "vector": vec_to_blob(normalize([1.0, 0, 0, 0, 0, 0, 0, 0]))},
+        {"entry_id": es[1].id, "dim": 8, "model": "fake:test",
+         "vector": vec_to_blob(normalize([0.99, 0.05, 0, 0, 0, 0, 0, 0]))},  # 近 a
+    ])
+    r = group_hits(dl, [e.id for e in es])
+    assert r["mode"] == "semantic" and r["threshold"] == 0.72
+    assert len(r["groups"]) == 1
+    g = r["groups"][0]
+    assert g["size"] == 2
+    assert {e["id"] for e in g["entries"]} == {es[0].id, es[1].id}
+    # 探针：组头词可在组内任一条目验证（子串出现在每条成员标题+正文）
+    words = [s["value"] for s in g["signals"] if s["kind"] == "word"]
+    assert words, "两条相似成员必有共享词"
+    for w in words:
+        for e in (es[0], es[1]):
+            assert w.lower() in f"{e.title}{e.inline_content}".lower(), w
+    assert "excerpt" in g and g["excerpt_title"] in (es[0].title, es[1].title)
+    assert {s["id"] for s in r["singles"]} == {es[2].id}
+
+
+def test_group_hits_structural_fallback_without_vectors(dl):
+    """结构路径（v0.1）：无向量按「主分类+同 host」聚合，信号可验证。"""
+    dev = dl.create_category("技术开发", [], "manual")
+    fe = dl.create_category("前端", [dev.id], "manual")
+    es = [
+        Entry.build(source_type="manual", source_key="st:1", title="JS 闭包详解",
+                    locator="https://blog.dev.example/closure", locator_canonical=None,
+                    inline_content="闭包是函数与其词法环境的组合", native_path=None, meta={}),
+        Entry.build(source_type="manual", source_key="st:2", title="JS 原型链图解",
+                    locator="https://blog.dev.example/proto", locator_canonical=None,
+                    inline_content="原型链是对象查找属性的路径", native_path=None, meta={}),
+        Entry.build(source_type="manual", source_key="st:3", title="周末爬山记",
+                    locator="https://life.example/hill", locator_canonical=None,
+                    inline_content="山路六十公里，秋色正好", native_path=None, meta={}),
+    ]
+    dl.upsert_entries(es)
+    dl.attach_category(es[0].id, fe.id, 1.0, "manual", "t")
+    dl.attach_category(es[1].id, fe.id, 1.0, "manual", "t")
+    r = group_hits(dl, [e.id for e in es])
+    assert r["mode"] == "structural" and r["threshold"] is None
+    assert len(r["groups"]) == 1 and r["groups"][0]["size"] == 2
+    g = r["groups"][0]
+    sig = {s["kind"]: s["value"] for s in g["signals"]}
+    assert sig["category"] == "技术开发/前端" and sig["host"] == "blog.dev.example"
+    assert {e["id"] for e in g["entries"]} == {es[0].id, es[1].id}
+    assert {s["id"] for s in r["singles"]} == {es[2].id}
+    # 主分类+同 host 是合取：同分类不同 host 不并入该组
+    e4 = Entry.build(source_type="manual", source_key="st:4", title="JS 模块化简史",
+                     locator="https://wiki.example/modules", locator_canonical=None,
+                     inline_content="模块化演进从命名空间到 ES Module", native_path=None, meta={})
+    dl.upsert_entries([e4])
+    dl.attach_category(e4.id, fe.id, 1.0, "manual", "t")
+    r2 = group_hits(dl, [e.id for e in es] + [e4.id])
+    assert {tuple(sorted(e["id"] for e in g["entries"])) for g in r2["groups"]} == {
+        tuple(sorted((es[0].id, es[1].id)))}
+    assert len(r2["singles"]) == 2
+
+
+def test_group_hits_no_commonality_all_singles(dl):
+    """无共性（分类/host/向量皆无）→ 全部平铺，不发明任何分组。"""
+    es = [
+        Entry.build(source_type="manual", source_key=f"sg:{i}", title=f"条目{i}",
+                    locator=f"https://h{i}.example/{i}", locator_canonical=None,
+                    inline_content=f"第{i}篇各不相关的正文", native_path=None, meta={})
+        for i in range(3)
+    ]
+    dl.upsert_entries(es)
+    r = group_hits(dl, [e.id for e in es])
+    assert r["groups"] == []
+    assert [s["id"] for s in r["singles"]] == [e.id for e in es]
+
+
+def test_sets_group_endpoint(client, dl):
+    """端点形状：结构聚合返回组+平铺；空 ids → mode=none。"""
+    es = [
+        Entry.build(source_type="manual", source_key="ep:1", title="K8s 部署",
+                    locator="https://k8s.example/deploy", locator_canonical=None,
+                    inline_content="部署清单与滚动更新策略", native_path=None, meta={}),
+        Entry.build(source_type="manual", source_key="ep:2", title="K8s 网络",
+                    locator="https://k8s.example/net", locator_canonical=None,
+                    inline_content="容器网络插件与端口暴露", native_path=None, meta={}),
+    ]
+    dl.upsert_entries(es)
+    r = client.get("/api/sets/group", params={"ids": f"{es[0].id},{es[1].id}"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "structural" and len(body["groups"]) == 1
+    sig = {s["kind"]: s["value"] for s in body["groups"][0]["signals"]}
+    assert sig.get("host") == "k8s.example"      # 无分类无共享词时仍给 host 信号
+    empty = client.get("/api/sets/group", params={"ids": ""})
+    assert empty.json()["mode"] == "none" and empty.json()["groups"] == []
 
 
 # ---- Web API：/api/search?mode=hybrid ----
