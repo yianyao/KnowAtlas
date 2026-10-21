@@ -57,6 +57,20 @@ def test_radiate_category_focus_reasons_complete(dl, seeded):
     assert any(x.startswith("attach:") for x in attached["reasons"])
 
 
+def test_radiate_child_channel_has_edge(dl, seeded):
+    """焦点=技术开发（有子分类）：子分类必须以 child 边连到焦点。
+
+    第四十八批修复：child 通道原来只 add_node 不 add_edge——子分类成孤立
+    节点漂在画布中央冒充主要内容，tooltip 也无从解释（截图实锤）。
+    """
+    r = dl.radiate(f"c:{seeded['cat'].id}")
+    assert r is not None
+    sub_node = next(n for n in r["nodes"] if n["id"] == f"c:{seeded['sub'].id}")
+    assert "child" in sub_node["reasons"]
+    edge = next(e for e in r["edges"] if e["target"] == f"c:{seeded['sub'].id}")
+    assert edge["source"] == f"c:{seeded['cat'].id}" and edge["reason"] == "child"
+
+
 def test_radiate_entry_focus_channels(dl, seeded):
     r = dl.radiate(f"e:{seeded['entries'][0].id}")
     assert r is not None and r["focus"]["kind"] == "entry"

@@ -1524,3 +1524,29 @@ CLI 的 kexport 骨架早已预留（--format json|obsidian|opml --out），SOP-
   test_web_api.py MCP 用例 +1 断言（探针B）
 - pytest 263 项全绿（258→263）；canary 不变（无 DDL/dataclass/scheme/config 键变更）
 - 变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十八批：关系图放射模式三处修复（child 缺边 / 焦点挤视口左上 / reason 原始码透出）
+
+**背景**：用户截图（放射：放射技术开发）实锤——焦点+挂接条目整团挤在视口
+左上被裁剪、标签叠成一团；子分类节点漂在画布中央冒充主要内容；弹窗卡
+关联理由显示 `attach:rule` 原始码。
+
+1. **db.py radiate child 通道缺边**：分类焦点时 child 通道只 add_node 不
+   add_edge——子分类成孤立节点（14 节点 8 边的来源：8 条挂接边，5 个子分类
+   全孤立）。补 `add_edge(c:<id>, "child")`，tooltip/理由标签恢复正常语义。
+   既有测试焦点全取叶子分类（无子分类），故从未暴露。
+2. **graph.html 放射布种**：焦点 fixed 在 (0,0)=视图坐标原点=包围盒左上角，
+   自动 fit 后整团挤在视口左上。改为非焦点节点绕原点环形布种（黄金角
+   ≈137.5°，分类 260 / 条目 170 / 域名 140 半径 + 抖动），包围盒以焦点为
+   中心，fit 后焦点居中、邻域放射展开。
+3. **graph.html reason 显示格式化**：新增 `fmtReason()`（attach:rule →
+   挂接·关键词规则；未识别段原样），四处展示点统一（节点弹窗卡 / 边
+   tooltip / 🏷边标签 / 反查面板）。
+
+**连带修复（第四十七批遗留）**：test_backup.py bcfg 夹具缺 server_port 键，
+本机真跑着 serve（8420）时 restore 用例全被端口预检误判拦截——夹具显式
+`server_port: 0`（connect 必败），测试与宿主机环境解耦。
+
+**复检**：pytest 264 项全绿（263→264，新增 child 边测试）；canary 不变
+（无 DDL/scheme/config 键变更）；graph.html 经浏览器冒烟（无 JS 错误）。
+生效说明：前端两项刷新页面即生效；child 边需重启 serve。

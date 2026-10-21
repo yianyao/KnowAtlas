@@ -39,7 +39,10 @@ def bcfg(tmp_path: Path) -> Config:
                     "backup_dir": str(tmp_path / "backups"),
                     "log_level": "WARNING",
                     "backup_on_sync": True, "backup_keep": 10,
-                    "backup_min_interval_hours": 24},
+                    "backup_min_interval_hours": 24,
+                    # 端口预检隔离：显式给 0（connect 必败）——否则缺省回落
+                    # 8420，本机真跑着 serve 时 restore 用例全误判「服务运行中」
+                    "server_port": 0},
         "sources": {"manual": {"enabled": True}},
     }
     return Config(data, tmp_path / "knowatlas.toml")

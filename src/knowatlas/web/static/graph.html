@@ -68,6 +68,14 @@ const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "�
                      llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
                      child: "子分类", parent: "父分类", attach: "挂接",
                      thread: "同线索", host_member: "域内条目" };
+// relation_reason 显示格式化：attach:rule → 挂接·关键词规则；未识别的段原样透出
+function fmtReason(r) {
+  const i = r.indexOf(":");
+  if (i < 0) return KIND_LABEL[r] || r;
+  const head = KIND_LABEL[r.slice(0, i)] || r.slice(0, i);
+  const raw = r.slice(i + 1), tail = KIND_LABEL[raw];
+  return tail ? `${head}·${tail}` : `${head}:${raw}`;
+}
 const KIND_NAME = { category: "分类", entry: "条目", domain: "域名" };
 const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
                         same_host: "同域名", thread: "同线索", host_member: "域内条目" };
@@ -116,7 +124,7 @@ function showCard(d, cx, cy) {
   const info = [];
   if (d.path) info.push(`<div class="cp">路径：${d.path}</div>`);
   if (d.reasons && d.reasons.length)
-    info.push(`<div class="cp">关联：${d.reasons.join("；")}</div>`);
+    info.push(`<div class="cp">关联：${d.reasons.map(fmtReason).join("；")}</div>`);
   // 打开原文只对 http(s) 出真链接；file://（配置根相对路径）/emmx://（脑图引用）
   // 浏览器打不开（第三十七批：不再渲染假链接，改 locator 文本 + 复制）
   const loc = d.locator || "";
@@ -186,17 +194,29 @@ function render(data, crumbText, opts = {}) {
   nodecard.hidden = true;    // 视图重渲染强制收起弹窗，防残留
   const radiateView = !!opts.radiate;
   const reasonOn = document.getElementById("showReason").checked;
-  const nodes = data.nodes.map(n => {
+  // 放射视图布种：焦点固定 (0,0)，非焦点节点绕原点环形散布（黄金角）——
+  // 否则邻域从原点随机起步，包围盒左上角即焦点，自动 fit 后焦点连同挂接
+  // 条目整团挤在视口左上被裁剪（第四十八批截图实锤）；环形布种让包围盒
+  // 以焦点为中心，fit 后焦点居中、邻域向外放射。
+  const RING_R = { category: 260, entry: 170, domain: 140 };
+  const nodes = data.nodes.map((n, i) => {
     const isFocus = radiateView && n.id === data.focus.id;
     const size = isFocus ? 34
       : n.kind === "category"
         ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)
         : (n.kind === "domain" ? 10 : 7);
+    let x, y;
+    if (isFocus) { x = 0; y = 0; }
+    else if (radiateView) {
+      const r = (RING_R[n.kind] || 170) * (0.85 + (i % 6) * 0.06);
+      const ang = i * 2.399963;               // 黄金角≈137.5°，散而不叠
+      x = Math.round(Math.cos(ang) * r); y = Math.round(Math.sin(ang) * r);
+    }
     return {
       id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
       reasons: n.reasons || [], path: n.path || "",
       symbolSize: size,
-      x: isFocus ? 0 : undefined, y: isFocus ? 0 : undefined,
+      x, y,
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
       itemStyle: { color: isFocus ? "#ffd04b"
                      : n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
@@ -218,7 +238,7 @@ function render(data, crumbText, opts = {}) {
     lineStyle: { color: l.reason || l.kind === "same_host"
                      ? "rgba(160,160,160,.4)" : "rgba(74,158,255,.45)",
                  width: (l.kind === "same_host" || l.reason) ? 1 : 1.6, curveness: 0.1 },
-    label: { show: reasonOn && !!l.reason, formatter: l.reason || "",
+    label: { show: reasonOn && !!l.reason, formatter: l.reason ? fmtReason(l.reason) : "",
              fontSize: 9, color: "#999" },
   }));
   crumb.innerHTML = `<span class="crumbit" style="cursor:default;font-weight:600">${crumbText}</span>`;
@@ -236,7 +256,7 @@ function render(data, crumbText, opts = {}) {
   chart.setOption({
     tooltip: { formatter: p => {
       if (p.dataType !== "edge") return "";   // 节点走 #nodecard 弹窗卡（tooltip 移不上去点链接，用户批注）
-      const why = p.data.reason ? `<br>关联理由：${p.data.reason}` : "";
+      const why = p.data.reason ? `<br>关联理由：${fmtReason(p.data.reason)}` : "";
       return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
     } },
     series: [{
@@ -351,7 +371,7 @@ document.getElementById("reverseBtn").onclick = async () => {
             : it.name);
       return `<div class="ritem"><span class="rkind">${KC[it.kind] || it.kind}</span>${inner}`
            + (it.path ? `<br><span class="rpath">路径：${it.path}</span>` : "")
-           + `<br><span class="rpath">理由：${it.reason}</span></div>`;
+           + `<br><span class="rpath">理由：${fmtReason(it.reason)}</span></div>`;
     }).join("") : "<div class='ritem'>没有可反查的焦点。</div>");
   revpanel.hidden = false;
   revpanel.querySelectorAll("[data-cat]").forEach(s =>

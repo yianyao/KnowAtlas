@@ -908,6 +908,9 @@ class DataLayer:
                         if self._consumable_count(self._cat_descendants(r["id"])) > 0]
             for r in children[:per_channel]:
                 add_node(f"c:{r['id']}", r["name"], "category", "child")
+                # child 必须落边：只加节点会让子分类在力导向图里成孤立点
+                # （漂在画布中央冒充主要内容，tooltip 也无从解释）——第四十八批
+                add_edge(f"c:{r['id']}", "child")
             cut("child", len(children))
             # attach:<origin>：挂接条目（带 locator，前端可打开）
             atts = self._conn.execute(
