@@ -312,7 +312,9 @@ async function showSubtree(categoryId, push = true, forceClassic = false) {
   showEntriesBtn.style.display =
     (useHier && !data.nodes.some(n => n.kind === "entry")) ? "" : "none";
   if (push) {
-    nav.push({ label: `子树:${rootName}`, load: p => showSubtree(categoryId, false, forceClassic) });
+    // 面包屑纯名称（2026-10-22 用户反馈「子树:技术开发 › 子树:前端」前缀冗余）；
+    // 视图类型走 navType 字段判断（showEntriesBtn），不再依赖 label 前缀
+    nav.push({ label: rootName, navType: "subtree", load: p => showSubtree(categoryId, false, forceClassic) });
     renderBread();
   }
 }
@@ -368,8 +370,8 @@ expandBtn.onclick = () => {          // Top-N 渐进披露：×3 扩容（封顶
 showEntriesBtn.onclick = () => {
   if (currentSubtree == null) return;
   const top = nav[nav.length - 1];
-  if (top && top.label.startsWith("子树:")) {
-    nav[nav.length - 1] = { label: `条目:${top.label.slice(3)}`,
+  if (top && top.navType === "subtree") {
+    nav[nav.length - 1] = { label: top.label, navType: "entries",
                             load: p => showSubtree(currentSubtree, false, true) };
     renderBread();
   }
