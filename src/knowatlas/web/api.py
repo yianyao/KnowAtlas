@@ -339,6 +339,30 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 for e in dl.cloud_facet(category_id, word.strip(), limit=50)]
         return payload
 
+    @app.get("/api/timeline")
+    def timeline(category_id: str | None = None, granularity: str | None = None,
+                 bucket: str | None = None, stale_years: int = 2):
+        """时间线（第四十四批）：focus 分类子树按 created_at（内容时间：书签
+        收藏/文件创建时间）分桶 + 陈旧叶子分支提醒（长期无新内容，只提醒不改数据）。
+
+        - 范围：category_id 指定的分类子树；缺省 = 全库；
+        - 分桶：granularity=year|month|缺省自适应（跨度 >24 个月→year）；
+          连续区间补齐空桶；created_at 缺失只进 unknown_count（不编造时间）；
+        - bucket=key（如 "2020" / "2020-07"）：追加 entries=该桶可消费条目
+          （柱点击下钻；按 exported_at 近序 limit 100）；
+        - stale_branches：子树内叶子分类最新条目超 stale_years 年 → 提醒
+          清理/归档（age_years 降序）；unknown_branches=时间未知不判陈旧。
+        """
+        data = dl.timeline_data(category_id, granularity=granularity,
+                                bucket=bucket, stale_years=stale_years)
+        if bucket:
+            data["entries"] = [
+                {"id": e.id, "title": e.title, "locator": e.locator,
+                 "source_type": e.source_type,
+                 "snippet": " ".join((e.inline_content or "").split())[:120]}
+                for e in data.get("entries", [])]
+        return data
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。保留兼容；新视图见下。"""

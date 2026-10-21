@@ -1289,3 +1289,70 @@ find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截�
   技术开发 821 / 软件与ERP 671 / 人工智能 268，词元主题分布合理
 - canary 六面不变（无 DDL/枚举/配置键变化）；pytest 236 项全绿（+7）；
   五个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十四批：时间线视图 + 陈旧分支提醒（最后大件收官）
+
+**背景**：TODO 步骤「时间线视图 + 陈旧分支提醒（长期无新内容的分支提示清理或
+归档）」——视图四件套（串联/放射/工作台/词云）的最后一块。
+
+**设计要点**
+
+- 时间轴走 **created_at**（内容时间：书签收藏时间/文件创建时间），不走
+  exported_at（入库时间，全库挤在同一批无分布意义）；无 created_at 的条目
+  （folder 源等）诚实进「时间未知」计数，不编造时间。
+- 与词云同构的 scoped 范围：焦点分类子树（currentCat，null=全库）。
+
+**变更**
+
+1. **db.py `timeline_data(category_id, *, granularity=None, bucket=None,
+   stale_years=2)`**：
+   - 分桶：granularity=None 自适应（跨度 >24 个月→year，否则 month），可显式
+     覆盖；空桶补齐（连续区间，ECharts 轴均匀）；buckets=[{key,label,count}]；
+   - unknown_count：created_at 缺失的可消费条目数；
+   - bucket 参数：返回该桶条目列表（按 exported_at 近序，limit 100）——柱点击
+     下钻，首屏不返回全量；
+   - stale_branches：子树内**叶子分类**（无子节点的分类）的可消费条目数 +
+     max(created_at)，latest 超 stale_years 年 → [{id,name,latest,count,
+     age_years}]（age 降序）；max 为 NULL 的分支进 unknown_branches
+     **不判陈旧**（时间未知 ≠ 陈旧，只标不删可逆模型同款口径）；
+   - span {min,max}（有 created_at 的极值）。
+2. **api.py `GET /api/timeline?category_id=&granularity=&bucket=&stale_years=`**：
+   聚合上述数据 + threshold_years 回传（前端明示规则）。
+3. **index.html**：侧栏常驻「📈 时间线」入口；工作台 tabs 加 timeline；
+   renderTimelineTab = 范围条 + ECharts 柱状图（复用 vendored echarts.min.js，
+   与 graph.html 同源）+ 柱点击下钻桶条目（复用 entryHTML/bindEntryButtons）
+   + 年/月粒度切换 + 「🕰️ 陈旧分支提醒」区块（分支名/最新条目时间/停滞年数/
+   条目数/「📍树中定位」——currentCat 同步 + loadTree + highlightInTree，
+   与词云分类词元同款联动）。
+4. **配置/依赖/canary**：零新增（echarts 已 vendored；无 DDL/枚举/配置键变化）。
+
+**复检探针**（实现后逐条命中）
+
+- 切到某子树，桶只反映该子树条目（他子树条目不出现在桶/bucket 下钻）（探针①）
+- 粒度自适应：跨 2020-2026 → year；单年数据 → month；显式 granularity 覆盖（探针②）
+- 叶子最新条目超 2 年 → 进 stale_branches；有新条目的叶子不命中；无 created_at
+  的分支进 unknown_branches 不判陈旧（探针③）
+- bucket 模式返回该桶可消费条目（待清理/死链不出）；空桶不炸（探针④）
+- stale_years 参数化（传 10 → 6 年前的叶子不 stale）（探针⑤）
+- pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- tests/test_timeline.py 7 项：探针①范围隔离+月粒度空桶补齐（mq 子树跨度
+  8 个月≤24→month，中间月补 0）/ 探针②粒度自适应（全库 66 个月→year、
+  数据库叶子单月→month）+ 显式覆盖 / 探针③陈旧分支（消息队列停滞 5.6 年
+  进 stale、数据库有新内容不命中、生活无 created_at 进 unknown 不判陈旧）
+  / 探针④bucket 下钻可消费口径（待清理不出、空桶不炸）/ 探针⑤阈值参数化
+  （10 年阈值不 stale）/ API 结构 + 前端静态探针（tl-link/tab/echarts 复用/
+  陈旧分支区块明示规则）
+- 开发期修三个真 bug：①叶子分类查询用错列（category_id=子节点列，叶子应查
+  parent_id 列——原实现把「根分类」当叶子，子树全漏判）；②datetime 时区
+  混比（created_at 带 +08:00 vs now() naive → TypeError，统一 UTC aware）；
+  ③bucket 匹配绑死当前粒度宽度（month 模式传 "2020" 永远落空 → 改长度
+  自适应前缀匹配，前端行为不变、直调更友好）
+- 真实库副本冒烟：全库年粒度 2011-2026（2015-2022 收藏高峰、2026 批量 673），
+  时间未知 792（folder 源诚实计数不编造）；陈旧分支：后端 274 条停滞 4.7 年、
+  系统工具 15 条 5.5 年、信息安全 5.6 年——正是值得提醒清理的分支；
+  bucket 2020 下钻 87 条 0.18s；子树范围隔离正常
+- canary 六面不变（无 DDL/枚举/配置键变化）；pytest 243 项全绿（+7）；
+  五个变更文件 UTF-8 无 BOM + LF

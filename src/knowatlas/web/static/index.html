@@ -70,6 +70,20 @@
   .cloud-word { cursor: pointer; margin: 0 10px 4px 0; display: inline-block; }
   .cloud-word:hover { text-decoration: underline; }
   #cloud-facet .entry { margin: 4px 0; }
+  /* 时间线视图（第四十四批） */
+  .tl-scope { font-size: 13px; margin: 4px 0 10px; }
+  .tl-gran { cursor: pointer; margin: 0 4px; padding: 2px 8px; font-size: 12px;
+             border: 1px solid #8886; border-radius: 10px; background: transparent; color: inherit; }
+  .tl-gran.on { border-color: #4a9eff; color: #4a9eff; }
+  #tl-chart { width: 100%; height: 280px; margin: 4px 0 10px; }
+  .tl-stale { font-size: 13px; margin-top: 14px; border-top: 1px solid #8884; padding-top: 10px; }
+  .tl-branch { display: flex; align-items: center; gap: 8px; margin: 5px 0; flex-wrap: wrap; }
+  .tl-branch .nm { font-weight: 600; }
+  .tl-branch .age { color: #d1495b; font-size: 12px; }
+  .tl-locate { cursor: pointer; font-size: 12px; padding: 2px 8px;
+               border: 1px solid #8886; border-radius: 10px; background: transparent; color: inherit; }
+  .tl-locate:hover { border-color: #4a9eff; color: #4a9eff; }
+  #tl-bucket .entry { margin: 4px 0; }
   dialog { border: 1px solid #8888; border-radius: 8px; padding: 16px;
            background: Canvas; color: CanvasText; min-width: 320px; }
   dialog::backdrop { background: rgba(0,0,0,.5); }
@@ -86,6 +100,7 @@
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
   <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
   <a href="#" id="cloud-link" style="display:block;margin-bottom:8px;font-size:13px">☁️ 词云（范围随焦点分类子树变化，点词元下钻/过滤）</a>
+  <a href="#" id="tl-link" style="display:block;margin-bottom:8px;font-size:13px">📈 时间线（内容时间分布 + 陈旧分支提醒）</a>
   <!-- 数据管理入口默认折叠（第三十七批用户定调：日常是消费数据，采集/清理只在新数据时用） -->
   <details id="mgmt" style="margin:4px 0 8px">
   <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
@@ -126,6 +141,7 @@
   </select>
   <div id="hits"><small>点击左侧分类查看条目；或输入关键词全文检索。</small></div>
 </main>
+<script src="/vendor/echarts.min.js"></script>
 <script>
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
 let currentCat = null; // 当前选中分类 id
@@ -548,7 +564,7 @@ async function doWorkbench(q) {
 function renderWorkbench() {
   const box = document.getElementById("hits");
   const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"],
-               ["cloud", "☁ 词云"]];
+               ["cloud", "☁ 词云"], ["timeline", "📈 时间线"]];
   box.innerHTML =
     `<div id="wb-tabs">` + tabs.map(([k, label]) =>
       `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
@@ -569,6 +585,7 @@ function renderWorkbench() {
   if (wb.tab === "agg") renderAggTab();
   else if (wb.tab === "threads") renderThreadsTab();
   else if (wb.tab === "cloud") renderCloudTab();
+  else if (wb.tab === "timeline") renderTimelineTab();
   else renderRadiateTab();
 }
 
@@ -639,6 +656,104 @@ document.getElementById("cloud-link").onclick = (e) => {
   wb.tab = "cloud";
   document.getElementById("crumb").textContent =
     "☁️ 词云——范围随左侧树焦点分类子树变化（点分类词元下钻 / 点内容词元按词过滤）";
+  document.getElementById("filter").style.display = "none";
+  renderWorkbench();
+};
+
+// ---- 时间线视图（第四十四批：scoped timeline + 陈旧分支提醒） ----
+// 范围 = 左侧树当前焦点分类子树（currentCat；null=全库），随焦点切换；
+// 时间轴走 created_at（内容时间）；created_at 缺失只计数不编造时间；
+// 柱点击 → 该桶条目下钻；陈旧分支 = 叶子分类超 N 年无新内容（只提醒不删，
+// 清理/归档走左侧树管理按钮）。
+let tlGranPref = null;   // 用户显式粒度偏好（null=自适应；切焦点后保留）
+let tlChart = null;      // ECharts 实例（重渲染前 dispose）
+async function renderTimelineTab() {
+  const body = document.getElementById("wb-body");
+  body.innerHTML = "<small>聚合中…</small>";
+  const params = new URLSearchParams();
+  if (currentCat) params.set("category_id", currentCat);
+  if (tlGranPref) params.set("granularity", tlGranPref);
+  const qs = params.toString();
+  const data = await (await fetch("/api/timeline" + (qs ? "?" + qs : ""))).json();
+  const focusName = (data.focus && data.focus.name) || "全库";
+  let html = `<div class="tl-scope">范围：<b>${focusName}</b>`
+    + (currentCat ? ` <a href="#" id="tl-all">↩ 全库</a>` : "")
+    + ` · 粒度：<button class="tl-gran${data.granularity === "year" ? " on" : ""}" data-gran="year">年</button>`
+    + `<button class="tl-gran${data.granularity === "month" ? " on" : ""}" data-gran="month">月</button>`
+    + (data.unknown_count
+        ? ` · <span title="created_at 缺失（folder 源等）：只计数，不编造时间">时间未知 ${data.unknown_count} 条</span>` : "")
+    + `</div>`;
+  html += `<div id="tl-chart"></div><div id="tl-bucket"></div>`;
+  // 陈旧分支提醒（只提醒不改数据）
+  const sb = data.stale_branches || [], ub = data.unknown_branches || [];
+  html += `<div class="tl-stale"><b>🕰️ 陈旧分支提醒</b>`
+    + `<span style="opacity:.55">（叶子分类超 ${data.threshold_years} 年无新内容——仅提醒，清理/归档走左侧树管理按钮）</span>`
+    + (sb.length ? `<div>` + sb.map(b =>
+        `<div class="tl-branch"><span class="nm">${b.name}</span>`
+        + `<span class="age">停滞 ${b.age_years} 年</span>`
+        + `<span style="opacity:.6">最新条目 ${(b.latest || "").slice(0, 10)} · ${b.count} 条</span>`
+        + `<button class="tl-locate" data-id="${b.id}" data-name="${b.name}">📍 树中定位</button>`
+        + `</div>`).join("") + `</div>`
+      : `<div><small style="opacity:.6">无陈旧分支（该范围叶子分支均有 ${data.threshold_years} 年内新内容）。</small></div>`)
+    + (ub.length ? `<div><small style="opacity:.55">另有 ${ub.length} 个分支时间未知（created_at 缺失，不判陈旧）：`
+        + ub.slice(0, 8).map(b => b.name).join("、") + (ub.length > 8 ? "…" : "") + `</small></div>` : "")
+    + `</div>`;
+  body.innerHTML = html;
+  // 粒度切换（显式偏好，切焦点后保留）
+  body.querySelectorAll(".tl-gran").forEach(b => b.onclick = () => {
+    tlGranPref = (tlGranPref === b.dataset.gran) ? null : b.dataset.gran;
+    renderTimelineTab();
+  });
+  const all = document.getElementById("tl-all");
+  if (all) all.onclick = (e) => { e.preventDefault(); currentCat = null; loadTree(); renderTimelineTab(); };
+  // ECharts 柱状图（复用 vendored echarts，与 graph.html 同源）
+  const box = document.getElementById("tl-chart");
+  if (tlChart) { tlChart.dispose(); tlChart = null; }
+  if (data.buckets.length && typeof echarts !== "undefined") {
+    tlChart = echarts.init(box);
+    tlChart.setOption({
+      tooltip: { trigger: "axis" },
+      grid: { left: 44, right: 12, top: 20, bottom: 28 },
+      xAxis: { type: "category", data: data.buckets.map(b => b.label) },
+      yAxis: { type: "value", minInterval: 1 },
+      series: [{ type: "bar", data: data.buckets.map(b => b.count),
+                 itemStyle: { color: "#3f6fb5" }, barMaxWidth: 36 }],
+    });
+    tlChart.on("click", p => drillBucket(data.buckets[p.dataIndex].key));
+  } else if (!data.buckets.length) {
+    box.innerHTML = "<small style=\"opacity:.6\">该范围无带内容时间的条目。</small>";
+  }
+  // 陈旧分支：树中定位（与词云分类词元同款联动）
+  body.querySelectorAll(".tl-locate").forEach(b => b.onclick = () => {
+    currentCat = b.dataset.id;
+    loadTree();
+    highlightInTree(b.dataset.id);
+  });
+}
+
+async function drillBucket(key) {
+  const params = new URLSearchParams();
+  if (currentCat) params.set("category_id", currentCat);
+  params.set("bucket", key);
+  const d = await (await fetch("/api/timeline?" + params.toString())).json();
+  const box = document.getElementById("tl-bucket");
+  if (!box) return;
+  box.innerHTML = `<div style="font-size:13px;margin:6px 0">「<b>${key}</b>」的可消费条目 ${d.entries.length} 条：</div>`
+    + (d.entries.length ? d.entries.map(x =>
+        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + `<button class="move-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
+        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+        + (x.snippet ? `<br><small>${x.snippet}</small>` : "") + `</div>`).join("")
+      : "<small>无匹配。</small>");
+  bindEntryButtons();
+}
+
+document.getElementById("tl-link").onclick = (e) => {
+  e.preventDefault();
+  wb.tab = "timeline";
+  document.getElementById("crumb").textContent =
+    "📈 时间线——范围随左侧树焦点分类子树变化（时间轴 = 内容时间 created_at；点柱下钻；陈旧分支仅提醒）";
   document.getElementById("filter").style.display = "none";
   renderWorkbench();
 };

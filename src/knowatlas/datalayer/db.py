@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
@@ -1202,6 +1202,159 @@ class DataLayer:
             (*sub_ids, self._like_pattern(word), self._like_pattern(word), limit),
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
+
+    # ---- 时间线视图（第四十四批：scoped timeline + 陈旧分支提醒） ----
+
+    def timeline_data(self, category_id: str | None, *, granularity: str | None = None,
+                      bucket: str | None = None, stale_years: int = 2,
+                      bucket_limit: int = 100) -> dict[str, Any]:
+        """时间线聚合数据源：focus 子树（None=全库）按 created_at 分桶 +
+        陈旧叶子分支提醒（长期无新内容）+ bucket 下钻条目。
+
+        时间口径：created_at = 内容时间（书签收藏/文件创建时间）；exported_at
+        是入库时间（全批同时刻，无分布意义）不用作轴。created_at 缺失的条目
+        只进 unknown_count，不编造时间。
+
+        granularity: "year"|"month"|None（None=自适应：跨度 >24 个月→year）。
+        bucket: 传 key（如 "2020" / "2020-07"）时返回该桶条目列表 entries。
+        stale_years: 叶子分支最新条目早于该年数 → 进 stale_branches（只提醒，
+        不改任何数据；用户否决/清理走既有管理入口）。
+
+        返回：{focus, granularity, buckets, unknown_count, span,
+        stale_branches, unknown_branches, threshold_years, entries?}
+        """
+        if category_id:
+            sub_ids = self._cat_descendants(category_id)
+            if category_id not in sub_ids:
+                return {"focus": None, "granularity": granularity or "year",
+                        "buckets": [], "unknown_count": 0, "span": None,
+                        "stale_branches": [], "unknown_branches": [],
+                        "threshold_years": stale_years}
+        else:
+            sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
+        if not sub_ids:
+            return {"focus": None, "granularity": granularity or "year",
+                    "buckets": [], "unknown_count": 0, "span": None,
+                    "stale_branches": [], "unknown_branches": [],
+                    "threshold_years": stale_years}
+        marks = ",".join("?" * len(sub_ids))
+        base = (" FROM entries e JOIN entry_categories ec ON ec.entry_id=e.id"
+                f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+                + _consumable("e"))
+        focus = None
+        if category_id:
+            frow = self._conn.execute("SELECT id, name FROM categories WHERE id=?",
+                                      (category_id,)).fetchone()
+            if frow is not None:
+                focus = {"id": frow["id"], "name": frow["name"]}
+        # 时间未知计数（created_at 缺失——不编造时间、不判陈旧）
+        unknown_count = self._conn.execute(
+            "SELECT count(DISTINCT e.id) AS n" + base
+            + " AND (e.created_at IS NULL OR e.created_at='')",
+            tuple(sub_ids)).fetchone()["n"]
+        # 跨度与分桶粒度
+        span_row = self._conn.execute(
+            "SELECT min(substr(e.created_at,1,10)) AS lo, max(substr(e.created_at,1,10)) AS hi"
+            + base + " AND e.created_at IS NOT NULL AND e.created_at != ''",
+            tuple(sub_ids)).fetchone()
+        span = {"min": span_row["lo"], "max": span_row["hi"]} if span_row["lo"] else None
+        if granularity not in ("year", "month"):
+            granularity = "year"
+            if span and span["min"] and span["max"]:
+                lo_y, lo_m = int(span["min"][:4]), int(span["min"][5:7])
+                hi_y, hi_m = int(span["max"][:4]), int(span["max"][5:7])
+                if (hi_y - lo_y) * 12 + (hi_m - lo_m) <= 24:
+                    granularity = "month"
+        width = 4 if granularity == "year" else 7
+        counts: dict[str, int] = {}
+        if span:
+            for r in self._conn.execute(
+                    "SELECT substr(e.created_at,1,?) AS k, count(DISTINCT e.id) AS n"
+                    + base + " AND e.created_at IS NOT NULL AND e.created_at != ''"
+                    " GROUP BY k", (width, *sub_ids)):
+                counts[r["k"]] = r["n"]
+            buckets = self._fill_buckets(span, granularity, counts)
+        else:
+            buckets = []
+        out: dict[str, Any] = {
+            "focus": focus, "granularity": granularity, "buckets": buckets,
+            "unknown_count": unknown_count, "span": span,
+            "threshold_years": stale_years,
+        }
+        if bucket:
+            # bucket 前缀匹配（长度自适应）：month 粒度下传 "2020" 得全年，
+            # 传 "2020-07" 得单月——前端传当前图桶 key，直调也不会因粒度落空
+            rows = self._conn.execute(
+                "SELECT DISTINCT e.*" + base
+                + " AND e.created_at IS NOT NULL AND e.created_at != ''"
+                + " AND substr(e.created_at,1,?) = ?"
+                " ORDER BY e.exported_at DESC LIMIT ?",
+                (*sub_ids, len(bucket), bucket, bucket_limit)).fetchall()
+            out["entries"] = [self._row_to_entry(r) for r in rows]
+        # 陈旧分支提醒：子树内叶子分类（无子节点），各自 max(created_at)
+        out["stale_branches"], out["unknown_branches"] = self._stale_branches(
+            sub_ids, stale_years=stale_years)
+        return out
+
+    @staticmethod
+    def _fill_buckets(span: dict[str, str], granularity: str,
+                      counts: dict[str, int]) -> list[dict[str, Any]]:
+        """连续区间补齐空桶（柱状图轴均匀；稀疏年份不出空洞误导）。"""
+        lo_y, lo_m = int(span["min"][:4]), int(span["min"][5:7])
+        hi_y, hi_m = int(span["max"][:4]), int(span["max"][5:7])
+        keys: list[str] = []
+        if granularity == "year":
+            keys = [str(y) for y in range(lo_y, hi_y + 1)]
+        else:
+            y, m = lo_y, lo_m
+            while (y, m) <= (hi_y, hi_m):
+                keys.append(f"{y:04d}-{m:02d}")
+                y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+        return [{"key": k, "label": k, "count": counts.get(k, 0)} for k in keys]
+
+    def _stale_branches(self, sub_ids: list[str], *,
+                        stale_years: int) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """子树内叶子分类的陈旧判定（第四十四批）。叶子 = 无子节点的分类
+        （category_parents.parent_id 列里从不出现的分类；该表一行
+        (category_id, parent_id) 表示 category_id 的父是 parent_id）。
+
+        只提醒不改数据（只标不删可逆模型）：latest 超 stale_years 年 →
+        stale_branches；created_at 全缺 → unknown_branches（时间未知 ≠ 陈旧）。
+        """
+        leaves = [r["id"] for r in self._conn.execute(
+            "SELECT id FROM categories"
+            " WHERE id NOT IN (SELECT parent_id FROM category_parents)"
+            "   AND id IN (%s)" % ",".join("?" * len(sub_ids)),
+            tuple(sub_ids))]
+        stale: list[dict[str, Any]] = []
+        unknown: list[dict[str, Any]] = []
+        for cid in leaves:
+            ids = self._cat_descendants(cid)
+            if cid not in ids:
+                ids.append(cid)
+            marks = ",".join("?" * len(ids))
+            row = self._conn.execute(
+                "SELECT count(DISTINCT e.id) AS n, max(e.created_at) AS latest"
+                " FROM entries e JOIN entry_categories ec ON ec.entry_id=e.id"
+                f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+                + _consumable("e"), tuple(ids)).fetchone()
+            if not row["n"]:
+                continue  # 空叶子不提醒（可能条目被舍弃/归档后清空）
+            name = self._conn.execute("SELECT name FROM categories WHERE id=?",
+                                      (cid,)).fetchone()["name"]
+            item = {"id": cid, "name": name, "latest": row["latest"], "count": row["n"]}
+            if not row["latest"]:
+                unknown.append(item)
+                continue
+            latest = datetime.fromisoformat(row["latest"])
+            if latest.tzinfo is None:  # 统一到 aware 再比（created_at 带时区偏移）
+                latest = latest.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - latest).days / 365.25
+            item["age_years"] = round(age, 1)
+            if age >= stale_years:
+                stale.append(item)
+        stale.sort(key=lambda x: -x["age_years"])
+        return stale, unknown
 
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。
