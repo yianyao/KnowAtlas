@@ -1099,7 +1099,7 @@ async function mgmtDead() {
 
 async function mgmtFresh() {
   refreshCurrent = () => mgmtShow("fresh");
-  _mgmtDesc().textContent = "规则判为「过期或疑似过旧」（废弃关键词/正文日期过旧/同主题已有更新版本）。仅标记，由你决定。";
+  _mgmtDesc().textContent = "规则判为「过期或疑似过旧」（废弃关键词/正文日期过旧/同主题已有更新版本）。仅标记，由你决定；舍弃=确认废弃，即刻全面不可见，30 天冷却期内可在「已舍弃」找回。";
   const data = await (await fetch("/api/freshness")).json();
   const reasonLabel = { keyword: "废弃关键词", date_old: "日期过旧", newer_version: "有更新版本" };
   const flagLabel = { stale: "明确过期", suspect: "疑似过旧" };
@@ -1133,14 +1133,20 @@ async function mgmtFresh() {
 
 async function mgmtRejected() {
   refreshCurrent = () => mgmtShow("rejected");
-  _mgmtDesc().textContent = "恢复后重新参与分类与检索。";
+  _mgmtDesc().textContent = "舍弃即 rejected（树/检索/词云/导出全面不可见）——30 天冷却期=误裁反悔窗口，期满 ksync 自动物理删除；恢复立即回到 active。";
   const data = await (await fetch("/api/rejected")).json();
   const body = _mgmtBody();
   body.innerHTML = data.entries.length
-    ? data.entries.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
-        + `<span class="badge">${srcLabel(x.source_type)}</span>`
-        + `<button class="restore-btn" data-id="${x.id}">↩恢复</button></div>`).join("")
+    ? data.entries.map(x => {
+        const cool = (x.cooling_days_left !== null && x.cooling_days_left !== undefined)
+          ? (x.cooling_days_left > 0
+              ? `<span class="badge" title="冷却期内可随时恢复；期满自动物理删除">⏳ 冷却剩 ${x.cooling_days_left} 天</span>`
+              : `<span class="badge" title="冷却期已满，下次 ksync 自动物理删除">⏳ 冷却期满</span>`)
+          : `<span class="badge" title="历史舍弃（未设冷却起点），不会自动删除">不计冷却</span>`;
+        return `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+          + `<span class="badge">${srcLabel(x.source_type)}</span>` + cool
+          + `<button class="restore-btn" data-id="${x.id}">↩恢复</button></div>`;
+      }).join("")
     : "<small>没有已舍弃的条目。</small>";
   document.querySelectorAll(".restore-btn").forEach(b => b.onclick = async () => {
     await writeJSON(`/api/entries/${b.dataset.id}/restore`, {});

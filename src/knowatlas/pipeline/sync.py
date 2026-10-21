@@ -645,5 +645,12 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
     if not stats["sources"]:
         stats["note"] = ("无可同步的已启用批量源：在 config/knowatlas.toml 启用"
                          " [sources.bookmarks] 等源，或用 kadd 手动收录")
+
+    # 老化删除出口（第六十三批，方案 §7.5）：ksync 顺手执行——冷却期满（30 天）
+    # 的 rejected 条目物理删除（人裁过的才进冷却；引用计数回收 + 审计留痕）。
+    # dry_run 只出报告不删除；scan 分支（上文早退）本就不清扫。
+    from .aging import sweep_rejections
+
+    stats["rejected_sweep"] = sweep_rejections(dl, dry_run=dry_run)
     dl.finish_run(run_id, stats)
     return {"run_id": run_id, **stats}

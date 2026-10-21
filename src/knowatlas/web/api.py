@@ -10,12 +10,13 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import Body, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from ..datalayer.db import REJECT_COOLING_DAYS
 from ..semantic.keywords import word_ok as _cloud_word_ok
 
 _TOKEN_HEADER = "x-knowatlas-token"
@@ -171,7 +172,9 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.post("/api/entries/{entry_id}/reject")
     async def reject_entry(entry_id: str, request: Request):
-        """用户明确舍弃：状态置 rejected——不入树/检索/图，重新同步永不复活。"""
+        """用户明确舍弃（老化 L3 人裁入口，方案 §7.5）：即刻 rejected 全面不可见
+        ——树/检索/词云/导出全部排除，重新同步永不复活；meta.rejected_at 起
+        30 天冷却（误裁反悔窗口），期满 ksync 自动物理删除。"""
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard
@@ -180,12 +183,15 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
                                 status_code=404)
         dl.set_status([entry_id], "rejected")
-        dl.log_task(_now_iso(), "web", "reject", entry_id, {"old_status": entry.status})
-        return {"entry_id": entry_id, "status": "rejected"}
+        dl.merge_meta(entry_id, {"rejected_at": _now_iso()})
+        dl.log_task(_now_iso(), "web", "reject", entry_id,
+                    {"old_status": entry.status, "cooling_days": REJECT_COOLING_DAYS})
+        return {"entry_id": entry_id, "status": "rejected",
+                "cooling_days": REJECT_COOLING_DAYS}
 
     @app.post("/api/entries/{entry_id}/restore")
     async def restore_entry(entry_id: str, request: Request):
-        """从 rejected 恢复为 active（误舍弃的后悔药）。"""
+        """从 rejected 恢复为 active（误舍弃的后悔药；清冷却起点重新计时语义不复存）。"""
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard
@@ -194,15 +200,35 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
                                 status_code=404)
         dl.set_status([entry_id], "active")
+        dl.merge_meta(entry_id, {"rejected_at": None})
         dl.log_task(_now_iso(), "web", "restore", entry_id, {"old_status": entry.status})
         return {"entry_id": entry_id, "status": "active"}
 
     @app.get("/api/rejected")
     def rejected_entries(limit: int = 500):
-        """已舍弃条目列表（查看/恢复入口）。"""
-        rows = dl.list_entries(status="rejected", limit=limit)
-        return {"entries": [{"id": e.id, "title": e.title, "locator": e.locator,
-                             "source_type": e.source_type} for e in rows]}
+        """已舍弃条目列表（冷却倒计时/恢复入口）。
+
+        rejected_at 起 30 天冷却，期满 ksync 自动物理删除（老化删除出口）；
+        无 rejected_at 的历史舍弃不计冷却、不会自动删除。
+        """
+        now = datetime.now(timezone.utc)
+        out = []
+        for e in dl.list_entries(status="rejected", limit=limit):
+            rat = e.meta.get("rejected_at")
+            left: int | None = None
+            if rat:
+                try:
+                    t = datetime.fromisoformat(str(rat))
+                    if t.tzinfo is None:
+                        t = t.astimezone()
+                    left = max(0, REJECT_COOLING_DAYS
+                               - int((now - t).total_seconds() // 86400))
+                except ValueError:
+                    left = None
+            out.append({"id": e.id, "title": e.title, "locator": e.locator,
+                        "source_type": e.source_type,
+                        "rejected_at": rat, "cooling_days_left": left})
+        return {"entries": out}
 
     @app.get("/api/dead-links")
     def dead_links():

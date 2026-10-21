@@ -2085,3 +2085,55 @@ javascript），现有 showSubtree 子孙分类+挂接条目混显+祖先链，�
    长文截断走 content_store）；test_threads 迁移断言 6→7（新表纳入）；
    test_contract 能力集增 point_extract。pytest 349 项全绿（334+15：348 passed
    +1 skip，EXIT=0）。SOP 增 §2.18。db.py/cli.py 改动，serve 需重启。
+
+## 0.2.0 第六十三批：老化三级·代码部分（Phase 7 批次 64a，方案 §7.5）
+
+**背景**：方案 §7.5 老化三级补全 + §9 批次 64 的**工程子集**（64a）：L1 规则
+（41 批 freshness guard）已有，本批落 **L2 LLM 复核代码 + L3 人裁删除出口代码**。
+**不做**全量 suspect 判定（现库 ~87 条，硬闸门：无人值守 LLM 预算 ≤¥1、全量须
+用户先裁决模型档位）；删除出口**落库不批量执行**（真实库零删除）；验证全用
+人造 fixture（临时库）+ LLM 替身，零真实 LLM 费用。
+
+1. **aging_judge 任务**（semantic/tasks/aging_judge.py，CapabilitySpec
+   aging_judge@1.0.0）：对 suspect 逐条问「是否过时+理由+建议」（batch 20 单次
+   调用，降级纪律同 delta_summarize）。结论三值：**stale**=确证过时升级
+   freshness_flag=stale（退出消费面）/ **ok**=规则误报否决置 ok（不再标记）/
+   **keep**=判不了（如 LLM 知识截止后的新版本）维持 suspect 自然下沉人裁
+   （与三级设计自洽）。**防幻觉闸门**：stale 必须附可核查依据（技术事实/版本
+   号/官方口径），给不出依据自动降级 keep——宁漏勿误（§7.6 勘误同款口径）。
+   结论落 meta（aging_verdict/aging_reason/aging_suggest/aging_checked_at 可抽检）。
+2. **kaging 流水线 + CLI**（pipeline/aging.py + cli.py 子命令）：候选=active+
+   freshness_flag=suspect+未经 L2 复核（aging_checked_at 游标幂等）；--limit
+   默认 10（试跑口径）、--dry-run、--sweep（手动触发删除出口清扫）；LLM 未启用
+   SKIP（exit 3）、单批失败记 error 不阻塞。
+3. **L3 删除出口**（db.py sweep_expired_rejections + REJECT_COOLING_DAYS=30）：
+   人裁废弃（Web 舍弃按钮）→ 即刻 rejected 全面不可见（既有语义）→ **30 天
+   冷却**（meta.rejected_at 起点；restore 清起点=反悔窗口）→ **冷却期满自动
+   物理删除**（ksync 主流程每轮顺手执行 + kaging --sweep 手动）：FK 级联清
+   entry_locators/entry_categories/point_sources（点本体保留，可重建溯源）、
+   entries_fts 触发器同步；**content_store 引用计数回收**——多条目共享同一内容
+   块只减计数，删到零才连 content_fts 清正文；**task_log 审计链留痕**（被删
+   条目历史日志不动 + 追加 sweep_delete 记录）；无 rejected_at 的历史 rejected
+   条目不删（非本机制裁决不自动清）；dry_run 只出报告。删出口只吃「人裁过」
+   的 rejected，物理删除=用户裁决的执行而非自动决策。
+4. **Web**：/api/entries/{id}/reject 落 rejected_at（时效候选区「🚫舍弃」即
+   确认废弃入口）；restore 清 rejected_at；/api/rejected 增 rejected_at +
+   cooling_days_left 倒计时；index.html 已舍弃区增冷却徽标（⏳ 冷却剩 N 天/
+   冷却期满/不计冷却）与 30 天纪律说明，时效候选区说明补「舍弃=确认废弃，
+   30 天冷却期内可在已舍弃找回」。
+5. **测试**：tests/test_aging.py 16 项（三值结论+防幻觉降级+非法输出/未启用/
+   故障降级、幂等重跑+limit+batch 单调用、dry-run 不写库、独占内容块回收+
+   共享块只减计数、冷却未满/历史 rejected 不动、point_sources 级联点保留、
+   task_log 审计留痕、ksync 顺手执行、reject 落冷却起点/restore 清起点、
+   历史舍弃不计冷却）；test_contract 能力集增 aging_judge；canary capabilities
+   升版 a6856a36fd52→37e239ecaeaf（零 DDL 变更）。pytest 349 → 365 全绿
+   （364 passed + 1 skip，EXIT=0）。SOP 增 §2.19。api.py/db.py/cli.py/
+   sync.py 改动，serve 需重启。
+
+**复检探针**（TODO Phase 7 批次 64 口径，本批可验子集）：
+- [x] 裁决废弃后条目从全部视图/检索/词云/导出消失（rejected 既有语义 +
+      _consumable 口径回归通过；冷却徽标可见于管理页已舍弃区）；
+- [x] 冷却期满后物理行删除、审计链留痕、共享内容块只减计数
+      （test_sweep_expired_unique_content_recycled / test_sweep_shared_content_
+      only_decrements / test_ksync_runs_sweep）；
+- [ ] 全量 suspect LLM 判定与真实库删除——**等用户裁决**（模型档位 + 是否执行）。

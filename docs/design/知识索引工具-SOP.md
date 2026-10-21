@@ -379,6 +379,35 @@ uv run python -m knowatlas kpoints --limit 10 --dry-run   # 只判定报告，�
 
 ---
 
+### 2.19 老化三级与删除出口（0.2.0 第六十三批，Phase 7 批次 64a）
+
+**用途**：知识老化三级补全（方案 §7.5）——L1 规则（§2.12 时效守卫，零费用）
+已有；本批落 **L2 LLM 复核**（suspect 逐条问「是否过时+理由+建议」，batch 20，
+结论三值：stale 确证过时→升级退出消费面 / ok 规则误报→否决不再标记 / keep
+判不了→维持 suspect 下沉人裁；**stale 必须附可核查依据，给不出自动降级
+keep**——防幻觉宁漏勿误）与 **L3 人裁删除出口**：时效候选区「🚫舍弃」=确认
+废弃 → 即刻 rejected 全面不可见 → **30 天冷却**（误裁反悔窗口，「已舍弃」区
+可随时恢复）→ 冷却期满自动物理删除（content_store 引用计数回收：共享内容块
+只减计数，删到零才清正文；task_log 审计链留痕）。
+
+**用法**：
+
+```bash
+uv run python -m knowatlas kaging --limit 10             # L2 复核 10 条（默认，试跑口径）
+uv run python -m knowatlas kaging --limit 10 --dry-run   # 只判定报告，不写库
+uv run python -m knowatlas kaging --sweep                # 手动执行删除出口清扫
+uv run python -m knowatlas kaging --sweep --dry-run      # 只出删除报告，不删除
+```
+
+**规则**：删除出口随每轮 ksync 主流程自动执行（只吃「人裁过」的 rejected——
+有 meta.rejected_at 且超 30 天；历史 rejected 无起点不删；dry-run 不删）；
+结论落 meta（aging_verdict/aging_reason/aging_checked_at）可抽检。**全量
+suspect 判定（现库 ~87 条）属批次 64 全量**，无人值守预算闸门 ≤¥1（≤10 条
+试跑）；全量与任何真实库删除须用户在场裁决（V4-Flash/Pro 档位，方案 §6）。
+
+---
+
+
 ### 2.11 书签扩散抓取（0.2.0 第四十批）
 
 **用途**：对一篇系列文章/教程目录里的书签，一把抓下**同一目录**的其余页面

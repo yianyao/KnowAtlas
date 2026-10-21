@@ -92,6 +92,17 @@ def build_parser() -> argparse.ArgumentParser:
     kpoints.add_argument("--dry-run", action="store_true",
                          help="只判定与报告，不写库（LLM 费用照常发生）")
 
+    kaging = sub.add_parser(
+        "kaging", help="老化三级：L2 LLM 复核 suspect（升级 stale/否决/下沉人裁）；"
+                       "--sweep 执行冷却期满删除出口（方案 §7.5）")
+    kaging.add_argument("--limit", type=int, default=10,
+                        help="本次最多复核条数（默认 10——试跑口径，全量判定须用户裁决）")
+    kaging.add_argument("--dry-run", action="store_true",
+                        help="只判定与报告，不写库（LLM 费用照常发生；--sweep 时只出删除报告）")
+    kaging.add_argument("--sweep", action="store_true",
+                        help="执行删除出口清扫：冷却期满（30 天）的 rejected 条目物理删除"
+                             "+ content_store 引用计数回收（审计留痕）；默认每轮 ksync 自动执行")
+
     return parser
 
 
@@ -389,6 +400,39 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kaging(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .pipeline.aging import run_aging_judgment, sweep_rejections
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        if args.sweep:
+            stats = sweep_rejections(dl, dry_run=args.dry_run)
+            head = "OK 清扫报告（dry-run 未删除）" if args.dry_run else "OK 清扫完成"
+            print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+            if not args.dry_run and stats["swept"]:
+                print("（审计链在 task_log：被删条目历史日志保留 + sweep_delete 留痕；"
+                      "共享内容块只减计数，删到零才清正文）")
+            return _EXIT_OK
+        stats = run_aging_judgment(cfg, dl, limit=max(1, args.limit),
+                                   dry_run=args.dry_run)
+    finally:
+        dl.close()
+    if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）
+        print(f"SKIP {stats['skipped']}")
+        return _EXIT_SKIP
+    head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 复核完成"
+    print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+    for err in stats.get("errors", [])[:5]:
+        print(f"  ERROR {err}")
+    print("（结论三值：stale=确证过时退出消费面 / ok=规则误报已否决 / "
+          "keep=判不下沉人裁，仍在时效候选）")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -399,6 +443,7 @@ _COMMANDS = {
     "ktest": _cmd_ktest,
     "kcheck": _cmd_kcheck,
     "kpoints": _cmd_kpoints,
+    "kaging": _cmd_kaging,
 }
 
 

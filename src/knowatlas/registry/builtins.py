@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from ..fetchers import file_reader, http_simple
 from ..semantic.tasks import (
-    classify_coarse, classify_deep, delta_summarize, point_extract, tag_keywords,
-    thread_digest, thread_suggest, topic_recall,
+    aging_judge, classify_coarse, classify_deep, delta_summarize, point_extract,
+    tag_keywords, thread_digest, thread_suggest, topic_recall,
 )
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
@@ -45,4 +45,6 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
     semantics.register(thread_digest.SPEC, thread_digest.run)
     # 知识点抽取（第六十二批，方案 §7.1）：形态判定 + 切点，查询独立演进
     semantics.register(point_extract.SPEC, point_extract.run)
+    # 老化三级 L2（第六十三批，方案 §7.5）：suspect 时效复核，结论升级/否决/下沉人裁
+    semantics.register(aging_judge.SPEC, aging_judge.run)
     return locators, semantics

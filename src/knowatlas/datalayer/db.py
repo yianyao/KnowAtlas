@@ -25,6 +25,10 @@ from ..models import (
 )
 from .schema import latest_version, load_migration
 
+# 老化删除出口冷却期（方案 §7.5 用户裁决第 4 条：人裁废弃→即刻 rejected→
+# 30 天冷却→自动物理删除；冷却期=误裁反悔窗口）
+REJECT_COOLING_DAYS = 30
+
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _ORIGINS = ("prior", "rule", "embedding", "llm", "manual")
 
@@ -364,6 +368,75 @@ class DataLayer:
                                 ensure_ascii=False)),
                 )
         return missing
+
+    def sweep_expired_rejections(self, cooling_days: int = REJECT_COOLING_DAYS, *,
+                                 dry_run: bool = False,
+                                 now: datetime | None = None) -> dict[str, Any]:
+        """老化删除出口（0.2.0 第六十三批，方案 §7.5 用户裁决第 4 条）：
+        rejected 且 meta.rejected_at 超冷却期的条目物理删除。
+
+        - 冷却期=误裁反悔窗口（restore 清 rejected_at）；无 rejected_at 的历史
+          rejected 条目不删（非本机制裁决，不自动清）；
+        - 删除走 FK 级联（entry_locators/entry_categories/point_sources 指针消失，
+          points 本体保留），entries_fts 由触发器同步；
+        - task_log 审计链留痕：被删条目的历史日志不动，另追加 sweep_delete 记录；
+        - content_store 引用计数回收：多条目共享同一内容块只减计数，删到零才
+          连 content_fts 一并清正文；
+        - dry_run 只出报告不写库。
+        """
+        ref_now = now or datetime.now(timezone.utc)
+        rows = self._conn.execute(
+            "SELECT id, title, source_type, content_hash, meta FROM entries"
+            " WHERE status='rejected'").fetchall()
+        stats: dict[str, Any] = {"scanned_rejected": len(rows),
+                                 "cooling_days": cooling_days, "dry_run": dry_run,
+                                 "swept": [], "content_recycled": 0,
+                                 "kept_cooling": 0, "kept_legacy": 0}
+        expired: list[sqlite3.Row] = []
+        for r in rows:
+            rejected_at = json.loads(r["meta"] or "{}").get("rejected_at")
+            if not rejected_at:
+                stats["kept_legacy"] += 1
+                continue
+            try:
+                t = datetime.fromisoformat(str(rejected_at))
+            except ValueError:
+                stats["kept_legacy"] += 1
+                continue
+            if t.tzinfo is None:
+                t = t.astimezone()  # 无时区的历史值按本地时区解读
+            if (ref_now - t).total_seconds() >= cooling_days * 86400:
+                expired.append(r)
+            else:
+                stats["kept_cooling"] += 1
+        for r in expired:
+            detail = {"title": r["title"], "source_type": r["source_type"],
+                      "content_hash": r["content_hash"], "cooling_days": cooling_days}
+            if dry_run:
+                stats["swept"].append({"id": r["id"], **detail})
+                continue
+            with self.transaction() as conn:
+                conn.execute("DELETE FROM entries WHERE id=?", (r["id"],))
+                conn.execute(
+                    "INSERT INTO task_log (at, task_name, action, target, detail)"
+                    " VALUES (?,?,?,?,?)",
+                    (_now(), "aging", "sweep_delete", r["id"],
+                     json.dumps(detail, ensure_ascii=False)),
+                )
+                if r["content_hash"]:
+                    n = conn.execute(
+                        "SELECT COUNT(*) FROM entries WHERE content_hash=?",
+                        (r["content_hash"],),
+                    ).fetchone()[0]
+                    if n == 0:  # 引用计数归零才清正文（共享块只减计数）
+                        conn.execute("DELETE FROM content_fts WHERE content_hash=?",
+                                     (r["content_hash"],))
+                        conn.execute("DELETE FROM content_store WHERE content_hash=?",
+                                     (r["content_hash"],))
+                        stats["content_recycled"] += 1
+                stats["swept"].append({"id": r["id"], **detail})
+        return stats
+
 
     # ---- 内容 ----
 
