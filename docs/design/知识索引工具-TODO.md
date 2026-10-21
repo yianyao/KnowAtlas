@@ -226,7 +226,8 @@ reader: 执行者（人与 agent）
       分类 DAG 展平 outline 树（多父重复出现），未分类落「（未分类）」根；
       导出文件可被标准 XML 解析重建无损树（往返保真）
       - 探针：XML 可解析 ✅；outline 嵌套=分类层级 ✅；叶子数=http 条目数 ✅；
-        往返重建无损 ✅；OPML 导入回路后置（ksync 新源独立批次）
+        往返重建无损 ✅；OPML 导入回路已实现（0.2.0 第五十批：ksync 批量源
+        [sources.opml]，source_type=opml，往返回吃探针 ✅）
 - [x] 自动备份（同步前 VACUUM INTO 快照，保留 10 份轮换）+ 恢复演练——
       SQLite 官方 VACUUM INTO 一致性快照（WAL 安全，不自己拷文件）；同步前
       自动快照 + 节流（默认 24h，backup_min_interval_hours）；契约=没快照不

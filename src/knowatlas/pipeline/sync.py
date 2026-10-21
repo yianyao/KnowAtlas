@@ -26,6 +26,7 @@ from ..adapters.bookmark import collect_bookmarks
 from ..adapters.emmx import collect_emmx
 from ..adapters.folder import collect_folders
 from ..adapters.maildir import collect_maildirs
+from ..adapters.opml import collect_opml
 from ..errors import AdapterError, DegradedParseError, FetchError
 from ..ids import content_hash
 from ..models import Entry, FetchResult
@@ -44,10 +45,12 @@ _BATCH_COLLECTORS: dict[str, Any] = {
     "folders": collect_folders,
     "emmx": collect_emmx,
     "mail": collect_maildirs,
+    "opml": collect_opml,
 }
 # 配置名 → source_type（archive_missing 按条目来源类型做删除检测）
 _SOURCE_TYPE_BY_NAME: dict[str, str] = {
-    "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx", "mail": "mail"}
+    "bookmarks": "bookmark", "folders": "folder", "emmx": "emmx", "mail": "mail",
+    "opml": "opml"}
 
 _INLINE_LIMIT = 4096
 _TRUNCATED_AT = 4000

@@ -1577,3 +1577,37 @@ bookmarklet 前端从未实现，且实现层另有暗坑。
 浏览器实测 10 项全过——bookmarklet href 动态拼 origin 正确、`?add=` 落地
 自动展开/填充/提交、duplicate 幂等反馈（"该网址已在库中，未重复建"）、
 query 参数清除、控制台无 JS 错。canary 不变。
+
+## 0.2.0 第五十批：OPML 导入回路（ksync 批量源收账）
+
+**背景**：第 45 批 OPML 导出实现时挂账"导入回路后置（ksync 新源独立
+批次）"——本批收账，打通 OPML 往返（导出 → 外部流转/备份 → 回吃重建）。
+
+1. **新适配器** `adapters/opml.py`（source_type=opml）：outline 树 →
+   统一条目。契约要点：
+   - outline 嵌套 → native_path（免费分类信号，走先验映射，不命中进暂存区）；
+   - 只收有 htmlUrl 的 http(s) 条目；type="rss" 订阅源（只有 xmlUrl）跳过
+     计数；非 http 的 htmlUrl 计数跳过（与 bookmark 源同一纪律）；
+   - created 属性 ISO 8601（本工具导出形态）优先、RFC 822（OPML 2.0 惯例，
+     email.utils 标准库）兜底，都失败置 NULL 不臆造；
+   - source_key = 文件路径 + outline 全路径 + 标题兜底（OPML 无稳定节点 id，
+     文件改名=换源，SOP §2.14 注明）；同 URL 多分支各建一条计数
+     （M2 跨源去重统一兜底）；
+   - 单文件缺失/坏 XML/缺 body/未配 files → AdapterError，message+hint 指路
+     `[sources.opml]`（隔离原则：跳过本源，其余源继续）。
+2. **接线**：SOURCE_TYPES 增 "opml"（复用 bookmark 会被书签源 archive_missing
+   误归档，必须独立 source_type）；CONFIG_SCHEMA_KEYS 增 sources.opml；
+   _BATCH_COLLECTORS / _SOURCE_TYPE_BY_NAME 注册（archive_missing 删除检测
+   天然生效）；config/knowatlas.example.toml 增配置段（enabled=false）；
+   前端 SRC_LABEL 两处（index.html/thread.html）补 OPML 标签。
+3. **canary 更新**（预期漂移）：source_types、config_keys 两个期望 hash；
+   DDL/schemes/entry_fields/capabilities 不变。
+4. **文档**：SOP 新增 §2.14（用法+口径+改名=换源警告）；§7 导出表 OPML 行
+   更新为"导入回路已实现"；TODO Phase 5 挂账句改为已实现（探针 ✅）。
+
+**验证**：pytest 268 项全绿（264→268：解析/跳过计数/错误指路/往返回吃
+4 项新测试，roundtrip 用例 kexport 产物回吃对账 canonical 集合与
+native_path 层级）；真实库冒烟——kexport --format opml 导出 151 书签叶
+（15 分类）→ 临时启用 opml 源 dry-run 回吃 **151 条精确对账**、
+duplicate_urls=2（多父展平预期）、0 非法 URL；既有三源 dry-run 零回归；
+用户 config 改动已还原（hash 比对一致）并清理临时文件。

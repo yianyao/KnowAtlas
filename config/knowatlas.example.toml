@@ -153,6 +153,15 @@ enabled = false
 client_id_env = "KNOWATLAS_IMA_CLIENT_ID"
 api_key_env   = "KNOWATLAS_IMA_API_KEY"
 
+[sources.opml]
+# OPML 导入源（0.2.0 第五十批已实现）：外部工具导出的 OPML 大纲文件
+# （书签/订阅列表迁移），或本工具 kexport --format opml 的产物回吃。
+# files = 文件路径数组；outline 嵌套 → native_path 分类信号；只收 htmlUrl
+# 的 http(s) 条目（type="rss" 订阅源跳过）。文件改名=换源（旧条目归档），
+# 尽量用稳定路径。同步后照常走分类链路（先验映射/暂存区）。
+enabled = false
+files = []
+
 [sources.txdoc]
 enabled = false
 app_id_env = "KNOWATLAS_TXDOC_APP_ID"

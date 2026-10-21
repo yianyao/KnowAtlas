@@ -26,7 +26,7 @@ CONFIG_SCHEMA_KEYS = (
     "fetch.rate_limit_qps", "fetch.timeout_seconds",
     "sources.bilibili", "sources.bookmarks", "sources.db", "sources.emmx",
     "sources.folders", "sources.ima", "sources.mail", "sources.manual",
-    "sources.session", "sources.txdoc", "sources.wx",
+    "sources.opml", "sources.session", "sources.txdoc", "sources.wx",
 )
 
 

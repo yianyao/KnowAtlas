@@ -259,7 +259,7 @@ async function opMerge(n) {
   else if (res.error) alert("失败：" + res.error.message);
 }
 
-const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散" };
+const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散", opml: "OPML" };
 function srcLabel(t) { return SRC_LABEL[t] || t; }
 function entryHTML(e) {
   return `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`

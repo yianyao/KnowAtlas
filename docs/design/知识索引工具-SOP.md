@@ -271,6 +271,27 @@ thread_type='source' 的会话线程（串联工作区可见，📮 前缀命名
 **故障处理**：解析失败的邮件跳过并计数（stats.skipped_parse），不中断同步；单源上限
 5000 封（超出计 stats.truncated，提高上限需改适配器 _MAX_MESSAGES）。
 
+### 2.14 OPML 导入源（0.2.0 第五十批）
+
+**用途**：外部工具导出的 OPML 大纲文件（其他书签工具/阅读器迁移过来），或
+本工具 `kexport --format opml` 产物回吃（换机/重建库时把书签类条目搬回来）。
+
+```toml
+[sources.opml]
+enabled = true
+files = ["D:/Imports/书签.opml"]   # 文件路径数组，可多个
+```
+
+**口径**：outline 嵌套 → `native_path`（免费分类信号，走先验映射；不命中进
+暂存区，不硬猜）；只收有 `htmlUrl` 的 http(s) 条目——`type="rss"` 订阅源
+（只有 `xmlUrl`）不是知识条目，跳过并计数；`created` 属性 ISO 8601（本工具
+导出形态）与 RFC 822（OPML 2.0 惯例）都能解析，缺省置 NULL 不臆造；同一
+URL 出现在多个分支各建一条（M2 跨源去重统一兜底）。文件改名 = 换源（旧条目
+归档、新条目重建），尽量用稳定路径。条目照常走抓取（默认 `fetch.on_sync=false`
+不抓）与分类链路。
+
+---
+
 ### 2.11 书签扩散抓取（0.2.0 第四十批）
 
 **用途**：对一篇系列文章/教程目录里的书签，一把抓下**同一目录**的其余页面
@@ -416,7 +437,7 @@ uv run python -m knowatlas kexport --format opml     # 书签类条目往返格�
 |------|------|---------|---------|
 | JSON | 全量（含 archived/rejected） | inline_content 内联；content_store 全量正文**不内联**（百万字符级，需要完整正文自行拷贝 content_store 目录） | schema_version 常量（当前 1.0）标记契约；categories 带 parents DAG、entries 带 locators/categories/meta；threads/thread_items 同投影 |
 | Obsidian | active 全量（含被守卫条目——防锁定优先；archived/rejected 不进） | 笔记正文 = inline_content（短摘要） | 条目笔记放主分类目录、所有父分类 MOC 都双链它（短链全局解析，多父不丢）；MOC 文件名=分类名（安全化避撞）； Obsidian 内重名分类的短链可能歧义（v0 已知限制） |
-| OPML | active 且 locator_canonical 以 http 开头的条目（书签类；file:///mail:///emmx:// 天然排除） | 无正文 | 分类 DAG 展平为 outline 树（多父重复出现）；未分类条目落「（未分类）」根；导出文件可被标准 XML 解析重建无损树（往返保真）；**OPML 导入回路后置**（作为 ksync 新源是独立批次） |
+| OPML | active 且 locator_canonical 以 http 开头的条目（书签类；file:///mail:///emmx:// 天然排除） | 无正文 | 分类 DAG 展平为 outline 树（多父重复出现）；未分类条目落「（未分类）」根；导出文件可被标准 XML 解析重建无损树（往返保真）；**导入回路已实现**（0.2.0 第五十批，ksync 批量源，见 §2.14） |
 
 ---
 
