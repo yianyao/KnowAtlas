@@ -305,6 +305,40 @@ def test_graph_subtree_entries_ancestors_and_locator(dl):
     assert dl.get_graph_subtree("nonexistent0") is None
 
 
+def test_graph_subtree_hierarchy_next_level_only(dl):
+    """层级模式（批次 63）：非叶子只出下一级子分类（child 边+value），不出条目/域名/祖先链。"""
+    a, b, es = _graph_fixture(dl)
+    data = dl.get_graph_subtree(a.id, hierarchy=True)
+    by_id = {n["id"]: n for n in data["nodes"]}
+    assert set(by_id) == {f"c:{a.id}", f"c:{b.id}"}      # 无条目、无同域聚合节点
+    assert by_id[f"c:{a.id}"]["value"] == 3              # value=子树可消费数（气泡大小）
+    assert by_id[f"c:{b.id}"]["value"] == 2              # archived 不计（与总览口径一致）
+    assert data["links"] == [{"source": f"c:{a.id}", "target": f"c:{b.id}", "kind": "child"}]
+
+
+def test_graph_subtree_hierarchy_leaf_shows_entries_no_ancestors(dl):
+    """层级模式叶子层：条目自动出现；纯层级不出祖先链（上位路径由面包屑负责）。"""
+    a, b, es = _graph_fixture(dl)
+    data = dl.get_graph_subtree(b.id, hierarchy=True)
+    kinds = {n["id"] for n in data["nodes"]}
+    assert f"c:{a.id}" not in kinds                      # 祖先链不出现
+    assert kinds == ({f"c:{b.id}"} | {f"e:{e.id}" for e in es[1:3]}
+                     | {"d:h.com"})                      # B 挂 2 条（同 host）+ 域名聚合
+
+
+def test_graph_subtree_hierarchy_all_children_pruned_falls_leaf(dl):
+    """层级模式：子类全被空类剪枝 → 视为叶子，条目出现、空子类不占位。"""
+    a, b, es = _graph_fixture(dl)
+    lone = dl.create_category("独类", [], "rule")
+    empty = dl.create_category("空子类", [lone.id], "rule")
+    dl.attach_category(es[0].id, lone.id, 1.0, "manual", "r2")   # 独类自身有条目
+    data = dl.get_graph_subtree(lone.id, hierarchy=True)
+    ids = {n["id"] for n in data["nodes"]}
+    assert f"c:{empty.id}" not in ids                    # 剪枝口径与经典视图一致
+    assert f"e:{es[0].id}" in ids                        # 落叶子装配：条目出现
+    assert not any(n["id"].startswith("d:") for n in data["nodes"])   # 单条目不出域名节点
+
+
 def test_graph_search_matches_title_and_category_with_chain(dl):
     a, b, es = _graph_fixture(dl)
     # 标题命中

@@ -53,6 +53,10 @@
   <button id="expand">展开更多</button>
   <label title="点任意节点出「焦点一跳邻域」（每条关联带解释）">
     <input type="checkbox" id="radial"> 放射模式</label>
+  <label title="点分类只出下一级子分类（逐层下钻）；条目在叶子层出现，或点「显示条目」展开当前层">
+    <input type="checkbox" id="hier"> 层级模式</label>
+  <button id="showEntries" style="display:none"
+          title="当前为纯层级视图——展开本分类子树内条目（经典视图）">📋 显示条目</button>
   <label title="在边上常驻显示关联理由（tooltip 恒显）">
     <input type="checkbox" id="showReason"> 🏷 关联解释</label>
   <button id="reverseBtn" title="哪些焦点能到达当前焦点">🔍 反查</button>
@@ -85,6 +89,10 @@ const crumb = document.getElementById("crumb");
 const tip = document.getElementById("tip");
 const revpanel = document.getElementById("revpanel");
 const expandBtn = document.getElementById("expand");
+const hierBox = document.getElementById("hier");
+const showEntriesBtn = document.getElementById("showEntries");
+// 层级模式（批次 63）：默认开（用户 4.1-4.3 逐层钻取预期），localStorage 记忆（58 批折叠纪律同款）
+hierBox.checked = localStorage.getItem("knowatlas.graphHier") !== "0";
 
 // ---- 节点弹窗卡（第三十五批）：悬浮固定弹窗显示概要；移入保持/移开即隐/点按钮进原文 ----
 const nodecard = document.getElementById("nodecard");
@@ -192,6 +200,7 @@ function renderBread() {
 function render(data, crumbText, opts = {}) {
   lastData = data;
   nodecard.hidden = true;    // 视图重渲染强制收起弹窗，防残留
+  showEntriesBtn.style.display = "none";   // 非层级子树视图一律收起（子树视图按需重开）
   const radiateView = !!opts.radiate;
   const reasonOn = document.getElementById("showReason").checked;
   // 放射视图布种：焦点固定 (0,0)，非焦点节点绕原点环形散布（黄金角）——
@@ -282,15 +291,21 @@ async function showOverview(push = true) {
   if (push) { nav.length = 0; nav.push({ label: "大类总览", load: showOverview }); renderBread(); }
 }
 
-async function showSubtree(categoryId, push = true) {
-  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}`);
+async function showSubtree(categoryId, push = true, forceClassic = false) {
+  const useHier = !forceClassic && hierBox.checked;   // 层级模式（批次 63）：点分类只出下一级子分类
+  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}${useHier ? "&hierarchy=1" : ""}`);
   if (r.status === 404) { tip.textContent = "分类不存在（可能已删）。"; return; }
   const data = await r.json();
   const rootName = (data.nodes.find(n => n.id === "c:" + categoryId) || {}).name || categoryId;
   currentSubtree = categoryId;
-  render(data, `子树：${rootName}（祖先链为灰底上下文）`);
+  render(data, useHier
+    ? `子树：${rootName}（层级模式——点分类逐层下钻）`
+    : `子树：${rootName}（祖先链为灰底上下文）`);
+  // 纯层级非叶子层：条目未出 → 给「显示条目」显式展开（render 先收起，这里按需重开）
+  showEntriesBtn.style.display =
+    (useHier && !data.nodes.some(n => n.kind === "entry")) ? "" : "none";
   if (push) {
-    nav.push({ label: `子树:${rootName}`, load: p => showSubtree(categoryId, false) });
+    nav.push({ label: `子树:${rootName}`, load: p => showSubtree(categoryId, false, forceClassic) });
     renderBread();
   }
 }
@@ -340,6 +355,18 @@ expandBtn.onclick = () => {          // Top-N 渐进披露：×3 扩容（封顶
     if (nav.length && nav[nav.length - 1].label.startsWith("放射:"))
       nav[nav.length - 1].load = p => showRadiate(currentRadiate.nodeId, next, false);
   });
+};
+
+// 显式「显示条目」（批次 63）：纯层级下当前层只出子分类，点此展开本子树条目（经典视图）
+showEntriesBtn.onclick = () => {
+  if (currentSubtree == null) return;
+  const top = nav[nav.length - 1];
+  if (top && top.label.startsWith("子树:")) {
+    nav[nav.length - 1] = { label: `条目:${top.label.slice(3)}`,
+                            load: p => showSubtree(currentSubtree, false, true) };
+    renderBread();
+  }
+  showSubtree(currentSubtree, false, true);
 };
 
 // ---- 点击行为：放射模式开启 → 任意节点放射；域名节点恒走放射 ----
@@ -399,6 +426,14 @@ document.getElementById("threadBtn").onclick = async () => {
 
 // 关联解释开关：整体重放当前视图（label.show 在 render 里读开关）
 document.getElementById("showReason").addEventListener("change", () => {
+  const last = nav[nav.length - 1];
+  if (last) last.load(false);
+});
+
+// 层级模式开关（批次 63）：就地重放当前视图——子树闭包重读开关即时切换；
+// 状态落 localStorage（58 批折叠纪律同款）
+hierBox.addEventListener("change", () => {
+  localStorage.setItem("knowatlas.graphHier", hierBox.checked ? "1" : "0");
   const last = nav[nav.length - 1];
   if (last) last.load(false);
 });

@@ -741,10 +741,14 @@ class DataLayer:
                           "kind": "category", "value": count})
         return {"nodes": nodes, "links": []}
 
-    def get_graph_subtree(self, category_id: str, limit: int = 120) -> dict[str, Any] | None:
+    def get_graph_subtree(self, category_id: str, limit: int = 120,
+                          hierarchy: bool = False) -> dict[str, Any] | None:
         """子树下钻图：该分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文。
 
         条目节点带 locator（前端点击可打开原链接）；分类不存在返回 None。
+        hierarchy=True（纯层级模式，批次 63）：只出下一级子分类（child 边，
+        value=子树可消费数），不出条目/域名/祖先链——叶子层（无未剪空子类）
+        自动出本子树条目；非叶子层条目由前端「显示条目」显式拉经典视图。
         """
         cat = self._conn.execute(
             "SELECT id, name FROM categories WHERE id=?", (category_id,)).fetchone()
@@ -753,7 +757,28 @@ class DataLayer:
         cats = {r["id"]: r["name"] for r in
                 self._conn.execute("SELECT id, name FROM categories").fetchall()}
         sub_ids = self._cat_descendants(category_id)
-        anc_ids = [a for a in self._cat_ancestors(category_id) if a not in sub_ids]
+        if hierarchy:
+            kids = [(r["id"], self._consumable_count(self._cat_descendants(r["id"])))
+                    for r in self._conn.execute(
+                        "SELECT c.id FROM category_parents cp"
+                        " JOIN categories c ON c.id=cp.category_id WHERE cp.parent_id=?"
+                        " ORDER BY c.name", (category_id,)).fetchall()]
+            if kids and any(n > 0 for _, n in kids):
+                h_nodes: list[dict[str, Any]] = [
+                    {"id": f"c:{category_id}", "name": cat["name"], "kind": "category",
+                     "value": self._consumable_count(sub_ids)}]
+                h_links: list[dict[str, Any]] = []
+                for cid, n in kids:
+                    if n == 0:    # 空类剪枝（第三十六批口径，与经典视图一致）
+                        continue
+                    h_nodes.append({"id": f"c:{cid}", "name": cats.get(cid, "?"),
+                                    "kind": "category", "value": n})
+                    h_links.append({"source": f"c:{category_id}", "target": f"c:{cid}",
+                                    "kind": "child"})
+                return {"root": category_id, "nodes": h_nodes, "links": h_links}
+            # 叶子层（无子类或子类全空）：条目在此层出现——落经典装配但不带祖先链
+        anc_ids = [] if hierarchy else \
+            [a for a in self._cat_ancestors(category_id) if a not in sub_ids]
         ph = ",".join("?" * len(sub_ids))
         entries = self._conn.execute(
             "SELECT DISTINCT e.id, e.title, e.locator FROM entries e"
@@ -1186,11 +1211,12 @@ class DataLayer:
         if category_id:
             sub_ids = self._cat_descendants(category_id)
             if category_id not in sub_ids:
-                return {"focus": None, "children": [], "entries": []}
+                return {"focus": None, "categories": [], "entries": []}
         else:
             sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
         if not sub_ids:
-            return {"focus": None, "children": [], "entries": []}
+            # 键名必须与正常路径一致（/api/cloud 读 categories，批次 60 发现空库 500）
+            return {"focus": None, "categories": [], "entries": []}
         # 分类词元：focus 直接子分类（focus=None 时顶层）
         if category_id:
             kids = self._conn.execute(

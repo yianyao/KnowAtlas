@@ -75,6 +75,14 @@ def test_cloud_data_scope_and_consumable(dl):
     assert empty["focus"] is None and empty["entries"] == []
 
 
+def test_cloud_data_empty_db_uses_categories_key(dl):
+    """空库（无任何分类）走早退分支：键名必须与正常路径一致（/api/cloud 读 categories，
+    批次 60 曾因早退分支写 children 导致空库词云 500）。"""
+    data = dl.cloud_data(None)
+    assert data["focus"] is None
+    assert data["categories"] == [] and data["entries"] == []
+
+
 def test_cloud_data_children_pruned(dl):
     g = _seed_library(dl)
     data = dl.cloud_data(None)  # 全库 → 顶层大类词元

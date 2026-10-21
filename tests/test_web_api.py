@@ -173,6 +173,13 @@ def test_graph_view_endpoints(client, dl):
     assert {n["name"] for n in sub["nodes"] if n["kind"] == "category"} >= {"图谱大类", "图谱子类"}
     assert client.get("/api/graph/subtree?category_id=nope").status_code == 404
 
+    # 层级模式（批次 63）：非叶子只出下一级子分类；叶子层条目自动出现
+    hier = client.get(f"/api/graph/subtree?category_id={a.id}&hierarchy=true").json()
+    assert {n["name"] for n in hier["nodes"]} == {"图谱大类", "图谱子类"}
+    assert hier["links"] == [{"source": f"c:{a.id}", "target": f"c:{b.id}", "kind": "child"}]
+    leaf = client.get(f"/api/graph/subtree?category_id={b.id}&hierarchy=1").json()
+    assert {n["name"] for n in leaf["nodes"] if n["kind"] == "entry"} == {"搜索样本1"}
+
     sr = client.get("/api/graph/search?q=搜索样本").json()
     assert {n["name"] for n in sr["nodes"] if n["kind"] == "entry"} == {"搜索样本0", "搜索样本1"}
     assert {n["name"] for n in sr["nodes"] if n["kind"] == "category"} >= {"图谱大类"}
