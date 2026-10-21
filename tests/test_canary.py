@@ -16,12 +16,12 @@ from knowatlas.models import SCHEMES, SOURCE_TYPES, Entry
 from knowatlas.registry.builtins import build_registries
 
 CANARY: dict[str, str] = {
-    "ddl": "8fe61eb2057d",
+    "ddl": "57f5e928913e",
     "source_types": "dfeff8409159",
     "schemes": "40123837bf71",
     "entry_fields": "1a9d42828612",
     "config_keys": "e672d0a323eb",
-    "capabilities": "13b73497bbc5",
+    "capabilities": "a6856a36fd52",
 }
 
 

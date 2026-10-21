@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from ..fetchers import file_reader, http_simple
 from ..semantic.tasks import (
-    classify_coarse, classify_deep, delta_summarize, tag_keywords, thread_digest,
-    thread_suggest, topic_recall,
+    classify_coarse, classify_deep, delta_summarize, point_extract, tag_keywords,
+    thread_digest, thread_suggest, topic_recall,
 )
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
@@ -43,4 +43,6 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
     # 线程语义压缩（第五十五批，§9.4）：quote_strip 后置 LLM 层，可独立关闭
     semantics.register(delta_summarize.SPEC, delta_summarize.run)
     semantics.register(thread_digest.SPEC, thread_digest.run)
+    # 知识点抽取（第六十二批，方案 §7.1）：形态判定 + 切点，查询独立演进
+    semantics.register(point_extract.SPEC, point_extract.run)
     return locators, semantics

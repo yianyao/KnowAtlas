@@ -194,6 +194,20 @@ class LlmClient:
             + "\n  ".join(f"{url} — {detail}" for url, detail in failures))
 
 
+def extract_json_object(text: str) -> dict[str, Any]:
+    """从 LLM 输出中容错提取 JSON 对象（容忍 markdown 代码块与前后杂文本）。"""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise LlmError(f"LLM 输出中无 JSON 对象：{text[:200]}")
+    try:
+        obj = json.loads(text[start:end + 1])
+    except ValueError as exc:
+        raise LlmError(f"JSON 解析失败：{text[:200]}") from exc
+    if not isinstance(obj, dict):
+        raise LlmError("JSON 顶层不是对象")
+    return obj
+
+
 def extract_json_array(text: str) -> list[dict[str, Any]]:
     """从 LLM 输出中容错提取 JSON 数组（容忍 markdown 代码块与前后杂文本）。"""
     start, end = text.find("["), text.rfind("]")

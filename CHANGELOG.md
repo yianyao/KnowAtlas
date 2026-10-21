@@ -2047,3 +2047,41 @@ javascript），现有 showSubtree 子孙分类+挂接条目混显+祖先链，�
 - 历史性引用不改：CHANGELOG 历史批次记录、TODO/完整方案 §9.4、代码注释与迁移
   文件头（第三十二批历史名）；test_contract/test_threads docstring 同此。
 - 无代码行为变更（纯文案/文档）；pytest 356 全绿；改动文件 UTF-8 无 BOM + LF。
+## 0.2.0 第六十二批：知识点抽取流水线（Phase 7 批次 61a，方案 §7.1）
+
+**背景**：方案 §7.1 点层独立表 + §9 批次 61 的**工程子集**（61a）：迁移 007 +
+形态判定/切点/规范化 hash 去重/一点多溯源流水线 + ≤10 条小样本试跑验证链路。
+**不做**全量判定（硬闸门：无人值守 LLM 预算 ≤¥1；全量须用户先裁决模型档位）。
+
+1. **迁移 007_points.sql**：`points`（id/content_hash UNIQUE 去重键/text/summary/
+   source_type/judge integral|split/created_at/meta 存判定理由 judge_reason）+
+   `point_sources`（point_id+entry_id 复合 PK/char_offset/anchor/created_at，双 FK
+   ON DELETE CASCADE——条目物理删除时指针级联消失、点本体保留）。points 不进
+   entries_fts/content_fts 触发器体系（方案 §7.1），点检索独立演进。canary 同步升版：
+   ddl 8fe61eb2057d→57f5e928913e、capabilities 13b73497bbc5→a6856a36fd52（point_extract@1.0.0 注册）。
+2. **point_extract 任务**（semantic/tasks/point_extract.py）：形态判定与切点合并
+   **单次 LLM 调用**（两步一请求省一半费用；判定理由必落 meta.judge_reason 供抽检——
+   SOP §7.7 总纪律第 2 条）。integral→归一单点（结构化压缩正文），split→2-8 个
+   自包含点（硬信息保留）；输出非法/为空降级带 error，绝不臆造。llm.py 增
+   extract_json_object（对象版容错提取，容忍 markdown 围栏）。
+3. **kpoints 流水线**（pipeline/points.py + CLI 子命令）：候选=active+有正文
+   （inline_content 优先、content_store 兜底，>6000 字截断控成本）+非待清理+
+   未抽过（point_sources 游标幂等，重跑零重复）；点正文规范化=去零宽/压空白/
+   casefold（标点不归一——宁漏勿误，去重键错会错误合并不同观点）；content_hash
+   命中即 put_point 合并溯源（一点多溯源，溯源数=可信度信号）；LLM 未启用 SKIP
+   （exit 3）、单条失败记 error 不阻塞。数据层增 put_point/count_entries/count_points/
+   list_points（meta 已解析）/point_sources_of/point_source_entry_ids。
+4. **小样本试跑（真实库）**：dry-run 10 条（4 integral/6 split→37 点零错误）→
+   真实写入三批共 25 条次处理、22 条目去重后 101 点 101 溯源全落库；判定理由可抽检
+   （如「该条目是 phpredis README 参考文档，包含项目定位、安装配…」）；integral
+   整条即点不碎切、split 点自包含带摘句锚点。LLM 费用 ~¥0.2（≤¥1 闸门内）。
+   **运维留痕**：22≠25 因试跑期间一次后台重跑与前台 --limit 5 并发，3 条目被
+   双重判定（LLM 非确定性输出各自成点，轻微冗余）——工具层使用事故非流水线缺陷
+   （无人值守队列本就串行）；点层可重建，全量前统一重抽即可。试跑数据不清理
+   （硬闸门：不物理删除）。
+5. **测试**：tests/test_points.py 15 项（规范化 hash 空白/大小写/零宽不敏感+标点
+   不归一、迁移 007 两表、一点多溯源合并+重放幂等、integral/split/非法输出/故障
+   降级、流水线幂等重跑零调用、LLM 故障记录不阻塞、dry-run 不写库不推游标、
+   长文截断走 content_store）；test_threads 迁移断言 6→7（新表纳入）；
+   test_contract 能力集增 point_extract。pytest 349 项全绿（334+15：348 passed
+   +1 skip，EXIT=0）。SOP 增 §2.18。db.py/cli.py 改动，serve 需重启。

@@ -85,6 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
     kcheck.add_argument("--limit", type=int, default=100, help="本次最多检测条数（默认 100）")
     kcheck.add_argument("--qps", type=float, default=4.0, help="检测速率（默认 4 条/秒）")
 
+    kpoints = sub.add_parser(
+        "kpoints", help="知识点抽取：形态判定 integral/split → 切点 → hash 去重一点多溯源（方案 §7.1）")
+    kpoints.add_argument("--limit", type=int, default=10,
+                         help="本次最多处理条数（默认 10——试跑口径，全量判定须用户裁决模型档位）")
+    kpoints.add_argument("--dry-run", action="store_true",
+                         help="只判定与报告，不写库（LLM 费用照常发生）")
+
     return parser
 
 
@@ -357,6 +364,31 @@ def _cmd_kcheck(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kpoints(args: argparse.Namespace) -> int:
+    from .pipeline.points import run_points_extract
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        stats = run_points_extract(cfg, dl, limit=max(1, args.limit),
+                                   dry_run=args.dry_run)
+    finally:
+        dl.close()
+    if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）；跳过计数器在 skip_counts
+        print(f"SKIP {stats['skipped']}")
+        return _EXIT_SKIP
+    import json as _json
+
+    head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 抽取完成"
+    print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+    for err in stats.get("errors", [])[:5]:
+        print(f"  ERROR {err['entry_id']} {err['title']}：{err['error']}")
+    if not args.dry_run:
+        print("（点列表：points 表；溯源数=可信度信号；判定理由在点 meta.judge_reason）")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -366,6 +398,7 @@ _COMMANDS = {
     "kbackup": _cmd_kbackup,
     "ktest": _cmd_ktest,
     "kcheck": _cmd_kcheck,
+    "kpoints": _cmd_kpoints,
 }
 
 

@@ -609,6 +609,10 @@ class DataLayer:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def count_entries(self, status: str = "active") -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE status=?", (status,)).fetchone()[0]
+
     def get_graph_data(self, max_entries: int = 400) -> dict[str, Any]:
         """关系图数据（结构关系 v0）：分类节点 + 条目节点 + 域名节点。
 
@@ -1728,6 +1732,79 @@ class DataLayer:
         with self.transaction() as conn:
             conn.executemany("DELETE FROM entry_vectors WHERE entry_id=?",
                              [(e,) for e in entry_ids])
+
+    # ---- 知识点（迁移 007，第六十二批；点 text 是抽取产物可重抽重建，原文永在
+    #      entries/content_store；content_hash 去重，一点多溯源走 point_sources） ----
+
+    def put_point(self, point: dict[str, Any], source: dict[str, Any]) -> str:
+        """写一个点 + 一条溯源；content_hash 已存在 → 只补溯源（一点多溯源）。
+
+        point: {content_hash, text, summary, source_type, judge, meta}；
+        source: {entry_id, char_offset, anchor}。
+        返回 "created"（新点）或 "linked"（既有点新增溯源指针）。
+        """
+        now = _now()
+        meta = point.get("meta") or {}
+        with self.transaction() as conn:
+            row = conn.execute("SELECT id FROM points WHERE content_hash=?",
+                               (point["content_hash"],)).fetchone()
+            if row is None:
+                pid = point["content_hash"][:16]  # 确定性 id：与去重键同源
+                conn.execute(
+                    "INSERT INTO points (id, content_hash, text, summary,"
+                    " source_type, judge, created_at, meta) VALUES (?,?,?,?,?,?,?,?)",
+                    (pid, point["content_hash"], point["text"],
+                     point.get("summary", ""), point["source_type"],
+                     point["judge"], now, _meta_json(meta)))
+                status = "created"
+            else:
+                pid = row["id"]
+                status = "linked"
+            conn.execute(
+                "INSERT OR IGNORE INTO point_sources"
+                " (point_id, entry_id, char_offset, anchor, created_at)"
+                " VALUES (?,?,?,?,?)",
+                (pid, source["entry_id"], source.get("char_offset"),
+                 source.get("anchor"), now))
+        self.log_task(now, "points", "put", pid,
+                      {"judge": point["judge"], "result": status,
+                       "entry_id": source["entry_id"]})
+        return status
+
+    def count_points(self) -> int:
+        return self._conn.execute("SELECT COUNT(*) FROM points").fetchone()[0]
+
+    def list_points(self, limit: int = 200) -> list[dict[str, Any]]:
+        """点列表（created_at 升序=知识形成顺序），附溯源数与最早溯源；meta 已解析。"""
+        rows = self._conn.execute(
+            "SELECT p.*, COUNT(ps.entry_id) AS source_count,"
+            " MIN(ps.created_at) AS first_seen"
+            " FROM points p LEFT JOIN point_sources ps ON ps.point_id = p.id"
+            " GROUP BY p.id ORDER BY p.created_at, p.id LIMIT ?",
+            (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def point_sources_of(self, point_id: str) -> list[dict[str, Any]]:
+        """一点的全部溯源指针（entry_id/char_offset/anchor/created_at）。"""
+        rows = self._conn.execute(
+            "SELECT ps.*, e.title, e.source_type AS entry_source_type"
+            " FROM point_sources ps JOIN entries e ON e.id = ps.entry_id"
+            " WHERE ps.point_id=? ORDER BY ps.created_at", (point_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def point_source_entry_ids(self) -> set[str]:
+        """已抽取过点的条目 id 集合（流水线幂等游标：重跑自动跳过）。"""
+        rows = self._conn.execute(
+            "SELECT DISTINCT entry_id FROM point_sources").fetchall()
+        return {r["entry_id"] for r in rows}
 
     def _sim_channel(self, entry_id: str, add_node, add_edge, cut,
                      per_channel: int) -> int:
