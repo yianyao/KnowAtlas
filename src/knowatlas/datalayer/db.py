@@ -1106,6 +1106,103 @@ class DataLayer:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    # ---- 词云视图（第四十三批：scoped cloud 聚合数据源） ----
+
+    def category_names(self) -> dict[str, str]:
+        """全部分类 id→name 映射（词云着色/前端展示用，只读轻查询）。"""
+        return {r["id"]: r["name"] for r in
+                self._conn.execute("SELECT id, name FROM categories").fetchall()}
+
+    def cloud_data(self, category_id: str | None, *,
+                   sample: int = 800) -> dict[str, Any]:
+        """词云聚合数据源：focus 子树（None=全库）的分类词元 + 内容词元样本。
+
+        返回：
+        - focus: {id, name} | None（None=全库）；
+        - categories: focus 的直接子分类及可消费条目数（focus=None 时顶层大类；
+          空类剪枝——无可消费条目的不出）——「分类词元」，点击进入子分类；
+        - entries: [(entry_id, title, body, top_cat_id)] 样本（子树内可消费
+          条目 DISTINCT 近 sample 条；top_cat_id=直挂分类的顶层根，多父多根
+          取最小 id 保确定性——显示口径非事实口径）。
+
+        词元提取（jieba tf-idf）在 api 层做：SQL 与 NLP 分治，jieba 惰性导入。
+        消费面口径与 _consumable 一致（不判 dead/value_flag/dedupe/freshness）。
+        """
+        if category_id:
+            sub_ids = self._cat_descendants(category_id)
+            if category_id not in sub_ids:
+                return {"focus": None, "children": [], "entries": []}
+        else:
+            sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
+        if not sub_ids:
+            return {"focus": None, "children": [], "entries": []}
+        # 分类词元：focus 直接子分类（focus=None 时顶层）
+        if category_id:
+            kids = self._conn.execute(
+                "SELECT c.id, c.name FROM category_parents cp"
+                " JOIN categories c ON c.id=cp.category_id WHERE cp.parent_id=?"
+                " ORDER BY c.name", (category_id,)).fetchall()
+        else:
+            kids = self._conn.execute(
+                "SELECT id, name FROM categories"
+                " WHERE id NOT IN (SELECT category_id FROM category_parents)"
+                " ORDER BY name").fetchall()
+        children = [{"id": r["id"], "name": r["name"],
+                     "count": self._consumable_count(self._cat_descendants(r["id"]))}
+                    for r in kids]
+        children = [c for c in children if c["count"] > 0]
+        # 内容词元样本：子树内可消费条目（去重，近 sample 条）
+        marks = ",".join("?" * len(sub_ids))
+        rows = self._conn.execute(
+            "SELECT DISTINCT e.id, e.title, COALESCE(e.inline_content,'') AS body"
+            " FROM entries e JOIN entry_categories ec ON ec.entry_id=e.id"
+            f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+            + _consumable("e") + " ORDER BY e.exported_at DESC LIMIT ?",
+            (*sub_ids, sample)).fetchall()
+        has_parent = {r["category_id"]
+                      for r in self._conn.execute("SELECT category_id FROM category_parents")}
+        entries: list[tuple[str, str, str, str | None]] = []
+        for r in rows:
+            cats = [x["category_id"] for x in self._conn.execute(
+                "SELECT category_id FROM entry_categories WHERE entry_id=?", (r["id"],))]
+            roots = []
+            for cid in cats:
+                anc = self._cat_ancestors(cid)
+                roots.extend([a for a in anc if a not in has_parent] or ([cid] if cid not in has_parent else []))
+            entries.append((r["id"], r["title"], r["body"],
+                            min(roots) if roots else None))
+        focus = None
+        if category_id:
+            frow = self._conn.execute("SELECT id, name FROM categories WHERE id=?",
+                                      (category_id,)).fetchone()
+            if frow is not None:
+                focus = {"id": frow["id"], "name": frow["name"]}
+        return {"focus": focus, "categories": children, "entries": entries}
+
+    def cloud_facet(self, category_id: str | None, word: str,
+                    limit: int = 50) -> list[Entry]:
+        """词云 facet：focus 子树内可消费且标题/内联正文含该词的条目
+        （内容词元点击 = facet 过滤当前范围；第四十三批）。"""
+        if category_id:
+            sub_ids = self._cat_descendants(category_id)
+            if category_id not in sub_ids:
+                return []
+        else:
+            sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
+        if not sub_ids:
+            return []
+        marks = ",".join("?" * len(sub_ids))
+        rows = self._conn.execute(
+            "SELECT DISTINCT e.* FROM entries e"
+            " JOIN entry_categories ec ON ec.entry_id=e.id"
+            f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+            + _consumable("e")
+            + " AND (e.title LIKE ? ESCAPE '\\' OR e.inline_content LIKE ? ESCAPE '\\')"
+            " ORDER BY e.exported_at DESC LIMIT ?",
+            (*sub_ids, self._like_pattern(word), self._like_pattern(word), limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     def get_tree(self) -> list[dict[str, Any]]:
         """返回多父 DAG 展平的树（按根展开；多父节点会在每个父下出现）。
 

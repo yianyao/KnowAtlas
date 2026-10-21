@@ -1241,3 +1241,51 @@ find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截�
   钉死（本地 HTTP fixture：created+fetched → duplicate 同 id → 缺 url 400）
 - 静态页探针升级：五个管理入口均在 mgmt details 内 + add-url/cid-btn/ccid 断言
 - pytest 229 项全绿（+1）；四个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十三批：词云视图 v0（scoped cloud 三态词元）
+
+**背景**：TODO 步骤「词云视图」——范围随焦点分类子树变化；分类词元点击进入
+子分类并联动分类树；内容词元点击 = facet 过滤当前范围；字号 ∝ √权重；
+按主导顶层分类着色。v0 划范围：词元来源=子树内可消费条目标题+内联正文
+（jieba tf-idf，main 依赖已含 jieba 0.42.1）；分类词元=focus 直接子分类；
+返回全库走「↩ 全库」（逐级回退后置，词云刷新即重新出发）。
+
+**变更**
+
+1. **db.py**：`cloud_data(category_id, *, sample=800)`——focus 子树（None=全库）
+   的分类词元（直接子分类 + 可消费条目数，空类剪枝）与内容词元样本
+   （DISTINCT 近 sample 条，带每条直挂分类的顶层根，多父取最小 id 保确定）；
+   `cloud_facet(category_id, word, limit=50)`——子树内可消费且标题/内联正文
+   含该词的条目（内容词元点击的 facet 数据源）。
+2. **api.py**：`GET /api/cloud?category_id=&limit=&word=`——分类词元 + 内容词元
+   （jieba tf-idf top8/条聚合计数，过滤单字/纯数字；主导顶层分类 + 12 色板配色，
+   按词元总量降序分配）；`word` 参数 facet 模式追加 entries 列表。
+3. **index.html**：侧栏常驻「☁️ 词云」入口；工作台 tabs 加 cloud；renderCloudTab
+   渲染范围条 + 分类词元（点击→currentCat+loadTree+highlightInTree 联动+
+   刷新词云）+ 内容词元（字号=13+22√(count/max) px，点击→facet 条目列表，
+   复用 entryHTML/bindEntryButtons）；↩ 全库复位。
+4. **配置/依赖/canary**：零新增（jieba 已是 main 依赖；无 DDL/枚举/配置键变化）。
+
+**复检探针**（实现后逐条命中）
+
+- 切到某大类，词云只反映该子树条目（他子树条目不出现在样本/facet）（探针①）
+- 分类词元点击 → currentCat 同步 + 树定位高亮 + 词云范围切换（探针②）
+- 内容词元点击 → 当前范围按该词过滤出条目列表（探针③）
+- 字号随计数非线性增长（√权重）、颜色按主导顶层分类（探针④）
+- pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- tests/test_cloud.py 7 项：探针①范围隔离（mq 子树词元无生活主导词、facet 只出
+  子树条目）/ 探针②前端静态断言（cloud-cat 点击 → currentCat 同步 +
+  highlightInTree 树定位 + 词云刷新）/ 探针③内容词元 facet（word=消息 → 恰 2 条，
+  待清理与生活条目不出）/ 探针④字号公式（Math.sqrt(w.count / max)）与配色断言；
+  另有 db 层空类剪枝/顶层根确定性/空范围不炸 + 噪音词元过滤用例
+- 开发期修两处：db 返回键 children→categories 统一；jieba 对「消息总线」类
+  未登录词会切碎——测试语料改词典稳定词；冒烟另暴露 markdown/导出噪音
+  （##/---/NaN/PASS/Unnamed 曾占词元榜首）→ _cloud_word_ok 三道闸
+  （须含字母/非纯符号/噪音停用词）后真实库词元干净（md/skill/技能/模板/LLM/API…）
+- 真实库副本冒烟：800 样本聚合 5.3s（首次含词典加载），顶层词元
+  技术开发 821 / 软件与ERP 671 / 人工智能 268，词元主题分布合理
+- canary 六面不变（无 DDL/枚举/配置键变化）；pytest 236 项全绿（+7）；
+  五个变更文件 UTF-8 无 BOM + LF

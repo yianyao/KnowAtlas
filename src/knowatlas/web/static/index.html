@@ -59,6 +59,17 @@
               padding: 0 6px; margin-left: 6px; display: none; }
   .entry:hover .move-btn, .entry:hover .reject-btn { display: inline-block; }
   #filter { margin: 8px 0; }
+  /* 词云视图（第四十三批） */
+  .cloud-scope { font-size: 13px; margin: 4px 0 10px; }
+  .cloud-cats { margin-bottom: 12px; }
+  .cloud-cat { cursor: pointer; margin: 0 6px 6px 0; padding: 4px 10px; font-size: 13px;
+               border: 1px solid #8886; border-radius: 12px; background: transparent;
+               color: inherit; }
+  .cloud-cat:hover { border-color: #4a9eff; color: #4a9eff; }
+  .cloud-words { line-height: 1.9; margin-bottom: 12px; }
+  .cloud-word { cursor: pointer; margin: 0 10px 4px 0; display: inline-block; }
+  .cloud-word:hover { text-decoration: underline; }
+  #cloud-facet .entry { margin: 4px 0; }
   dialog { border: 1px solid #8888; border-radius: 8px; padding: 16px;
            background: Canvas; color: CanvasText; min-width: 320px; }
   dialog::backdrop { background: rgba(0,0,0,.5); }
@@ -74,6 +85,7 @@
   <input id="search" placeholder="工作台：输入主题词 → 聚合结果 / 线索 / 放射 三视图">
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
   <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
+  <a href="#" id="cloud-link" style="display:block;margin-bottom:8px;font-size:13px">☁️ 词云（范围随焦点分类子树变化，点词元下钻/过滤）</a>
   <!-- 数据管理入口默认折叠（第三十七批用户定调：日常是消费数据，采集/清理只在新数据时用） -->
   <details id="mgmt" style="margin:4px 0 8px">
   <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
@@ -535,7 +547,8 @@ async function doWorkbench(q) {
 
 function renderWorkbench() {
   const box = document.getElementById("hits");
-  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"]];
+  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"],
+               ["cloud", "☁ 词云"]];
   box.innerHTML =
     `<div id="wb-tabs">` + tabs.map(([k, label]) =>
       `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
@@ -555,8 +568,80 @@ function renderWorkbench() {
   };
   if (wb.tab === "agg") renderAggTab();
   else if (wb.tab === "threads") renderThreadsTab();
+  else if (wb.tab === "cloud") renderCloudTab();
   else renderRadiateTab();
 }
+
+// ---- 词云视图（第四十三批：scoped cloud 三态词元） ----
+// 范围 = 左侧树当前焦点分类子树（currentCat；null=全库），随焦点切换；
+// 分类词元点击 → 进入子分类（currentCat 同步 + 树定位高亮 + 词云刷新）；
+// 内容词元点击 → facet 过滤当前范围（出条目列表，复用统一条目渲染）。
+let cloudWord = null;  // 当前 facet 词（null=无 facet）
+async function renderCloudTab() {
+  const body = document.getElementById("wb-body");
+  body.innerHTML = "<small>聚合中…（jieba 分词，首次略慢）</small>";
+  const scope = currentCat ? "?category_id=" + encodeURIComponent(currentCat) : "";
+  const data = await (await fetch("/api/cloud" + scope)).json();
+  const focusName = (data.focus && data.focus.name) || "全库";
+  const max = data.words.length ? Math.max(...data.words.map(w => w.count)) : 1;
+  let html = `<div class="cloud-scope">范围：<b>${focusName}</b>`
+    + (currentCat ? ` <a href="#" id="cloud-all">↩ 全库</a>` : "")
+    + ` <span style="opacity:.55">（样本 ${data.sampled_entries} 条；点分类词元进入子分类，点内容词元按词过滤）</span></div>`;
+  html += `<div class="cloud-cats">` + (data.categories.length
+    ? data.categories.map(c =>
+        `<button class="cloud-cat" data-id="${c.id}" data-name="${c.name}"
+          title="进入子分类「${c.name}」（${c.count} 条可消费）">${c.name}（${c.count}）</button>`).join("")
+    : "<small style=\"opacity:.6\">该范围无下级分类。</small>") + `</div>`;
+  html += `<div class="cloud-words">` + (data.words.length
+    ? data.words.map(w => {
+        const size = (13 + 22 * Math.sqrt(w.count / max)).toFixed(1);
+        const tip = `${w.word}：${w.count} 条` + (w.top ? `，主导分类：${w.top.name}` : "");
+        return `<span class="cloud-word" data-word="${w.word}" style="font-size:${size}px;color:${w.color}"
+          title="${tip}">${w.word}</span>`;
+      }).join("")
+    : "<small style=\"opacity:.6\">无内容词元（该范围无可消费正文，或 jieba 未装）。</small>") + `</div>`;
+  html += `<div id="cloud-facet"></div>`;
+  body.innerHTML = html;
+  // 分类词元：进入子分类 + 联动分类树（选中态同步、滚动定位闪烁）
+  body.querySelectorAll(".cloud-cat").forEach(b => b.onclick = () => {
+    currentCat = b.dataset.id;
+    cloudWord = null;
+    loadTree();
+    highlightInTree(b.dataset.id);
+    renderCloudTab();
+  });
+  const all = document.getElementById("cloud-all");
+  if (all) all.onclick = (e) => { e.preventDefault(); currentCat = null; cloudWord = null; loadTree(); renderCloudTab(); };
+  // 内容词元：facet 过滤当前范围
+  body.querySelectorAll(".cloud-word").forEach(s => s.onclick = async () => {
+    cloudWord = s.dataset.word;
+    const q2 = (currentCat ? "?category_id=" + encodeURIComponent(currentCat) : "?")
+      + (currentCat ? "&" : "") + "word=" + encodeURIComponent(cloudWord);
+    const d2 = await (await fetch("/api/cloud" + q2)).json();
+    const facet = document.getElementById("cloud-facet");
+    if (!facet) return;
+    facet.innerHTML = `<div style="font-size:13px;margin:6px 0">范围「${(d2.focus && d2.focus.name) || "全库"}」
+      含「<b>${cloudWord}</b>」的可消费条目 ${d2.entries.length} 条：</div>`
+      + (d2.entries.length ? d2.entries.map(x =>
+          `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+          + `<span class="badge">${srcLabel(x.source_type)}</span>`
+          + `<button class="move-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
+          + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+          + (x.snippet ? `<br><small>${x.snippet}</small>` : "") + `</div>`).join("")
+        : "<small>无匹配。</small>");
+    bindEntryButtons();
+  });
+}
+
+document.getElementById("cloud-link").onclick = (e) => {
+  e.preventDefault();
+  cloudWord = null;
+  wb.tab = "cloud";
+  document.getElementById("crumb").textContent =
+    "☁️ 词云——范围随左侧树焦点分类子树变化（点分类词元下钻 / 点内容词元按词过滤）";
+  document.getElementById("filter").style.display = "none";
+  renderWorkbench();
+};
 
 function renderAggTab() {
   const body = document.getElementById("wb-body");

@@ -254,6 +254,91 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "unflag_freshness", entry_id, {})
         return {"entry_id": entry_id, "freshness_flag": "ok"}
 
+    _CLOUD_PALETTE = ("#d1495b", "#e07a3c", "#c9a227", "#5f9e4e", "#2e9e83",
+                      "#2b8fb3", "#3f6fb5", "#63599e", "#8d5aa8", "#b5497e",
+                      "#a4485f", "#5f6b7a")
+    # 词元噪音停用词（真实库冒烟 2026-10-21：markdown 残片/数据导出占位符）
+    _CLOUD_NOISE = frozenset({
+        "nan", "pass", "unnamed", "null", "none", "undefined", "na",
+        "true", "false", "nbsp", "utf", "utf8", "utf-8",
+    })
+
+    def _cloud_word_ok(kw: str) -> bool:
+        """词元准入：至少一个字母（滤纯数字/「2024年」类）、非纯符号/标点
+        （##、--- 类 markdown 残片）、非噪音停用词、长度 ≥2（md/py 类英文短词
+        反映库构成，保留）。"""
+        import re as _re  # noqa: PLC0415 热路径外沿导入，避免模块级 re 依赖面
+        if len(kw) < 2:
+            return False
+        if not _re.search(r"[^\W\d_]", kw):       # 无任何字母
+            return False
+        if _re.fullmatch(r"[\W_]+", kw):          # 纯符号/标点
+            return False
+        if kw.lower() in _CLOUD_NOISE:
+            return False
+        return True
+
+    @app.get("/api/cloud")
+    def cloud(category_id: str | None = None, limit: int = 60, word: str | None = None):
+        """词云（第四十三批）：focus 分类子树的分类词元 + 内容词元（scoped cloud）。
+
+        - 范围：category_id 指定的分类子树；缺省 = 全库；
+        - 分类词元：focus 直接子分类（点击进入子分类并联动分类树）；
+        - 内容词元：子树内可消费条目的标题+内联正文关键词（jieba tf-idf top8/条
+          聚合计数，单字/纯数字过滤），带主导顶层分类与 12 色板配色（按词元总量
+          降序分配），前端按 √权重折算字号；
+        - word=xxx（facet 模式）：追加 entries=当前范围内可消费且含该词的条目列表
+          （内容词元点击 = facet 过滤当前范围）。
+        """
+        data = dl.cloud_data(category_id)
+        cat_names = dl.category_names()
+        word_counts: dict[str, int] = {}
+        word_tops: dict[str, dict[str, int]] = {}
+        try:
+            import jieba.analyse  # noqa: PLC0415 惰性导入（jieba 是 main 依赖）
+        except ImportError:
+            jieba = None
+        if jieba is not None:
+            for _eid, title, body, top in data["entries"]:
+                text = f"{title}\n{body[:4000]}"
+                for kw, _w in jieba.analyse.extract_tags(text, topK=8, withWeight=True):
+                    if not _cloud_word_ok(kw):
+                        continue
+                    word_counts[kw] = word_counts.get(kw, 0) + 1
+                    if top:
+                        word_tops.setdefault(kw, {})
+                        word_tops[kw][top] = word_tops[kw].get(top, 0) + 1
+        # 主导顶层分类：该词出现条目中最多的顶层分类；按词元总量降序分配色板槽位
+        top_total: dict[str, int] = {}
+        for kw, tops in word_tops.items():
+            for cid, n in tops.items():
+                top_total[cid] = top_total.get(cid, 0) + n
+        palette_slot = {cid: i for i, (cid, _n) in enumerate(
+            sorted(top_total.items(), key=lambda kv: (-kv[1], kv[0])))}
+        words = []
+        for kw, n in sorted(word_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
+            tops = word_tops.get(kw, {})
+            # 主导顶层分类：计数优先，并列取 id 小者（确定性）
+            top_cid = (sorted(tops.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                       if tops else None)
+            color = (_CLOUD_PALETTE[palette_slot[top_cid] % len(_CLOUD_PALETTE)]
+                     if top_cid else "#888")
+            words.append({"word": kw, "count": n,
+                          "top": {"id": top_cid, "name": cat_names.get(top_cid, "?")} if top_cid else None,
+                          "color": color})
+        payload: dict[str, Any] = {
+            "focus": data["focus"], "categories": data["categories"],
+            "words": words, "sampled_entries": len(data["entries"]),
+        }
+        if word and word.strip():
+            payload["word"] = word.strip()
+            payload["entries"] = [
+                {"id": e.id, "title": e.title, "locator": e.locator,
+                 "source_type": e.source_type,
+                 "snippet": " ".join((e.inline_content or "").split())[:120]}
+                for e in dl.cloud_facet(category_id, word.strip(), limit=50)]
+        return payload
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。保留兼容；新视图见下。"""
