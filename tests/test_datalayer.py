@@ -351,3 +351,26 @@ def test_upsert_preserves_fetched_content_from_contentless_source(dl):
                               inline_content="脑图节点文本", content_hash=None)
     dl.upsert_entries([with_content])
     assert dl.get_entry(e.id).inline_content == "脑图节点文本"
+
+
+# ---- 未分类精确计数（0.2.0 第四十七批修复：MCP tree 计数不再受 list LIMIT 封顶） ----
+
+def test_count_uncategorized_excludes_categorized_and_archived(dl):
+    """口径与 get_uncategorized 一致：active 且未挂分类。"""
+    e1 = make_entry(source_key="https://u.com/a", locator="https://u.com/a")   # 未分类 active
+    e2 = make_entry(source_key="https://u.com/b", locator="https://u.com/b")   # 已挂分类
+    e3 = make_entry(source_key="https://u.com/c", locator="https://u.com/c")   # 未分类 archived
+    dl.upsert_entries([e1, e2, e3])
+    c = dl.create_category("计数类", [], "manual")
+    dl.attach_category(e2.id, c.id, 1.0, "manual", "run")
+    dl.set_status([e3.id], "archived")
+    assert dl.count_uncategorized() == 1
+
+
+def test_count_uncategorized_exact_beyond_list_limit(dl):
+    """边界回归：1001 条未分类时精确计数=1001；list+LIMIT 旧口径只会出 1000（假数字）。"""
+    es = [make_entry(source_key=f"https://unc.com/{i}", locator=f"https://unc.com/{i}",
+                     title=f"未分类{i}") for i in range(1001)]
+    dl.upsert_entries(es)
+    assert dl.count_uncategorized() == 1001
+    assert len(dl.get_uncategorized(limit=1000)) == 1000

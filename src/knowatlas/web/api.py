@@ -379,8 +379,9 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/mcp/tree")
     def mcp_tree():
-        """树遍历（只读）：全分类树 + 未分类计数（agent 遍历入口）。"""
-        return {"tree": dl.get_tree(), "uncategorized": len(dl.get_uncategorized(limit=1000))}
+        """树遍历（只读）：全分类树 + 未分类精确计数（agent 遍历入口；
+        计数走 COUNT 不封顶——list+limit 会截断出假数字）。"""
+        return {"tree": dl.get_tree(), "uncategorized": dl.count_uncategorized()}
 
     @app.get("/api/mcp/entry/{entry_id}")
     def mcp_entry(entry_id: str, content_limit: int = 4000):

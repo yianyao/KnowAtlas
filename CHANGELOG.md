@@ -1488,3 +1488,39 @@ CLI 的 kexport 骨架早已预留（--format json|obsidian|opml --out），SOP-
   重名的避让名不合白名单正则 → 改为跨秒等待并同步 name；③restore 原要求
   调用方先 close，但安全网快照需要活连接 → 改自包含（内部 close）；④dry_run
   误走备份 → 加 not dry_run 条件；⑤_consumable 无关——本轮无消费面变更
+
+## 0.2.0 第四十七批：第四十六批复审修复（MCP 计数封顶 / 安全网轮换口径 / restore 占用预检）
+
+**背景**：第四十六批代码精读复审（2026-10-21）发现三处边角问题，趁恢复链路
+上下文还热修掉（打包安装前的低成本清理）。
+
+**变更**
+
+1. **db.py / api.py**（MCP tree 未分类计数封顶）：`/api/mcp/tree` 原用
+   `len(get_uncategorized(limit=1000))` 计数——超 1000 条时给 agent 假数字。
+   DataLayer 新增 `count_uncategorized()`（精确 COUNT，口径与暂存区一致
+   = active 且未挂分类），mcp_tree 改用之。
+2. **backup.py restore 安全网轮换口径**：安全网快照原硬编码 keep=10，改读
+   `cfg.backup_keep` 与日常快照一致；连带发现并修复——安全网快照的轮换可能
+   把本次恢复的源快照当「最旧」删掉（keep 小、存量多时 copy2 直接无源），
+   `snapshot()` 增 `protect` 参数，轮换跳过受保护文件名（份数暂 keep+1，下轮收敛）。
+3. **backup.py restore 占用预检 + 结构化失败**：①恢复前探测本机 serve 端口
+   （`general.server_port`，默认 8420）——可连通即拒绝（恢复是文件级操作需
+   独占 db，报错指路「先停止 serve」）；②删 -wal/-shm 与 copy2 阶段 OSError
+   不再裸抛 traceback，结构化返回并指路安全网快照回滚（原库文件本体未动，
+   仅可能丢 -wal 未 checkpoint 数据——安全网快照含完整恢复前形态）。
+
+**复检探针（实现后逐条命中）**
+
+- 探针A：1001 条未分类 → count_uncategorized=1001（list+LIMIT 旧口径出 1000）
+- 探针B：MCP tree uncategorized 精确（单条目场景 =1）
+- 探针C：backup_keep=2 + 存量 2 快照 → restore 后源快照仍在、恢复成功
+- 探针D：serve 端口占用 → restore 拒绝且库未被触碰
+- 探针E：copy2 抛 PermissionError → 结构化 error 含安全网快照名，快照可 verify
+
+**复检结果（2026-10-21，全命中）**
+
+- test_datalayer.py +2（探针A/B）、test_backup.py +3（探针C/D/E）、
+  test_web_api.py MCP 用例 +1 断言（探针B）
+- pytest 263 项全绿（258→263）；canary 不变（无 DDL/dataclass/scheme/config 键变更）
+- 变更文件 UTF-8 无 BOM + LF

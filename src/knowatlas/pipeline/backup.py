@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import socket
 import sqlite3
 import time
 from datetime import datetime
@@ -44,12 +45,26 @@ def _list_snapshots(backup_dir: Path) -> list[Path]:
     return sorted(snaps, key=lambda p: p.name)  # 名内时间戳字典序 = 时间序
 
 
+def _serve_port_busy(cfg: Any) -> bool:
+    """本机 serve 端口可连通即视为运行中（恢复是文件级操作，需独占）。
+
+    与 web/api._port_of 同默认端口；pipeline 不反向依赖 web 层，就地小探测。
+    """
+    port = int(cfg.get("general.server_port", 8420))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.3)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def snapshot(cfg: Any, dl: Any, *, keep: int = 10,
-             min_interval_hours: int = 24, force: bool = False) -> dict[str, Any]:
+             min_interval_hours: int = 24, force: bool = False,
+             protect: set[str] | None = None) -> dict[str, Any]:
     """VACUUM INTO 一致性快照 + 轮换。返回统计 dict。
 
     keep<=0 表示不轮换（只增不减，用户自负）。
     节流命中返回 {"status": "skipped", ...}（不写库、不删文件）。
+    protect：轮换跳过的文件名集合（restore 保护本次恢复的源快照不被
+    安全网快照的轮换删掉——被删了 copy2 就没源了）。
     """
     backup_dir = Path(cfg.backup_dir)
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -86,6 +101,8 @@ def snapshot(cfg: Any, dl: Any, *, keep: int = 10,
     if keep > 0:
         snaps = _list_snapshots(backup_dir)
         for old in snaps[:-keep] if len(snaps) > keep else []:
+            if protect and old.name in protect:
+                continue  # 受保护的源快照不删（份数暂时 keep+1，下轮轮换自然收敛）
             old.unlink()
             removed.append(old.name)
     return {"status": "ok", "file": name, "removed": removed,
@@ -111,9 +128,11 @@ def restore(cfg: Any, dl: Any, snap_path: Path | str) -> dict[str, Any]:
     """从快照恢复 db_path。**自包含：内部会 close dl**（文件级操作前必须关
     连接，否则 WAL/shm 占着不放；返回后调用方如需继续用库要自行重开）。
 
-    步骤：白名单校验（snap 须在 backup_dir 内）→ 恢复前自动安全网快照
-    （用原 dl 连接做 VACUUM INTO）→ close → 删目标 -wal/-shm → copy2 快照回
-    db_path → 重开只读连接 sanity（integrity_check + 条目数对账）。
+    步骤：白名单校验（snap 须在 backup_dir 内）→ serve 端口预检（占用即拒，
+    文件级操作需独占）→ 恢复前自动安全网快照（用原 dl 连接做 VACUUM INTO，
+    轮换份数读 cfg.backup_keep、并保护源快照不被轮换删掉）→ close →
+    删目标 -wal/-shm → copy2 快照回 db_path（OSError 结构化上报，指路安全网
+    快照回滚）→ 重开只读连接 sanity（integrity_check + 条目数对账）。
     """
     backup_dir = Path(cfg.backup_dir).resolve()
     src = Path(snap_path).resolve()
@@ -124,20 +143,35 @@ def restore(cfg: Any, dl: Any, snap_path: Path | str) -> dict[str, Any]:
     v = verify_snapshot(src)
     if not v["ok"]:
         return {"ok": False, "error": f"快照自身校验失败：{v}"}
+    if _serve_port_busy(cfg):
+        port = int(cfg.get("general.server_port", 8420))
+        return {"ok": False, "error": (
+            f"检测到本机服务可能正在运行（端口 {port} 可连通）。恢复是文件级"
+            f"操作需独占 db，请先停止 serve 再恢复。")}
 
-    # 安全网：恢复前对当前库自动快照（此刻 dl 连接仍开着，VACUUM INTO 可用）
-    safety = snapshot(cfg, dl, keep=10, force=True)
+    # 安全网：恢复前对当前库自动快照（此刻 dl 连接仍开着，VACUUM INTO 可用）；
+    # 轮换口径与日常快照一致读 backup_keep，且绝不轮换掉本次恢复的源快照
+    safety = snapshot(cfg, dl, keep=cfg.backup_keep, force=True, protect={src.name})
     if safety.get("status") != "ok":
         return {"ok": False, "error": f"安全网快照失败，已中止恢复：{safety}"}
 
     dl.close()  # 文件级操作前关连接（自包含，调用方无需预先 close）
     db = Path(cfg.db_path)
-    for ext in ("-wal", "-shm"):
-        side = db.with_name(db.name + ext)
-        if side.exists():
-            side.unlink()
-    db.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, db)
+    try:
+        for ext in ("-wal", "-shm"):
+            side = db.with_name(db.name + ext)
+            if side.exists():
+                side.unlink()
+        db.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, db)
+    except OSError as exc:
+        # 此刻原库文件本体未动（仅可能丢了 -wal 未 checkpoint 数据）——
+        # 安全网快照含完整恢复前形态，指路回滚
+        return {"ok": False, "error": (
+            f"恢复写文件失败（库可能被其他进程占用，关闭后重试）："
+            f"{type(exc).__name__}: {exc}。原库已自动快照留底"
+            f"（安全网）：{safety['file']}，可 kbackup --restore 回滚。"),
+            "safety_snapshot": safety["file"]}
 
     # sanity：重开只读连接验证恢复结果
     conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)

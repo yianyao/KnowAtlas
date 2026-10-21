@@ -357,6 +357,7 @@ def test_mcp_endpoints_readonly(client, dl):
 
     r2 = client.get("/api/mcp/tree")
     assert r2.status_code == 200 and "tree" in r2.json()
+    assert r2.json()["uncategorized"] == 1   # 精确 COUNT（本测试唯一条目未挂分类）
 
     r3 = client.get(f"/api/mcp/entry/{eid}")
     assert r3.status_code == 200

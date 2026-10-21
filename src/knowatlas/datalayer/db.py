@@ -1500,6 +1500,16 @@ class DataLayer:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def count_uncategorized(self) -> int:
+        """未分类条目精确计数（COUNT 不设上限——get_uncategorized 有 LIMIT，
+        len(list) 封顶会给出假数字，MCP tree 等聚合场景用本方法）。"""
+        row = self._conn.execute(
+            "SELECT count(*) FROM entries e"
+            " LEFT JOIN entry_categories ec ON ec.entry_id = e.id"
+            " WHERE ec.entry_id IS NULL AND e.status='active'",
+        ).fetchone()
+        return int(row[0])
+
     def get_entries_by_ids(self, entry_ids: Sequence[str]) -> list[Entry]:
         """按 id 批量取条目（保序去重； topic_recall 等聚合场景用，避免逐条查询）。"""
         ids = list(dict.fromkeys(entry_ids))

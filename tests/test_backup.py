@@ -215,3 +215,54 @@ def test_cmd_kbackup_cli(bcfg, tmp_path, monkeypatch, capsys):
                            "keep": None, "no_throttle": True})()
     assert cli._cmd_kbackup(args3) == 0
     assert "OK 快照验证" in capsys.readouterr().out
+
+
+# ---- 第四十七批修复：安全网轮换口径 / serve 占用预检 / 写失败结构化 ----
+
+def test_restore_safety_rotation_reads_backup_keep_and_protects_source(bcfg, bdl):
+    """安全网快照轮换读 cfg.backup_keep（原硬编码 keep=10）；且源快照受
+    protect 保护——轮换该删的最旧快照恰是本次恢复源时不删（否则 copy2 无源）。"""
+    bcfg.raw["general"]["backup_keep"] = 2
+    _seed(bdl, 1)
+    s1 = snapshot(bcfg, bdl, keep=bcfg.backup_keep, force=True)
+    s2 = snapshot(bcfg, bdl, keep=bcfg.backup_keep, force=True)
+    _seed(bdl, 1, "b")
+    src = bcfg.backup_dir / s1["file"]
+    r = restore(bcfg, bdl, src)
+    assert r["ok"], r
+    files = _snap_files(bcfg.backup_dir)
+    assert s1["file"] in files                       # 源快照被 protect 留下
+    assert len(files) == 3                           # keep=2 但保护源 → 暂 3 份，下轮收敛
+    assert r["restored_from"] == s1["file"]
+
+
+def test_restore_refuses_when_serve_port_busy(bcfg, bdl):
+    """恢复前探测 serve 端口——可连通即拒（文件级操作需独占），任何破坏动作不发生。"""
+    import socket
+
+    _seed(bdl, 2)
+    stats = snapshot(bcfg, bdl, keep=10, force=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        bcfg.raw["general"]["server_port"] = srv.getsockname()[1]
+        r = restore(bcfg, bdl, bcfg.backup_dir / stats["file"])
+    assert not r["ok"] and "停止 serve" in r["error"]
+    assert _count(bdl) == 2                          # 预检拒绝发生在 close/换文件之前
+
+
+def test_restore_copy_failure_points_to_safety_snapshot(bcfg, bdl, monkeypatch):
+    """写文件阶段 OSError 结构化上报（不裸抛 traceback），指路安全网快照回滚。"""
+    import knowatlas.pipeline.backup as bk
+
+    _seed(bdl, 2)
+    stats = snapshot(bcfg, bdl, keep=10, force=True)
+
+    def _boom(s, d):
+        raise PermissionError(32, "模拟占用：另一个进程正使用文件")
+
+    monkeypatch.setattr(bk.shutil, "copy2", _boom)
+    r = restore(bcfg, bdl, bcfg.backup_dir / stats["file"])
+    assert not r["ok"] and "安全网" in r["error"]
+    safety = bcfg.backup_dir / r["safety_snapshot"]
+    assert safety.is_file() and verify_snapshot(safety)["entries"] == 2
