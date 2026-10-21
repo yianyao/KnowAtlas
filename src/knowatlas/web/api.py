@@ -989,14 +989,28 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/search")
     def search(q: str = "", mode: str = "fts"):
+        if mode == "hybrid":
+            # 混合检索（第五十六批，M4）：FTS + 向量余弦 RRF 融合，reasons 可解释；
+            # embedder 未启用（配置关/依赖缺）→ 降级 fts + note（探针钉住）
+            from ..pipeline.embed_index import hybrid_search
+            from ..semantic.embed import from_config as embedder_from_config
+
+            result = hybrid_search(dl, embedder_from_config(cfg), q)
+            if result is not None:
+                return result
+            hits = dl.search_fts(q)
+            return {"mode": mode, "effective_mode": "fts", "note":
+                    "hybrid 依赖向量索引（ksync --embed，需 [embedding] enabled"
+                    " + requirements-optional），本次已降级 fts",
+                    "hits": [
+                        {"entry_id": h.entry_id, "title": h.title,
+                         "locator": h.locator, "snippet": h.snippet,
+                         "rank": h.rank} for h in hits]}
         hits = dl.search_fts(q)
-        payload = {"mode": mode, "effective_mode": "fts", "hits": [
+        return {"mode": mode, "effective_mode": "fts", "hits": [
             {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
              "snippet": h.snippet, "rank": h.rank} for h in hits
         ]}
-        if mode == "hybrid":
-            payload["note"] = "hybrid 依赖 embedding 级（M4 接入），本次已降级 fts"
-        return payload
 
     @app.post("/api/entries")
     async def add_entry(request: Request):

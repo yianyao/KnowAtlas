@@ -16,7 +16,7 @@ from .errors import KnowAtlasError
 from .logging_setup import setup_logging
 from .registry.builtins import build_registries
 
-_EXIT_OK, EXIT_BUSINESS, _EXIT_USAGE = 0, 1, 2
+_EXIT_OK, EXIT_BUSINESS, _EXIT_USAGE, _EXIT_SKIP = 0, 1, 2, 3  # SKIP 计退出码，不伪装通过
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="书签扩散抓取（显式触发）：对指定书签/http 条目抓取其同目录系列页（同一目录页同一主题）")
     ksync.add_argument("--expand-limit", type=int, default=20,
                        help="扩散每轮最多新建条数（默认 20）")
+    ksync.add_argument("--embed", action="store_true",
+                       help="构建/增量更新条目向量索引（M4，需 [embedding] + optional 依赖）")
+    ksync.add_argument("--embed-force", action="store_true",
+                       help="重算全部向量（换模型后用）")
+    ksync.add_argument("--cluster-report", action="store_true",
+                       help="暂存区条目聚类 + LLM 命名候选报告（不建类，人工确认后生效）")
 
     serve = sub.add_parser("serve", help="启动本地 Web 服务（默认 127.0.0.1:8420）")
     serve.add_argument("--host", default=None)
@@ -136,6 +142,33 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     try:
+        if args.embed or args.embed_force:
+            from .semantic.embed import from_config as embedder_from_config
+            from .pipeline.embed_index import embed_entries
+
+            embedder = embedder_from_config(cfg)
+            if embedder is None:
+                print("SKIP 向量索引未启用（[embedding] enabled=true 且安装"
+                      " requirements-optional）——主链路不受影响")
+                return _EXIT_SKIP
+            stats = embed_entries(dl, embedder, force=args.embed_force)
+            print(f"OK 向量索引完成：{stats}")
+            return _EXIT_OK
+        if args.cluster_report:
+            from .semantic.embed import from_config as embedder_from_config
+            from .semantic.llm import LlmClient
+            from .pipeline.embed_index import cluster_report
+
+            embedder = embedder_from_config(cfg)
+            if embedder is None:
+                print("SKIP 聚类报告需要向量索引（先 ksync --embed）")
+                return _EXIT_SKIP
+            report = cluster_report(dl, embedder, LlmClient.from_config(cfg))
+            import json as _json
+
+            print(_json.dumps(report, ensure_ascii=False, indent=2))
+            print("—— 候选报告仅供参考，不自动建类；确认后用改类 UI 挂接。")
+            return _EXIT_OK
         if args.expand:
             from .pipeline.expand import expand_seed
 

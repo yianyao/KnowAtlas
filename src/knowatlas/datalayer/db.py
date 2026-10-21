@@ -979,6 +979,9 @@ class DataLayer:
                              "entry", f"thread:{t['name']}", locator=er["locator"])
                     add_edge(f"e:{it.entry_id}", f"thread:{t['name']}")
             cut("thread", thread_total)
+            # sim:<score>：语义相似边（迁移 006 向量邻域，第五十六批——db.py:844 挂账收口）。
+            # 焦点条目有向量时取库内 top 邻域；无向量/无向量库则通道整体不出现（降级纪律）。
+            self._sim_channel(raw_id, add_node, add_edge, cut, per_channel)
         else:  # domain
             host = raw_id.strip().lower()
             members = self.entries_by_host(host, limit=per_channel + 1)
@@ -1652,6 +1655,96 @@ class DataLayer:
             )
             self.log_task(_now(), "threads", "digest", thread_id,
                           {"chars": len(text)})
+
+    # ---- 条目向量（迁移 006，第五十六批；只存取 BLOB，数学在 semantic/embed.py） ----
+
+    def put_vectors(self, records: list[dict[str, Any]]) -> int:
+        """批量 upsert 条目向量 {entry_id, dim, vector(bytes), model}；返回写入数。"""
+        if not records:
+            return 0
+        now = _now()
+        with self.transaction() as conn:
+            for r in records:
+                conn.execute(
+                    "INSERT INTO entry_vectors (entry_id, dim, vector, model, created_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
+                    "dim=excluded.dim, vector=excluded.vector, model=excluded.model, "
+                    "created_at=excluded.created_at",
+                    (r["entry_id"], int(r["dim"]), r["vector"], r["model"], now),
+                )
+        self.log_task(now, "vectors", "put", records[0]["model"],
+                      {"count": len(records), "model": records[0]["model"]})
+        return len(records)
+
+    def get_vector(self, entry_id: str) -> dict[str, Any] | None:
+        """单条向量 {entry_id, dim, vector(bytes), model}；无则 None。"""
+        row = self._conn.execute(
+            "SELECT entry_id, dim, vector, model FROM entry_vectors WHERE entry_id=?",
+            (entry_id,)).fetchone()
+        return dict(row) if row else None
+
+    def all_vectors(self, model: str | None = None) -> dict[str, bytes]:
+        """{entry_id: vector_bytes}（model 过滤；缺省取全部——单模型场景够用）。"""
+        if model:
+            rows = self._conn.execute(
+                "SELECT entry_id, vector FROM entry_vectors WHERE model=?",
+                (model,)).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT entry_id, vector FROM entry_vectors").fetchall()
+        return {r["entry_id"]: r["vector"] for r in rows}
+
+    def count_vectors(self) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM entry_vectors").fetchone()[0]
+
+    def delete_vectors(self, entry_ids: list[str]) -> None:
+        with self.transaction() as conn:
+            conn.executemany("DELETE FROM entry_vectors WHERE entry_id=?",
+                             [(e,) for e in entry_ids])
+
+    def _sim_channel(self, entry_id: str, add_node, add_edge, cut,
+                     per_channel: int) -> int:
+        """radiate 条目焦点的 sim 通道：库内向量 top 邻域（阈值 0.5，纯标准库余弦）。
+
+        数学在 semantic/embed.py（array 解码 + 点积；入库已归一化 → 余弦=点积）。
+        本方法只在 db 层做数据搬运，避免 db → semantic 反向依赖：就地实现轻量解码。
+        返回候选总数（供 cut 截断计数）。
+        """
+        import array as _array
+        import math as _math
+
+        focal = self.get_vector(entry_id)
+        if focal is None:
+            return 0
+        fa = _array.array("f")
+        fa.frombytes(focal["vector"])
+        dim = focal["dim"]
+        # 入库已归一化 → 余弦=点积；防脏数据按范数兜底
+        fnorm = _math.sqrt(sum(x * x for x in fa)) or 1.0
+        cands = self.all_vectors()
+        scored: list[tuple[str, float]] = []
+        for eid, blob in cands.items():
+            if eid == entry_id:
+                continue
+            va = _array.array("f")
+            va.frombytes(blob)
+            if len(va) != dim:
+                continue  # 换型残留的异维向量跳过（不报错，--embed-force 重算）
+            vnorm = _math.sqrt(sum(x * x for x in va)) or 1.0
+            dot = sum(x * y for x, y in zip(fa, va))
+            scored.append((eid, dot / (fnorm * vnorm)))
+        scored = [(eid, s) for eid, s in scored if s >= 0.5]
+        scored.sort(key=lambda x: -x[1])
+        for eid, score in scored[:per_channel]:
+            er = self._entry_row(eid)
+            if er is None:
+                continue  # _entry_row 已滤 archived/不可消费条目
+            add_node(f"e:{eid}", (er["title"] or er["locator"])[:40], "entry",
+                     f"sim:{score:.2f}", locator=er["locator"])
+            add_edge(f"e:{eid}", f"sim:{score:.2f}")
+        cut("sim", len(scored))
+        return len(scored)
 
     def delete_thread(self, thread_id: str) -> None:
         """删除线索；thread_items 经 FK ON DELETE CASCADE 级联清除。"""

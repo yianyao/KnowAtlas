@@ -3,11 +3,12 @@
 定位：用户「知道要什么，但知识散落多个源多个条目」——输入一个主题词（或节点 id），
 把跨源相关条目聚合到一起，**每条都带 relation_reason**（没有解释的关联不展示，§9.4 纪律）。
 
-四路召回（全部纯规则、零费用；语义相似通道按 §9.4 为可选项，留待 M4 embedding）：
+五路召回（1-4 纯规则零费用；5 为 M4 语义可选通道，embedder 未配置不出现）：
 1. `fts`                  —— FTS5/LIKE 命中主题词（种子）
 2. `cocategory:<路径>`     —— 与种子同分类路径共现的条目
 3. `same_host:<host>`      —— 与种子同站点的条目（http(s) locator）
 4. `thread:<线索名>`        —— 与种子同处一个用户线索的条目（显式关联）
+5. `sim:<余弦>`            —— 主题词向量近邻（仅主题词模式；第五十六批接通）
 
 输入解析（完整方案 §9.4「输入主题/节点 id」）：
 - `c:<分类id>` —— 焦点分类：其子树条目为种子（reason=focus_category:<路径>）
@@ -125,6 +126,17 @@ def recall(query: str, ctx: TaskContext, limit: int = 60) -> dict[str, Any]:
             continue
         for item in full.items:
             add(item.entry_id, f"thread:{tname}")
+
+    # 通道 5：语义相似（M4 可选通道，第五十六批接通——embedder 未配置则整体不出现）。
+    # 只对主题词模式生效：query 向量化对库内向量取近邻；c:/e: 焦点模式已有
+    # 结构通道（分类/host/线索），不叠加语义噪声。
+    if ctx.embedder is not None and resolved_as == "topic":
+        from ..embed import blob_to_vec, normalize, top_similar
+
+        qvec = normalize(ctx.embedder.encode([q])[0])
+        cands = {eid: blob_to_vec(b) for eid, b in dl.all_vectors().items()}
+        for eid, score in top_similar(qvec, cands, k=20, threshold=0.45):
+            add(eid, f"sim:{score:.2f}")
 
     # 汇总：只保留 active 条目，种子优先、多通道次之
     entries = {e.id: e for e in dl.get_entries_by_ids(list(channels))}

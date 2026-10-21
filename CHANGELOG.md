@@ -1786,3 +1786,48 @@ entries.inline_content，本批补齐其后的 LLM 压缩层——§9.4 语义�
   二次调用 delta 层零调用（缺摘要条目为空）
 - LLM 故障：两层均不写库、返回 error、原始正文视图不受影响
 - canary 新值落常量；pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第五十六批：M4 本地 embedding（向量索引 + 混合检索 + 语义边 + 聚类报告）
+
+**背景**：TODO Phase 4 最后一块——本地 embedding（bge-m3 类中文模型，optional
+依赖）+ 聚类 + 混合检索（结果可解释排序理由）+ 关系图语义边（db.py:844 与
+topic_recall 语义通道两处挂账收口）。降级纪律与 LLM 同构：[embedding] 未启用/
+依赖缺失 → 全部功能静默退回现状（fts 检索、无 sim 通道），主链路零影响。
+
+1. **semantic/embed.py**：LocalEmbedder（sentence-transformers 惰性导入，
+   首次 encode 才载模型；bge-m3 默认 HF 名，model_path 可指本地）+ from_config
+   （enabled=false / provider!=local / 导入失败 → None）+ 纯标准库向量数学
+   （float32 BLOB 往返、L2 归一化、余弦、top_similar——不引 numpy 硬依赖，
+   两千条 ×1024 维毫秒~百毫秒级）。
+2. **迁移 006_vectors.sql**：entry_vectors（entry_id PK / FK CASCADE，dim 防换型
+   误算，vector float32 BLOB 归一化，model 记来源；可随时 --embed-force 重建）。
+   canary ddl 35c2852837b5→8fe61eb2057d；user_version 5→6（test_threads 断言同步）。
+3. **数据层**：put_vectors（upsert）/ get_vector / all_vectors / count_vectors /
+   delete_vectors；db.radiate 条目焦点新增 **sim 通道**（阈值 0.5，异维残留跳过，
+   _entry_row 已滤 archived/不可消费；节点 reason=sim:<余弦>，与 same_host 同
+   条目时边 reason 拼接两段）。
+4. **pipeline/embed_index.py**：
+   - embed_entries：增量索引（inline_content 优先、content_store 兜底，截断
+     4000 字；批 32 分批编码；archived 跳过、无正文计数不写）；
+   - hybrid_search：FTS top30 + 向量余弦 top30 → **RRF 融合**（常数 60），
+     每条带 reasons（fts / sim:<余弦>）——错字 query 纯语义命中可用（可解释探针）；
+   - cluster_report：暂存区条目贪心聚类（阈值 0.72，簇心增量均值）+ LLM 为簇
+     命名（§6.2 步骤 3「人工确认后生效」——**只出报告不建类**，确认后用既有
+     改类 UI 挂接）；LLM 不可用退化簇号命名。
+5. **CLI**：`ksync --embed` / `--embed-force` / `--cluster-report`（SKIP 退出码 3
+   ——specSkill 语义：SKIP 计退出码不伪装通过）；未启用时打印 SKIP 提示。
+6. **Web**：GET /api/search?mode=hybrid 接通（无 embedder → 降级 fts + note，
+   探针钉住；有 embedder → hybrid hits 带 reasons/snippet/score）；
+   topic_recall 第五路 **sim 通道**（仅主题词模式，query 向量近邻 top20 阈值
+   0.45；c:/e: 焦点模式不叠加语义噪声）。
+7. **注册与配置**：无新 SemanticTask（embed 是 pipeline 级能力，capabilities
+   canary 不变）；embedding.* 配置键集早已在 canary（Phase 0 冻结）。
+
+**复检探针**（实现后逐条命中）
+
+- 探针①：embedding 未启用时 fts 检索与全部现有视图不受影响（端点降级 note 测试）
+- 探针②：错字 query（fts 零命中）纯语义命中返回且 reason=sim 可解释
+- 双命中条目 RRF 排名高于单命中；archive 条目不建向量；换型异维向量跳过不报错
+- 聚类报告不建类（条目仍全部未分类）；LLM 命名 / 簇号退化两路
+- canary 新值落常量；pytest 315 全绿（298→315）；变更文件 UTF-8 无 BOM + LF
+- **bge-m3 真机冒烟未做**（模型 ~2.3GB 下载受网络影响，挂账待环境就绪单测）

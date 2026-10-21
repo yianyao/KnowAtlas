@@ -142,22 +142,35 @@ reader: 执行者（人与 agent）
 - [x] 规则分类器（关键词/正则/先验映射补漏）——早已在产线（L1 priors.py 先验映射 +
       L2 rules.py 关键词命中 0.8/origin=rule，kadd/sync 链路在用）；0.2.0 第五十四批
       侦察补勾（勾选遗漏，非新实现）
-- [ ] 会话线程语义任务（完整方案 §9.4 第三十一批，后置——先规则后 LLM）：quote_strip
-      （mail-parser-reply 底座 + 中文回复头自补规则，纯规则不调 LLM；第三十九批已实现）
-      → delta_summarize / thread_digest（LLM 走 [llm] 后端池：硅基流动优先、DeepSeek
-      官方兜底；可独立关闭）——剩余即这两步
-      - 探针：关闭 LLM 后 quote_strip 仍工作（纯规则降级）；thread_digest 关闭不影响检索与线程视图
-- [ ] 本地 embedding（bge-m3 类中文模型，optional 依赖）+ 聚类
-- [ ] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；先聚类后命名）——L3 已提前
-      接入（classify_deep，0.2.0）；few-shot 来自回归集第五十四批补上
-      - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）
+- [x] 会话线程语义任务（完整方案 §9.4 第三十一批，后置——先规则后 LLM）：quote_strip
+      （mail-parser-reply 底座 + 中文回复头自补规则，纯规则不调 LLM；第三十九批实现）
+      → delta_summarize / thread_digest——0.2.0 第五十五批完成：delta 落
+      entries.meta.delta_summary（1-3 句「本轮新增了什么」）、thread_digest 落
+      threads.digest（迁移 005，问题→关键进展→当前结论/待办，读全量重组不拼各轮）；
+      LLM 走 [llm] 后端池；Web POST /api/threads/{id}/digest + thread.html 摘要框
+      - 探针：关闭 LLM 后 quote_strip 仍工作（纯规则降级）✅；thread_digest 关闭
+        不影响检索与线程视图 ✅（不写库，test_thread_digest 钉住）
+- [x] 本地 embedding（bge-m3 类中文模型，optional 依赖）+ 聚类——0.2.0 第五十六批：
+      semantic/embed.py（LocalEmbedder 惰性加载 + 纯标准库向量数学）+ 迁移 006
+      entry_vectors + `ksync --embed/--embed-force` 增量索引 + `--cluster-report`
+      （暂存区贪心聚类 + LLM 簇命名候选报告，**不建类**——§6.2「人工确认后生效」，
+      确认后用既有改类 UI 挂接）；未启用/依赖缺失全部静默降级
+      - 探针：FakeEmbedder 全链路测试（test_embed.py 17 项）；bge-m3 真机冒烟挂账
+- [x] LLM 兜底（OpenAI 兼容接口，默认云端、配置可切本地；先聚类后命名）——L3 已提前
+      接入（classify_deep，0.2.0）；few-shot 来自回归集第五十四批补上；降级探针由
+      测试背书（classify 链、thread_suggest、delta/digest、聚类命名全链 llm=None 路径）
+      - 探针：关闭 LLM 后系统仍可运行（纯规则降级模式）✅（各任务 llm=None 降级测试在库）
 - [x] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）
       + jieba 关键词统计——001_init 早已建表（trigram tokenizer + 触发器同步，
       bm25/snippet 检索在产线）；两字词（<3 字符 trigram 零命中）走 search_fts 内
       LIKE 兜底（H2 返工定稿，test_two_char_query_finds_content 钉住）；jieba 关键词
       统计随词云落地（第四十三批 tf-idf top8/条聚合）；0.2.0 第五十四批侦察补勾
       （勾选遗漏，非新实现）
-- [ ] 混合检索（关键词 + 语义，结果可解释排序理由）
+- [x] 混合检索（关键词 + 语义，结果可解释排序理由）——0.2.0 第五十六批：
+      GET /api/search?mode=hybrid，FTS top30 + 向量余弦 top30 → RRF 融合（常数 60），
+      每条带 reasons（fts / sim:<余弦>）；错字 query 纯语义命中可用；topic_recall
+      第五路 sim 通道（主题词模式）；radiate sim 通道（db.py:844 挂账收口）；
+      未启用降级 fts + note（探针钉住）
 - [x] 时效/可信守卫（freshness guard，2026-10-20 用户需求：把过期的、容易误导的知识清出来）——
       与 L0 价值守卫同构的规则信号：页面/正文含 deprecated/已废弃/过期 类关键词、
       发布日期过旧且同主题（同 host 同标题聚类）已有更新版本、死链比例超阈值 →
@@ -175,7 +188,9 @@ reader: 执行者（人与 agent）
       **大类总览 → 搜索驱动的按需子图 / 点击下钻**——全量力导会拖垮，初始只显示一级大类
       （气泡大小=子树 active 数）；搜索框按条目标题/分类名出相关子图（只带命中条目+分类链，
       不扩散拉全子树）；点分类下钻子树（祖先链灰底作上下文），点条目打开原文；
-      旧 v0 全量力导图（/api/graph）保留兼容。剩余：共现/相似度语义边随 M2/M4 接入）
+      旧 v0 全量力导图（/api/graph）保留兼容。相似度语义边随 M4 接入——0.2.0
+      第五十六批 radiate sim 通道（条目焦点向量邻域 reason=sim:<余弦>）；共现边
+      （cocategory）已由 topic_recall 承载，图内共现边待真实需求驱动再立项）
 - [x] 串联工作区（主题工作区，契约草案见完整方案 §9.4——用户 2026-10-20 定调最高优先：
       痛点「知道要什么但散落各处难串联」）——threads/thread_items 表 + topic_recall 多路召回
       （FTS/共现/同源/显式关联/语义相似，每条带 relation_reason）+ 线索编辑保存复用 +
