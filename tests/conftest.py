@@ -12,6 +12,9 @@ import pytest
 # 代理对 127.0.0.1 的转发行为不稳定 → kadd 端到端偶发假挂，2026-10-19）
 os.environ["NO_PROXY"] = "127.0.0.1,localhost"
 os.environ["no_proxy"] = "127.0.0.1,localhost"
+# 测试自管路径（tmp_path 绝对路径）不受宿主机 KNOWATLAS_HOME 污染——
+# 万一未来某测试写相对路径，也不会落到真实用户数据目录（第五十三批）
+os.environ.pop("KNOWATLAS_HOME", None)
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))

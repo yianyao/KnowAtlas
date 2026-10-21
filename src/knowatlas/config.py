@@ -54,12 +54,31 @@ class Config:
         return dict(v) if isinstance(v, dict) else {}
 
     @property
+    def home(self) -> Path | None:
+        """数据根（0.2.0 第五十三批）：KNOWATLAS_HOME 环境变量，未设为 None。
+
+        语义：home 未设 = 现状（相对 cwd，仓库内使用）；home 已设 = 相对
+        路径全部挂到 home 下（换机/装 wheel 后 cwd 不定，数据位置由环境
+        变量锚定，代码与数据彻底分离）。绝对路径配置永远原样，不受影响。
+        """
+        v = os.environ.get("KNOWATLAS_HOME", "").strip()
+        return Path(v) if v else None
+
+    def _resolve(self, raw: str, default: str) -> Path:
+        """数据路径解析：绝对路径原样；相对路径 home 已设则挂 home，未设挂 cwd。"""
+        p = Path(str(self.get(raw, default)))
+        if p.is_absolute():
+            return p
+        home = self.home
+        return home / p if home else p
+
+    @property
     def db_path(self) -> Path:
-        return Path(str(self.get("general.db_path", "data/knowledge.db")))
+        return self._resolve("general.db_path", "data/knowledge.db")
 
     @property
     def backup_dir(self) -> Path:
-        return Path(str(self.get("general.backup_dir", "data/backups")))
+        return self._resolve("general.backup_dir", "data/backups")
 
     @property
     def backup_on_sync(self) -> bool:

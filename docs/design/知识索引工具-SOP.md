@@ -66,6 +66,11 @@ python -m venv .venv
   - 配置文件入 `.gitignore`；仓库内只提交 `config/knowatlas.example.toml`（占位符版本）。
   - 凭证只从环境变量或本地配置文件读取，支持 `KNOWATLAS_*` 环境变量覆盖，便于换机。
   - 任何机器特定路径（用户目录、盘符）禁止硬编码，一律由"配置根目录 + 相对路径"推导。
+  - **数据根 `KNOWATLAS_HOME`（0.2.0 第五十三批）**：设了该环境变量后，配置里的
+    相对路径（默认 `data/knowledge.db`、`data/backups`）全部挂到它下面——推荐
+    设为用户目录（如 `C:\Users\<你>\.knowatlas`），代码与数据彻底分离，换机/装
+    wheel 后 cwd 不定也不影响数据位置；不设则保持相对 cwd（仓库内使用现状）。
+    绝对路径配置永远原样。本机已设并完成一次性迁移（2026-10-21）。
 
 ### 1.4 首次全量同步
 
@@ -555,9 +560,13 @@ stdio/SSE 后置，需引入 mcp SDK——YAGNI 暂不加依赖）：
 1. 克隆项目到新机任意路径（无硬编码路径依赖）。
 2. 按 §1.2 建 venv 装依赖（按需装 optional 组）。
 3. 复制配置文件模板，按新机实际位置填写各源根目录与凭证（唯一需要人工改的东西）。
-4. `python -m knowatlas ksync --dry-run` 验证各源可达。
-5. `python -m knowatlas ksync --full` 全量同步，与迁移前条目数对账。
-6. 需要历史数据时，拷贝 `data/` 下 SQLite 文件与 `content_store`，再跑 `--incremental` 补齐。
+4. 设 `KNOWATLAS_HOME`（用户级环境变量，指向新机的数据根，如
+   `C:\Users\<你>\.knowatlas`）——相对路径配置自动挂到该处。
+5. `python -m knowatlas ksync --dry-run` 验证各源可达。
+6. `python -m knowatlas ksync --full` 全量同步，与迁移前条目数对账。
+7. 需要历史数据时，拷贝旧机 `<KNOWATLAS_HOME>\data\` 下 SQLite 文件
+   （db + -wal + -shm 三件套一起拷，停服后拷）到新机同位置，再跑
+   `--incremental` 补齐；未设 KNOWATLAS_HOME 的旧库则在旧机仓库 `data/` 下。
 
 若上述任一步需要改代码，即为违反可迁移铁律，记录到 TODO 并修复。
 

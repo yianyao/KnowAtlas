@@ -1698,3 +1698,29 @@ exact 0/prefix 0/miss 4，**暴露两条规则误判**（GooglePythonStyleGuide
 （标准 HTML5 DnD）留人工日常检验；serve 已重启至本批代码（PID 18228）。
 
 **Phase 1 至此全部收口**（书签/文件夹/脑图三源 + 树 UI + 校正 UI 全勾）。
+
+## 0.2.0 第五十三批：KNOWATLAS_HOME 数据根策略 + 一次性数据迁移（5a）
+
+**背景**：db_path/backup_dir 相对路径按 cwd 解析——仓库内使用一直正常，
+但装 wheel 后 cwd 不定数据位置就悬空；且 688MB 数据躺在仓库目录里，代码
+与数据耦合。用户裁决（2026-10-21）：数据根设用户目录，仓库与数据彻底
+分离。
+
+1. **机制**（config.py）：`Config.home` = KNOWATLAS_HOME 环境变量
+   （未设 None = 现状）；`_resolve()` 统一解析——绝对路径永远原样（换机
+   显式指定优先），相对路径 home 已设挂 home、未设挂 cwd。默认值不变
+   （data/knowledge.db、data/backups），**未设变量的行为与历史完全一致**。
+2. **测试隔离**：conftest 显式 pop KNOWATLAS_HOME——测试自管 tmp_path
+   绝对路径本不受影响，防未来相对路径用例落到真实用户目录。
+3. **一次性迁移（本机）**：停 serve → `data\` 整体搬家到
+   `C:\Users\yianyao\.knowatlas\data\`（db+wal+shm+backups 三件套同拷，
+   SQLite 一致）→ `setx KNOWATLAS_HOME`（用户级永久）→ 重启 serve。
+   仓库内 data/ 移除。
+4. **文档**：SOP §1.3 数据根纪律 + §9 迁移流程第 4/7 步（新机设变量、
+   三件套拷贝口径）。
+
+**验证**：pytest 283 全绿（279→283：test_home.py 4 项——未设保持现状/
+挂 home/绝对路径原样/空白值）；serve 打开新家真实库 200（6 大类、
+wal/shm 活跃即真实读写）；**运维坑记录**：agent sandbox 只许写工作区+
+Temp，serve 读写用户目录需非沙箱进程（dangerouslyDisableSandbox）——
+用户终端跑 serve 不受影响。
