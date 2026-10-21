@@ -66,13 +66,13 @@ def _seed_entries(dl: DataLayer) -> list[Entry]:
 def test_fresh_db_gets_latest_schema(tmp_path):
     dl = DataLayer(tmp_path / "fresh.db")
     try:
-        assert dl.init_schema() == latest_version() == 3
+        assert dl.init_schema() == latest_version() == 4
         conn = sqlite3.connect(tmp_path / "fresh.db")
         try:
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-            assert {"threads", "thread_items", "conv_messages"} <= tables
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert {"threads", "thread_items", "conv_messages", "regress_cases"} <= tables
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
         finally:
             conn.close()
     finally:
@@ -94,11 +94,11 @@ def test_old_db_upgrades_without_data_loss(tmp_path):
 
     dl = DataLayer(db)
     try:
-        assert dl.init_schema() == 3
+        assert dl.init_schema() == 4
         e = dl.get_entry("aabbccddeeff0011")
         assert e is not None and e.title == "旧条目"
         # 迁移幂等：再初始化不报错不重复建表
-        assert dl.init_schema() == 3
+        assert dl.init_schema() == 4
     finally:
         dl.close()
 

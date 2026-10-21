@@ -405,6 +405,33 @@ scoped 思路）；工作台检索结果区也有「📈 时间线」tab。
 
 纪律：校正只改数据层，不改原始源；任何分类结构变更必须可从 task_log 复现。
 
+### 5.5 回归测试集（ktest regress，0.2.0 第五十一批）
+
+**是什么**：人工确认的「条目 → 期望分类」对照集（regress_cases 表）。跑
+`ktest regress` 对每条案例重跑自动分类链路（**只验证 L1 先验 + L2 规则层，
+零 LLM 费用**），三级判级出报告：exact（全等）/ prefix（方向对差半级）/
+miss（无输出或被价值守卫短路）。守住分类质量基线，也是 Phase 4 LLM 兜底的
+few-shot 底稿。
+
+```bash
+.venv/Scripts/python -m knowatlas ktest regress                       # 跑报告
+.venv/Scripts/python -m knowatlas ktest regress --seed-from-log       # 回填历史改类后跑
+.venv/Scripts/python -m knowatlas ktest regress --seed-from-log --dry-run  # 只看回填规模
+.venv/Scripts/python -m knowatlas ktest canary                        # 契约金丝雀（转 pytest）
+```
+
+**案例从哪来**：
+- **日常确认**：Web UI 条目行悬停出「✓」按钮（有分类挂接的条目才有），点击
+  把当前主分类（manual 挂接优先）确认为期望——看到分类对的条目顺手点一下；
+- **历史回填**：`--seed-from-log` 把 task_log 里全部 recategorize 改类动作
+  回填（同条目取最后一次 new_path，source=log_seed）——用户改过的类就是
+  人工确认过的判断；
+- 重复确认同一条目 = 覆盖旧值（改主意语义）。
+
+**报告怎么用**：miss/prefix 明细暴露规则层缺陷（如关键词误映射）——核对后
+修订 `semantic/rules.py` / `priors.py` 再跑，exact 率应上升；通过率随批记录
+在 CHANGELOG，Phase 4 接 LLM 后同口径对比。
+
 ---
 
 ## 6. LLM 配置切换（SOP-D）

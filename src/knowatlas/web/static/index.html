@@ -58,6 +58,10 @@
               background: transparent; color: inherit; font-size: 11px;
               padding: 0 6px; margin-left: 6px; display: none; }
   .entry:hover .move-btn, .entry:hover .reject-btn { display: inline-block; }
+  .confirm-btn { cursor: pointer; border: 1px solid #4a9eff66; border-radius: 4px;
+              background: transparent; color: #4a9eff; font-size: 11px;
+              padding: 0 6px; margin-left: 6px; display: none; }
+  .entry:hover .confirm-btn { display: inline-block; }
   #filter { margin: 8px 0; }
   /* 词云视图（第四十三批） */
   .cloud-scope { font-size: 13px; margin: 4px 0 10px; }
@@ -175,6 +179,12 @@ async function writeJSON(url, body) {
     const retry = await fetch(url, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     if (retry.ok) return retry.json();
+  }
+  // 非 2xx 且无 error 字段（FastAPI 默认 404/500 是 {"detail": ...}）——
+  // 规范化成 error 结构，防调用方 !res.error 误判成功（第五十一批修：
+  // confirm-category 404 在旧后端进程上曾显示"✓已确认"假成功）
+  if (!r.ok && data && !data.error) {
+    data.error = { code: "HTTP_" + r.status, message: data.detail || ("HTTP " + r.status) };
   }
   return data;
 }
@@ -307,9 +317,21 @@ async function attachCatChips() {
     if (!cats || !cats.length) continue;
     div.insertAdjacentHTML("beforeend", cats.map(c =>
       `<span class="cat-chip" data-cid="${c.category_id}" title="点击在左侧树中定位该分类">📁${c.path}</span>`).join(""));
+    // 确认归类（第五十一批回归集）：有挂接的条目注入 ✓ 按钮——把当前主分类
+    // （manual 优先，服务端裁决）确认为回归集期望；暂存区条目不注入。
+    if (!div.querySelector(".confirm-btn")) div.insertAdjacentHTML("beforeend",
+      `<button class="confirm-btn" data-id="${div.dataset.id}" title="确认当前归类正确（进回归集，ktest regress 用）">✓</button>`);
   }
   document.querySelectorAll("#hits .cat-chip").forEach(ch =>
     ch.onclick = () => highlightInTree(ch.dataset.cid));
+  // 确认归类（第五十一批回归集）：绑定 ✓ 按钮（onclick 赋值幂等，重复绑定
+  // 无害；不回调 bindEntryButtons——它尾部调 attachCatChips，会死循环）。
+  document.querySelectorAll(".confirm-btn").forEach(b => b.onclick = async () => {
+    const res = await writeJSON(`/api/entries/${b.dataset.id}/confirm-category`, {});
+    if (!res.__aborted && !res.error) {
+      b.textContent = "✓已确认"; setTimeout(() => { b.textContent = "✓"; }, 1200);
+    } else if (res.error) alert("确认失败：" + res.error.message);
+  });
 }
 let moveTargetId = null;
 function opRecategorize(entryId, title) {

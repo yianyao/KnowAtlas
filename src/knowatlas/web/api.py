@@ -478,6 +478,30 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                     {"old_paths": [l["path"] for l in old_links], "new_path": target_path})
         return {"entry_id": entry_id, "category_path": target_path}
 
+    @app.post("/api/entries/{entry_id}/confirm-category")
+    async def confirm_category(entry_id: str, request: Request):
+        """确认归类（回归集，0.2.0 第五十一批）：把条目当前主分类路径确认为
+        回归集期望（manual 挂接优先，其余取第一个）。同条目重复确认覆盖旧值。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        links = dl.get_entry_categories(entry_id)
+        if not links:
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "条目未挂任何分类——先归类再确认"}},
+                status_code=400)
+        main = next((l for l in links if l["origin"] == "manual"), links[0])
+        dl.add_regress_case(entry_id, main["path"], source="manual")
+        dl.log_task(_now_iso(), "web", "confirm_regress", entry_id,
+                    {"expected_path": main["path"]})
+        return {"entry_id": entry_id, "expected_path": main["path"]}
+
     @app.post("/api/categories")
     async def create_category(request: Request):
         """新建分类节点（父可选；无父 = 顶层）。"""

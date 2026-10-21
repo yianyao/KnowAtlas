@@ -1611,3 +1611,55 @@ native_path 层级）；真实库冒烟——kexport --format opml 导出 151 �
 （15 分类）→ 临时启用 opml 源 dry-run 回吃 **151 条精确对账**、
 duplicate_urls=2（多父展平预期）、0 非法 URL；既有三源 dry-run 零回归；
 用户 config 改动已还原（hash 比对一致）并清理临时文件。
+
+## 0.2.0 第五十一批：回归测试集 v0 机制（Phase 0.5 最后一项）
+
+**交付**（TODO 挂账项"回归测试集 v0"的机制层全量；案例积累为日常渐进）：
+
+1. **迁移 004_regress.sql**：regress_cases 表（entry_id PK CASCADE /
+   expected_path 存路径不存 id——分类重建 id 漂移路径不漂 / source=
+   manual|log_seed）。canary ddl hash 更新（567685343650→979471412904），
+   迁移版本断言 3→4（test_threads 三处）。
+2. **数据层**：add_regress_case（INSERT OR REPLACE=改主意覆盖）/
+   list_regress_cases（join 条目投影供重跑）/ count_regress_cases /
+   list_task_log_actions（按 task_name+action 全量扫描——回填场景，
+   与 get_task_log 的最近 N 条快照语义区分；pipeline 不摸 _conn 纪律）。
+3. **runner** pipeline/regress.py：
+   - run_regress：全量案例重跑 classify_coarse——**ctx.llm 恒 None 强制
+     跳 L3**（用户 config 可能启用 LLM，回归重跑绝不烧 token；Phase 4 接
+     LLM 后在此显式开开关）；正文 content_store 优先 inline_content 兜底；
+     exact/prefix/miss 三级判级（prefix=一方是另一方路径前缀，方向对差
+     半级）；报告落 task_log（ktest/regress）。
+   - seed_from_log：task_log 全部 recategorize 回填（同条目取最后一次
+     new_path，空白容忍；dry_run 支持）。
+4. **CLI**：ktest regress [--seed-from-log [--dry-run]] / ktest canary
+   （转 pytest tests/test_canary.py 退出码透传）；_unimplemented 死代码
+   随 ktest 落地删除（已无调用方）。
+5. **确认入口**：POST /api/entries/{id}/confirm-category（当前主分类
+   manual 优先；无挂接 400）；index.html 条目行 ✓ 按钮——注入在
+   attachCatChips() 同循环（依赖挂接徽标数据，时序不能提前；onclick 在
+   其尾部绑定，**不回调 bindEntryButtons 防死循环**——它尾部调
+   attachCatChips）。开发期拦截：初版把注入放 bindEntryButtons 同步段，
+   chip 未进 DOM 时序必挂；review 时发现改为同循环注入。
+
+**验证**：pytest 274 全绿（268→274：CRUD 覆盖/CASCADE、三级判级、回填
+最后值+dry_run、确认端点 manual 优先+无 token 403、CLI 空集 SKIP+报告
+输出）；真实库冒烟——dry-run 统计 5 动作 4 条目 → 回填 → 报告 4 案例
+exact 0/prefix 0/miss 4，**暴露两条规则误判**（GooglePythonStyleGuide
+标题"Google"→华为云、Agent-Skill 文档"Agent"→文学创作）与一对疑似跨源
+重复条目——规则修订与去重核查属数据决策，挂账待用户裁决后复跑。
+
+**连带修复（第五十一批）**：
+1. **writeJSON 假成功防御**（index.html）：非 2xx 且无 error 字段的响应
+   （FastAPI 默认 404/500 是 {"detail":...}）规范化为 error 结构——修前
+   confirm-category 404 会被 `!res.error` 误判成功显示"✓已确认"；修后
+   alert 报错。防御意义超出本功能：所有 writeJSON 调用方受益。
+2. **serve 重启踩坑记录**：trae 后台任务句柄失效后旧进程链（venv python
+   父 → uv python 子）仍存活持有 8420（父进程被杀后子进程持继承句柄），
+   新 serve 报 10048；重启 serve 必须按命令行匹配杀全链
+   （Get-CimInstance Win32_Process 过滤 knowatlas serve），不能只信 job id。
+3. **验证方式定稿**：浏览器 agent 新 profile 无会话，403 的 alert 会被
+   自动吞掉造成"无报错"假象——写端点验证以 curl 会话流
+   （GET /api/session 存 Cookie → 带 Cookie POST）+ 查库为准；本轮
+   curl 全链路 200 + regress_cases 落库（log_seed 覆盖为 manual，
+   改主意语义正确）+ task_log 出现 confirm_regress 记录。

@@ -51,8 +51,8 @@ reader: 执行者（人与 agent）
 - [x] 分类树 UI v0：点击下钻、面包屑、暂存区常驻——2026-10-19 完成（M0.5 提前）：点击分类右侧显示子树条目（含 source_type 筛选）、面包屑跳转、暂存区常驻按钮；另含分类节点管理（新建子类/重命名/移动/合并，写操作带 X-KnowAtlas-Token，全部写 task_log）
 - [x] web 安全中间件：Host/Origin 校验 + 写操作 token（`X-KnowAtlas-Token`）+ content-type 白名单（H5）——2026-10-21 补勾（第 49 批核对）：middleware + check_write_access 落地，伪造 Host/无 token/非 JSON 正反例测试在库
       - 探针：伪造 Host 的请求 403；无 token 的 POST 403；非 JSON body 415；正常本机访问全绿 ✅
-- [ ] 回归测试集 v0：从 200 条真实链接人工确认 50-100 条（同时作为 LLM few-shot 底稿）
-      - 探针：跑完后回头核对 10 大类草案，该合并的合并、该拆的拆，结论落进 priors.py
+- [~] 回归测试集 v0：从 200 条真实链接人工确认 50-100 条（同时作为 LLM few-shot 底稿）——2026-10-21 机制完成（第五十一批）：regress_cases 表（迁移 004）+ 确认入口（条目行 ✓ 按钮 POST confirm-category，manual 优先）+ 历史改类回填（ktest regress --seed-from-log，recategorize 取最后一次 new_path）+ 报告 runner（pipeline/regress.py：只跑 L1/L2 零 LLM 费用，exact/prefix/miss 三级判级，报告落 task_log）+ CLI（ktest regress/canary）；真实库冒烟 4 案例回填跑通。**进行中**：案例积累（目标 50-100 条，日常浏览点 ✓ 累积）；首轮报告暴露规则误判（Google→华为云、Agent→文学创作）待修订 priors/rules 后复跑
+      - 探针：跑完后回头核对 10 大类草案，该合并的合并、该拆的拆，结论落进 priors.py（待案例攒够后执行）
 
 ## Phase 1 — 最小可用闭环（M1）
 

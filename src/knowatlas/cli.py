@@ -70,6 +70,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ktest = sub.add_parser("ktest", help="回归集 / 契约金丝雀运行器")
     ktest.add_argument("what", choices=["regress", "canary"])
+    ktest.add_argument("--seed-from-log", action="store_true",
+                       help="（regress）先把历史 recategorize 改类动作回填进回归集再跑")
+    ktest.add_argument("--dry-run", action="store_true",
+                       help="（regress --seed-from-log）只统计回填规模，不写库")
 
     kcheck = sub.add_parser("kcheck", help="链接体检：检测可达性（404/410 标记 dead）")
     kcheck.add_argument("--limit", type=int, default=100, help="本次最多检测条数（默认 100）")
@@ -192,12 +196,6 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
-def _unimplemented(name: str, phase: str) -> int:
-    print(f"[{name}] 尚未实现（计划于 {phase} 交付，见 docs/design/知识索引工具-TODO.md）",
-          file=sys.stderr)
-    return EXIT_BUSINESS
-
-
 def _cmd_kexport(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -266,7 +264,49 @@ def _cmd_kbackup(args: argparse.Namespace) -> int:
 
 
 def _cmd_ktest(args: argparse.Namespace) -> int:
-    return _unimplemented("ktest", "运行测试请用 pytest（tests/ 已覆盖 canary 与回归骨架）")
+    if args.what == "canary":
+        # 契约金丝雀 = tests/test_canary.py（DDL/dataclass/scheme/config 键集
+        # 漂移即红）；转交 pytest，退出码透传
+        import subprocess
+        from pathlib import Path
+
+        repo = Path(__file__).resolve().parents[2]
+        r = subprocess.run([sys.executable, "-m", "pytest", "tests/test_canary.py",
+                            "-q", "--tb=short"], cwd=repo)
+        return _EXIT_OK if r.returncode == 0 else EXIT_BUSINESS
+
+    # ktest regress：回归集报告（v0 只验证 L1/L2 规则层，零 LLM 费用）
+    from .config import load_config
+    from .pipeline.regress import run_regress, seed_from_log
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        if args.seed_from_log:
+            stats = seed_from_log(dl, dry_run=args.dry_run)
+            print(f"OK 回填统计：{stats}")
+            if args.dry_run:
+                return _EXIT_OK
+        report = run_regress(dl, cfg)
+    finally:
+        dl.close()
+    if report["total"] == 0:
+        print("SKIP 回归集为空——在 Web UI 条目行点「✓」确认归类，"
+              "或用 ktest regress --seed-from-log 从历史改类回填")
+        return _EXIT_OK
+    print(f"OK 回归报告：{report['total']} 案例 | exact {report['exact']}"
+          f"（{report['exact_rate']:.1%}）| prefix {report['prefix']}"
+          f"（累计方向正确 {report['prefix_rate']:.1%}）| miss {report['miss']}")
+    for r in report["prefixes"][:10]:
+        print(f"  PREFIX  {r['title'][:40]}  期望 {r['expected']} → 实际 {r['actual']}")
+    for r in report["misses"][:10]:
+        print(f"  MISS    {r['title'][:40]}  期望 {r['expected']}"
+              f" → {r['actual'] or '（无输出/' + r['origin'] + '）'}")
+    shown = len(report["misses"]) + len(report["prefixes"])
+    if shown > 20:
+        print(f"  …其余 {shown - 20} 条明细见全量输出（--verbose 后续批扩展）")
+    return _EXIT_OK
 
 
 def _cmd_kcheck(args: argparse.Namespace) -> int:
