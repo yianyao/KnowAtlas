@@ -180,7 +180,7 @@
   <nav id="view-tabs">
     <button class="vtab on" data-view="search">检索</button>
     <button class="vtab" data-view="graph">关系图</button>
-    <button class="vtab" data-view="thread">串联</button>
+    <button class="vtab" data-view="thread">线索库</button>
     <button class="vtab" data-view="cloud">词云</button>
     <button class="vtab" data-view="timeline">时间线</button>
     <button class="vtab" data-view="mgmt">管理</button>
@@ -198,7 +198,7 @@
     <iframe id="graph-frame" data-src="/graph.html" title="知识关系图"></iframe>
   </section>
   <section id="view-thread" class="view" hidden>
-    <iframe id="thread-frame" data-src="/thread.html" title="串联工作区"></iframe>
+    <iframe id="thread-frame" data-src="/thread.html" title="线索库"></iframe>
   </section>
   <section id="view-cloud" class="view" hidden>
     <div id="cloud-view" class="entry-host"></div>
@@ -698,7 +698,7 @@ function renderWorkbench() {
     `<div id="wb-tabs">` + tabs.map(([k, label]) =>
       `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
     + `<span style="flex:1"></span>`
-    + (wb.merged.length ? `<button id="wb-solidify" title="把当前全部结果存为线索，去串联工作区继续编排">🧵 固化为线索</button>` : "")
+    + (wb.merged.length ? `<button id="wb-solidify" title="把当前全部结果存为线索，去线索库继续编排">🧵 固化为线索</button>` : "")
     + `</div><div id="wb-body"></div>`;
   box.querySelectorAll(".wb-tab").forEach(b =>
     b.onclick = () => { wb.tab = b.dataset.tab; renderWorkbench(); });
@@ -709,7 +709,7 @@ function renderWorkbench() {
     const res = await writeJSON("/api/threads",
       { name, entry_ids: wb.merged.map(x => x.id) });
     if (res.error) { alert("失败：" + res.error.message); return; }
-    openThread(res.id);  // 页签内打开串联工作区（不再整页跳转）
+    openThread(res.id);  // 页签内打开线索库（不再整页跳转）
   };
   if (wb.tab === "agg") renderAggTab();
   else if (wb.tab === "threads") renderThreadsTab();

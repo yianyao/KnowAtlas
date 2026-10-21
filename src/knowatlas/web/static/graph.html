@@ -393,7 +393,7 @@ document.getElementById("threadBtn").onclick = async () => {
   if (res.status === 403) { alert("需要写令牌（服务配置 KNOWATLAS_WEB_TOKEN 时写操作须携带）。"); return; }
   if (data.error) { alert("失败：" + data.error.message); return; }
   const skippedNote = (data.skipped || []).length ? `\n（${data.skipped.length} 条跳过：不存在或已在其他位置）` : "";
-  if (confirm(`线索「${data.name}」已建立，收录 ${data.added.length} 条。${skippedNote}\n现在打开串联工作区？`))
+  if (confirm(`线索「${data.name}」已建立，收录 ${data.added.length} 条。${skippedNote}\n现在打开线索库？`))
     window.open(`/thread.html?id=${data.id}`, "_blank", "noopener");
 };
 

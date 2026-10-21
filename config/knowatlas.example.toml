@@ -139,7 +139,7 @@ roots = []
 # 先用外部同步工具（如 offlineimap）把邮箱落成本地 maildir，再指向该目录。
 # accounts.<账号名>.path = 该账号的 maildir 根目录；支持标准 maildir（cur/new/tmp）
 # 与一层子文件夹（文件夹名入 meta.mailbox），也兼容目录直落 .eml 的导出形态。
-# 会自动还原会话线程（In-Reply-To/Subject 归一）落串联工作区 thread_type='source'。
+# 会自动还原会话线程（In-Reply-To/Subject 归一）落线索库 thread_type='source'。
 enabled = false
 accounts = { work = { path = "" } }      # 示例：accounts = { work = { path = "D:/Mail/work" } }
 
