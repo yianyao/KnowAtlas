@@ -102,6 +102,22 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     def stats() -> dict:
         return dl.get_stats()
 
+    # 各知识源配置状态（第五十九批：管理页「数据管理」用）——键集与 config.py
+    # 的 CONFIG_KEY 白名单同源；只报已配置与否，不回传任何路径/凭证明文。
+    _KNOWN_SOURCES = [
+        ("bookmarks", "浏览器书签"), ("folders", "本地文件夹"), ("emmx", "脑图"),
+        ("mail", "邮件"), ("opml", "OPML 订阅"), ("session", "AI 会话"),
+        ("db", "数据文件"), ("bilibili", "B站收藏夹"), ("ima", "IMA"),
+        ("txdoc", "腾讯文档"), ("wx", "微信"), ("manual", "手动收录"),
+    ]
+
+    @app.get("/api/sources")
+    def sources_status() -> dict:
+        """只读：各知识源在 config 中的配置状态（configured 布尔）。"""
+        return {"sources": [{"name": name, "label": label,
+                             "configured": bool(cfg.get(f"sources.{name}") or {})}
+                            for name, label in _KNOWN_SOURCES]}
+
     @app.get("/api/token-hint")
     def token_hint() -> dict:
         """令牌核对辅助：只给**指纹**（sha256 前 8 位）与来源，永不回传明文。"""

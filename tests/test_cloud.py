@@ -139,8 +139,8 @@ def test_cloud_filters_noise_tokens(client, dl):
 def test_cloud_frontend_probes():
     from knowatlas.web.app import _STATIC_DIR
     index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'id="cloud-link"' in index                    # 侧栏常驻入口
-    assert 'wb.tab === "cloud"' in index                 # 工作台 tab 分发
+    assert 'data-view="cloud"' in index                  # 顶层页签入口（第五十九批页签化）
+    assert "showView" in index                           # 页签分发
     assert "renderCloudTab" in index
     # 探针②：分类词元点击 → currentCat 同步 + 树定位高亮 + 词云刷新
     cloud = index[index.index("async function renderCloudTab"):]

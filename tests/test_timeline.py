@@ -155,12 +155,12 @@ def test_timeline_api_shape(client, dl):
 
 
 def test_timeline_api_static_probes():
-    """前端静态探针：sidebar 入口 / tab / ECharts 复用 / 下钻与陈旧分支联动。"""
+    """前端静态探针：顶层页签入口 / tab / ECharts 复用 / 下钻与陈旧分支联动。"""
     from knowatlas.web.app import _STATIC_DIR
 
     index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    assert 'id="tl-link"' in index                       # 侧栏常驻入口
-    assert '"timeline", "📈 时间线"' in index             # 工作台 tab
+    assert 'data-view="timeline"' in index               # 顶层页签入口（第五十九批页签化）
+    assert ">时间线</button>" in index                    # 顶层页签按钮文案
     assert "renderTimelineTab" in index and "drillBucket" in index
     assert "/vendor/echarts.min.js" in index             # 复用 vendored echarts
     assert "tl-locate" in index                          # 陈旧分支树中定位

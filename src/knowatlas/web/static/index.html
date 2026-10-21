@@ -6,27 +6,52 @@
 <style>
   :root { color-scheme: light dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
-         display: flex; height: 100vh; }
-  aside { width: 340px; overflow: auto; border-inline-end: 1px solid #8884;
-          padding: 12px; }
-  main { flex: 1; overflow: auto; padding: 16px; }
-  h1 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center;
-       justify-content: space-between; }
-  /* 左栏折叠（第五十八批：知识窗口优先；默认收起，偏好记 localStorage） */
-  body.side-hide aside { display: none; }
+         display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  /* 顶栏（第五十九批页签化）：品牌 + 全局搜索 + 收录 + 设置 */
+  #topbar { display: flex; gap: 10px; align-items: center; padding: 8px 16px;
+            border-bottom: 1px solid #8884; flex: none; }
+  #brand { font-weight: 700; font-size: 16px; white-space: nowrap; }
+  #search { flex: 1; max-width: 620px; box-sizing: border-box; padding: 6px 10px; }
+  #ingest-btn { cursor: pointer; border: 1px solid #4a9eff88; border-radius: 4px;
+                background: transparent; color: #4a9eff; font-size: 13px;
+                padding: 5px 14px; white-space: nowrap; }
   #side-collapse { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
-                   background: transparent; color: inherit; font-size: 11px;
-                   padding: 2px 8px; }
-  #side-bar { position: fixed; left: 8px; top: 8px; z-index: 60; display: none;
-              gap: 6px; align-items: center; background: Canvas;
-              border: 1px solid #8888; border-radius: 8px; padding: 4px 8px;
-              box-shadow: 0 2px 8px #0002; }
-  #side-bar input { width: 240px; padding: 4px 8px; box-sizing: border-box; }
-  #side-bar button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
-                     background: transparent; color: inherit; font-size: 12px;
-                     padding: 3px 10px; }
+                   background: transparent; color: inherit; font-size: 12px;
+                   padding: 3px 8px; flex: none; }
+  #settings { position: relative; flex: none; }
+  #settings summary { cursor: pointer; list-style: none; font-size: 15px; padding: 2px 6px; }
+  #settings summary::-webkit-details-marker { display: none; }
+  #settings > div { position: absolute; right: 0; top: 28px; z-index: 80;
+                    background: Canvas; border: 1px solid #8888; border-radius: 8px;
+                    padding: 10px 14px; box-shadow: 0 2px 10px #0003; white-space: nowrap;
+                    font-size: 13px; }
+  /* 左栏：仅分类树（58 批默认折叠纪律保留，折叠键在顶栏） */
+  #layout { display: flex; flex: 1; min-height: 0; }
+  aside { width: 340px; flex: none; overflow: auto; border-inline-end: 1px solid #8884;
+          padding: 12px; }
+  body.side-hide aside { display: none; }
+  aside small { color: #888; }
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0;
+         padding: 0 16px 16px; overflow: hidden; }
+  /* 页签行（第五十九批）：检索默认 / 关系图 / 串联 / 词云 / 时间线 / 管理 */
+  #view-tabs { display: flex; gap: 4px; align-items: center; flex: none;
+               border-bottom: 1px solid #8884; overflow-x: auto; }
+  .vtab { cursor: pointer; border: 1px solid #8886; border-bottom: none;
+          border-radius: 6px 6px 0 0; background: transparent; color: inherit;
+          font-size: 13px; padding: 5px 16px; white-space: nowrap; flex: none; }
+  .vtab.on { border-bottom: 1px solid Canvas; margin-bottom: -1px;
+             font-weight: 600; color: #4a9eff; }
+  .view { flex: 1; min-height: 0; overflow: auto; padding-top: 10px; }
+  .view[hidden] { display: none; }
+  .view iframe { width: 100%; height: 100%; border: 0; display: block; }
+  #view-graph, #view-thread { padding-top: 0; }
   small { color: #888; }
-  #search { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
+  /* 管理页二级页签（第五十九批：暂存/待清理/失效/时效/已舍弃/数据管理集中） */
+  #mgmt-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 2px; }
+  .mtab { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+          background: transparent; color: inherit; font-size: 12px; padding: 3px 12px; }
+  .mtab.on { border-color: #4a9eff; color: #4a9eff; font-weight: 600; }
+  /* 工作台子页签（检索视图内：聚合结果 / 线索 / 放射） */
   .wb-tab { cursor: pointer; border: 1px solid #8886; border-radius: 4px 4px 0 0;
             background: transparent; color: inherit; font-size: 13px; padding: 4px 12px; }
   .wb-tab.on { border-bottom-color: transparent; font-weight: 600; color: #4a9eff; }
@@ -42,8 +67,6 @@
   .wb-focus-btn { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
                   background: transparent; color: inherit; font-size: 11px;
                   padding: 0 6px; margin-left: 6px; }
-  #staged-btn { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 8px;
-                cursor: pointer; }
   .tree-node { margin: 2px 0 2px 12px; }
   .tree-node > .row { display: flex; align-items: center; gap: 6px; }
   .tree-node > .row > .name { cursor: pointer; }
@@ -114,6 +137,17 @@
                border: 1px solid #8886; border-radius: 10px; background: transparent; color: inherit; }
   .tl-locate:hover { border-color: #4a9eff; color: #4a9eff; }
   #tl-bucket .entry { margin: 4px 0; }
+  /* bookmarklet 左缘小书签坞（第五十九批）：默认收缩、悬停展开（用户批注） */
+  #bm-dock { position: fixed; left: 0; bottom: 88px; z-index: 70; }
+  #bm-tab { writing-mode: vertical-rl; letter-spacing: 3px; font-size: 12px;
+            background: Canvas; border: 1px solid #8888; border-left: none;
+            border-radius: 0 8px 8px 0; padding: 10px 3px; cursor: pointer; opacity: .7; }
+  #bm-dock:hover #bm-tab { opacity: 1; }
+  #bm-panel { display: none; position: absolute; left: 26px; bottom: 0; width: 260px;
+              background: Canvas; border: 1px solid #8888; border-radius: 8px;
+              padding: 10px 12px; box-shadow: 0 2px 10px #0003; font-size: 13px; }
+  #bm-dock:hover #bm-panel, #bm-dock.dragging #bm-panel { display: block; }
+  #bm-panel a { display: block; margin: 6px 0; }
   dialog { border: 1px solid #8888; border-radius: 8px; padding: 16px;
            background: Canvas; color: CanvasText; min-width: 320px; }
   dialog::backdrop { background: rgba(0,0,0,.5); }
@@ -123,49 +157,84 @@
 </style>
 </head>
 <body>
-<aside>
-  <h1>知道 KnowAtlas
-    <button id="side-collapse" title="收起左栏，扩大知识窗口（快捷键 [ 恢复）">◀ 收起</button>
-  </h1>
-  <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
-  <input id="search" placeholder="工作台：输入主题词 → 聚合结果 / 线索 / 放射 三视图">
-  <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
-  <a href="/thread.html" style="display:block;margin-bottom:8px;font-size:13px">🧵 串联工作区（主题聚合 + 线索）</a>
-  <a href="#" id="cloud-link" style="display:block;margin-bottom:8px;font-size:13px">☁️ 词云（范围随焦点分类子树变化，点词元下钻/过滤）</a>
-  <a href="#" id="tl-link" style="display:block;margin-bottom:8px;font-size:13px">📈 时间线（内容时间分布 + 陈旧分支提醒）</a>
-  <!-- 数据管理入口默认折叠（第三十七批用户定调：日常是消费数据，采集/清理只在新数据时用） -->
-  <details id="mgmt" style="margin:4px 0 8px">
-  <summary style="cursor:pointer;font-size:13px;color:#888">🛠 数据管理（采集 / 清理）</summary>
-  <div style="display:flex;gap:6px;margin:8px 0">
-    <input id="add-url" placeholder="粘贴 http(s) 网址，手动收录（同 kadd：抓正文→归类→入树）"
-           style="flex:1;box-sizing:border-box;padding:6px">
-    <button id="add-url-btn">🔗收录</button>
-  </div>
-  <div id="add-url-out" style="font-size:12px;color:#888;margin-bottom:8px;word-break:break-all"></div>
-  <a id="bookmarklet" href="#" style="display:block;margin-bottom:8px;font-size:13px"
-     title="把这个链接拖到浏览器书签栏；之后在任意网页点它，会跳回本地服务并自动收录当前页（走同 kadd 的抓取→归类链路）">📮 收藏小书签（拖到书签栏，任意网页一键收录）</a>
-  <button id="staged-btn" style="width:100%;box-sizing:border-box;padding:6px;margin:8px 0">📥 暂存区（未分类条目）</button>
-    <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
-    <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
-    <a href="#" id="nonk-link" style="display:block;margin-bottom:8px;font-size:13px">🔬 待清理候选（规则/LLM 判非知识）</a>
-    <a href="#" id="fresh-link" style="display:block;margin-bottom:8px;font-size:13px">⏳ 时效候选（过期/疑似过旧）</a>
+<header id="topbar">
+  <button id="side-collapse" title="收起左栏（快捷键 [ ）">◀</button>
+  <span id="brand">知道 KnowAtlas</span>
+  <input id="search" placeholder="输入主题词，回车检索（聚合 / 线索 / 放射）" autocomplete="off">
+  <button id="ingest-btn" title="同 kadd：抓正文 → 归类 → 索引">＋ 收录</button>
+  <details id="settings">
+    <summary title="设置">⚙</summary>
+    <div>
+      <label style="display:block;cursor:pointer;user-select:none">
+        <input type="checkbox" id="show-empty-cats"> 显示空分类
+      </label>
+    </div>
   </details>
-  <label style="display:block;margin:8px 0 0;font-size:12px;opacity:.7;user-select:none">
-    <input type="checkbox" id="show-empty-cats"> 显示空分类（条目已清空的）
-  </label>
+</header>
+<div id="layout">
+<aside>
+  <small>分类树（点击下钻；悬停节点出现管理按钮；可拖条目到节点改挂）</small>
   <div id="tree">加载中…</div>
 </aside>
-<!-- 左栏收起后的悬浮条（第五十八批）：恢复按钮 + 工作台搜索仍在 -->
-<div id="side-bar">
-  <button id="side-expand" title="展开左栏（快捷键 [ 收起）">▶</button>
-  <input id="search-mini" placeholder="工作台：输入主题词…" autocomplete="off">
-</div>
 <main>
+  <nav id="view-tabs">
+    <button class="vtab on" data-view="search">检索</button>
+    <button class="vtab" data-view="graph">关系图</button>
+    <button class="vtab" data-view="thread">串联</button>
+    <button class="vtab" data-view="cloud">词云</button>
+    <button class="vtab" data-view="timeline">时间线</button>
+    <button class="vtab" data-view="mgmt">管理</button>
+  </nav>
+  <section id="view-search" class="view">
+    <div id="crumb"></div>
+    <select id="filter" style="display:none">
+      <option value="">全部来源</option>
+      <option value="bookmark">书签</option>
+      <option value="manual">手动</option>
+    </select>
+    <div id="hits" class="entry-host"><small>点击左侧分类查看条目；或输入关键词全文检索。</small></div>
+  </section>
+  <section id="view-graph" class="view" hidden>
+    <iframe id="graph-frame" data-src="/graph.html" title="知识关系图"></iframe>
+  </section>
+  <section id="view-thread" class="view" hidden>
+    <iframe id="thread-frame" data-src="/thread.html" title="串联工作区"></iframe>
+  </section>
+  <section id="view-cloud" class="view" hidden>
+    <div id="cloud-view" class="entry-host"></div>
+  </section>
+  <section id="view-timeline" class="view" hidden>
+    <div id="timeline-view" class="entry-host"></div>
+  </section>
+  <section id="view-mgmt" class="view" hidden>
+    <nav id="mgmt-tabs">
+      <button class="mtab" data-sub="staged">📥 暂存区</button>
+      <button class="mtab" data-sub="nonk">🔬 待清理</button>
+      <button class="mtab" data-sub="dead">☠️ 失效链接</button>
+      <button class="mtab" data-sub="fresh">⏳ 时效候选</button>
+      <button class="mtab" data-sub="rejected">🗑️ 已舍弃</button>
+      <button class="mtab" data-sub="data">🛠 数据管理</button>
+    </nav>
+    <div id="mgmt-desc" style="font-size:12px;color:#888;margin:8px 0"></div>
+    <div id="mgmt-body" class="entry-host"></div>
+  </section>
+</main>
+</div>
 <div id="bulk-bar" style="display:none">
   <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
   <span id="ms-count">已选 0</span>
   <button id="ms-move" class="primary">移到…</button>
   <button id="ms-cancel">取消</button>
+</div>
+<!-- bookmarklet 左缘小书签坞（第五十九批）：默认收缩到左缘，悬停展开显示用途；
+     拖到书签栏后任意网页一键收录。拖拽期间保持展开。 -->
+<div id="bm-dock">
+  <div id="bm-tab" title="收藏小书签">📮 收藏</div>
+  <div id="bm-panel">
+    <b>📮 收藏小书签</b>
+    <a id="bookmarklet" href="#" title="把本链接拖到浏览器书签栏">📮 收藏小书签（拖到书签栏）</a>
+    <small>拖到浏览器书签栏后，在任意网页点它一下即收进本库（走同 kadd 的抓取 → 归类链路）。</small>
+  </div>
 </div>
 <dialog id="move-dialog">
   <form method="dialog" id="move-form">
@@ -181,21 +250,23 @@
     </div>
   </form>
 </dialog>
-<main>
-  <div id="crumb"></div>
-  <select id="filter" style="display:none">
-    <option value="">全部来源</option>
-    <option value="bookmark">书签</option>
-    <option value="manual">手动</option>
-  </select>
-  <div id="hits"><small>点击左侧分类查看条目；或输入关键词全文检索。</small></div>
-</main>
+<dialog id="ingest-dialog">
+  <div style="font-weight:600;margin-bottom:4px">＋ 收录网页</div>
+  <input id="add-url" placeholder="粘贴 http(s) 网址，手动收录（同 kadd：抓正文→归类→入树）" autocomplete="off">
+  <div id="add-url-out" style="font-size:12px;color:#888;margin:8px 0;word-break:break-all"></div>
+  <div class="btns">
+    <button type="button" id="ingest-close">关闭</button>
+    <button type="button" id="add-url-btn">收录</button>
+  </div>
+</dialog>
 <script src="/vendor/echarts.min.js"></script>
 <script>
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
 let currentCat = null; // 当前选中分类 id
 let refreshCurrent = null; // 当前视图刷新器——写操作成功后局部刷新，不跳转
 let showEmptyCats = localStorage.getItem("knowatlas-show-empty") === "1"; // 空分类默认不占视线
+let curView = "search";    // 当前顶层页签
+let mgmtCurrent = "staged"; // 管理页当前子页签
 
 function token() { return localStorage.getItem("knowatlas_token") || ""; }
 // 页面打开时向服务端要一次同源写凭据（服务端种 HttpOnly Cookie，浏览器自动携带）。
@@ -333,9 +404,9 @@ function bindEntryButtons() {
   document.querySelectorAll(".move-btn").forEach(b => b.onclick = () => opRecategorize(b.dataset.id, b.dataset.title));
   document.querySelectorAll(".reject-btn").forEach(b => b.onclick = () => opReject(b.dataset.id, b.dataset.title));
   // 复制条目 ID（第四十二批）：统一注入到所有带 data-id 的条目行——
-  // 分类列表/检索/待清理/时效/聚合等全部视图自动获得，无需逐视图改模板。
+  // 检索/词云切面/时间线桶/管理页等全部 entry-host 视图自动获得，无需逐视图改模板。
   // 主要用途：拿 id 跑 ksync --expand <entry_id> 扩散抓取。
-  document.querySelectorAll("#hits .entry[data-id]").forEach(d => {
+  document.querySelectorAll(".entry-host .entry[data-id]").forEach(d => {
     if (d.querySelector(".cid-btn")) return;
     d.insertAdjacentHTML("beforeend",
       `<button class="cid-btn" data-id="${d.dataset.id}" title="复制条目 ID（ksync --expand 等命令用）">🆔</button>`);
@@ -359,7 +430,7 @@ function highlightInTree(catId) {
   setTimeout(() => el.classList.remove("flash"), 2400);
 }
 async function attachCatChips() {
-  const divs = [...document.querySelectorAll("#hits .entry[data-id]")];
+  const divs = [...document.querySelectorAll(".entry-host .entry[data-id]")];
   if (!divs.length) return;
   const ids = [...new Set(divs.map(d => d.dataset.id))].slice(0, 100);
   const data = await (await fetch("/api/entries/linkage?ids=" + ids.join(","))).json();
@@ -374,7 +445,7 @@ async function attachCatChips() {
     if (!div.querySelector(".confirm-btn")) div.insertAdjacentHTML("beforeend",
       `<button class="confirm-btn" data-id="${div.dataset.id}" title="确认当前归类正确（进回归集，ktest regress 用）">✓</button>`);
   }
-  document.querySelectorAll("#hits .cat-chip").forEach(ch =>
+  document.querySelectorAll(".entry-host .cat-chip").forEach(ch =>
     ch.onclick = () => highlightInTree(ch.dataset.cid));
   // 确认归类（第五十一批回归集）：绑定 ✓ 按钮（onclick 赋值幂等，重复绑定
   // 无害；不回调 bindEntryButtons——它尾部调 attachCatChips，会死循环）。
@@ -385,8 +456,8 @@ async function attachCatChips() {
     } else if (res.error) alert("确认失败：" + res.error.message);
   });
   // 人工校正（第五十二批）：条目行统一注入多选框 + 拖拽源——所有生成
-  // .entry[data-id] 的视图（分类/暂存/检索/词云切面等）自动生效。
-  document.querySelectorAll("#hits .entry[data-id]").forEach(d => {
+  // .entry[data-id] 的视图（分类/暂存/检索/词云切面/管理页等）自动生效。
+  document.querySelectorAll(".entry-host .entry[data-id]").forEach(d => {
     if (!d.querySelector(".sel-cb")) d.insertAdjacentHTML("afterbegin",
       `<input type="checkbox" class="sel-cb" data-id="${d.dataset.id}" title="加入多选">`);
     d.draggable = true;
@@ -460,133 +531,11 @@ document.getElementById("move-form").onsubmit = async (e) => {
   refreshCurrent ? refreshCurrent() : loadTree();
 }
 async function opReject(entryId, title) {
-  if (!confirm(`舍弃「${title.slice(0, 60)}」？\n\n将不再出现在树/检索/图中；重新同步也不会恢复。\n（可在「已舍弃条目」里找回）`)) return;
+  if (!confirm(`舍弃「${title.slice(0, 60)}」？\n\n将不再出现在树/检索/图中；重新同步也不会恢复。\n（可在管理页「已舍弃」里找回）`)) return;
   const res = await writeJSON(`/api/entries/${entryId}/reject`, {});
   if (res.error) { alert("失败：" + res.error.message); return; }
   refreshCurrent ? refreshCurrent() : loadTree();
 }
-document.getElementById("dead-link").onclick = async (e) => {
-  e.preventDefault();
-  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
-  currentCat = null;
-  document.getElementById("crumb").textContent =
-    "☠️ 失效链接（404/410 = 永久消失；error = 疑似临时故障，可重测）";
-  document.getElementById("filter").style.display = "none";
-  const data = await (await fetch("/api/dead-links")).json();
-  const row = (x, tag, code) =>
-    `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
-    + `<span class="badge">${tag}${x.code ? " " + x.code : ""}</span>`
-    + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
-  const box = document.getElementById("hits");
-  const all = [...data.dead.map(x => row(x, "失效", x.code)),
-               ...data.error.map(x => row(x, "疑似临时", x.code))];
-  box.innerHTML = all.length ? all.join("")
-    : "<small>没有失效链接。用 CLI 跑体检：uv run python -m knowatlas kcheck</small>";
-  bindEntryButtons();
-  const rejectMany = async (ids) => {
-    for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {});
-    e.target.click();
-  };
-  if (data.dead.length)
-    box.insertAdjacentHTML("beforeend",
-      `<button id="reject-all-dead" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${data.dead.length} 条失效链接</button>`);
-  document.getElementById("reject-all-dead")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${data.dead.length} 条失效链接？（可在已舍弃里找回）`))
-      rejectMany(data.dead.map(x => x.id)); });
-};
-
-document.getElementById("nonk-link").onclick = async (e) => {
-  e.preventDefault();
-  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
-  currentCat = null;
-  document.getElementById("crumb").textContent =
-    "🔬 待清理候选——规则或 LLM 判为「非具体知识」（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
-  document.getElementById("filter").style.display = "none";
-  const data = await (await fetch("/api/not-knowledge")).json();
-  const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页",
-                        unreachable: "无法访问", unparseable: "解析失败", garbled: "乱码" };
-  const box = document.getElementById("hits");
-  box.innerHTML = data.entries.length
-    ? data.entries.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
-        + `<span class="badge">${srcLabel(x.source_type)}</span>`
-        + (x.reason ? `<span class="badge" title="结构规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
-        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
-        + `<button class="keep-btn" data-id="${x.id}">↩是知识，保留</button></div>`).join("")
-    : "<small>没有待清理候选。跑一次 ksync --value-scan（纯规则、零费用）或 ksync --reclassify（LLM 全量评估）。</small>";
-  bindEntryButtons();
-  document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
-    // 保留：置 value_flag=ok（之后规则与 LLM 都不再标记它；保留动作记录在 task_log）
-    await writeJSON(`/api/entries/${b.dataset.id}/unflag`, {});
-    e.target.click();
-  });
-  const ids = data.entries.map(x => x.id);
-  if (ids.length)
-    box.insertAdjacentHTML("beforeend",
-      `<button id="reject-all-nonk" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
-  document.getElementById("reject-all-nonk")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
-      (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); e.target.click(); })();
-    } });
-};
-
-document.getElementById("fresh-link").onclick = async (e) => {
-  e.preventDefault();
-  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
-  currentCat = null;
-  document.getElementById("crumb").textContent =
-    "⏳ 时效候选——规则判为「过期或疑似过旧」（废弃关键词/正文日期过旧/同主题已有更新版本）。仅标记，由你决定。";
-  document.getElementById("filter").style.display = "none";
-  const data = await (await fetch("/api/freshness")).json();
-  const reasonLabel = { keyword: "废弃关键词", date_old: "日期过旧", newer_version: "有更新版本" };
-  const flagLabel = { stale: "明确过期", suspect: "疑似过旧" };
-  const rows = [...data.stale.map(x => ({...x, flag: "stale"})),
-                ...data.suspect.map(x => ({...x, flag: "suspect"}))];
-  const box = document.getElementById("hits");
-  box.innerHTML = rows.length
-    ? rows.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
-        + `<span class="badge">${srcLabel(x.source_type)}</span>`
-        + `<span class="badge">${flagLabel[x.flag] || x.flag}</span>`
-        + (x.reason ? `<span class="badge" title="时效规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
-        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
-        + `<button class="keep-btn" data-id="${x.id}">↩不过时，保留</button></div>`).join("")
-    : "<small>没有时效候选。跑一次 ksync --freshness-scan（纯规则、零费用）。</small>";
-  bindEntryButtons();
-  document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
-    // 保留：置 freshness_flag=ok（之后规则不再标记它；保留动作记录在 task_log）
-    await writeJSON(`/api/entries/${b.dataset.id}/unflag-freshness`, {});
-    e.target.click();
-  });
-  const ids = rows.map(x => x.id);
-  if (ids.length)
-    box.insertAdjacentHTML("beforeend",
-      `<button id="reject-all-fresh" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
-  document.getElementById("reject-all-fresh")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
-      (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); e.target.click(); })();
-    } });
-};
-
-document.getElementById("rejected-link").onclick = async (e) => {
-  e.preventDefault();
-  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
-  currentCat = null;
-  document.getElementById("crumb").textContent = "🗑️ 已舍弃条目（点击恢复后重新参与分类）";
-  document.getElementById("filter").style.display = "none";
-  const data = await (await fetch("/api/rejected")).json();
-  const box = document.getElementById("hits");
-  box.innerHTML = data.entries.length
-    ? data.entries.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
-        + `<span class="badge">${srcLabel(x.source_type)}</span>`
-        + `<button class="restore-btn" data-id="${x.id}">↩恢复</button></div>`).join("")
-    : "<small>没有已舍弃的条目。</small>";
-  document.querySelectorAll(".restore-btn").forEach(b => b.onclick = async () => {
-    await writeJSON(`/api/entries/${b.dataset.id}/restore`, {});
-    e.target.click();  // 刷新列表
-  });
-};
 function renderEntries(list) {
   const box = document.getElementById("hits");
   box.innerHTML = list.length ? list.map(entryHTML).join("") : "<small>该分类下暂无条目。</small>";
@@ -596,6 +545,7 @@ function renderEntries(list) {
 async function showCategory(catId) {
   currentCat = catId;
   refreshCurrent = () => showCategory(catId);
+  showView("search");
   document.getElementById("filter").style.display = "block";
   const data = await (await fetch(`/api/categories/${catId}/entries`)).json();
   if (data.error) { alert(data.error.message); return; }
@@ -611,10 +561,21 @@ async function showCategory(catId) {
     renderEntries(v ? data.entries.filter(x => x.source_type === v) : data.entries);
   };
   loadTree();  // 刷新选中态
+  // 词云/时间线范围随左树焦点变化：焦点切换时若这两个视图开着，就地刷新
+  if (curView === "cloud") renderCloudTab();
+  else if (curView === "timeline") renderTimelineTab();
 }
 
-// 手动收录网页（第四十二批）：同 kadd 链路（POST /api/entries → ingest_url：
-// 抓正文 → 归类 → 入树）；结果显示 entry_id（可复制，直接接 ksync --expand）
+// ---- 手动收录（第四十二批引入，第五十九批上移顶栏对话框）----
+// 同 kadd 链路（POST /api/entries → ingest_url：抓正文 → 归类 → 入树）；
+// 结果显示 entry_id（可复制，直接接 ksync --expand）。
+const _ingestDialog = document.getElementById("ingest-dialog");
+function openIngest(prefill) {
+  if (prefill) document.getElementById("add-url").value = prefill;
+  _ingestDialog.showModal();
+}
+document.getElementById("ingest-btn").onclick = () => openIngest();
+document.getElementById("ingest-close").onclick = () => _ingestDialog.close();
 document.getElementById("add-url-btn").onclick = async () => {
   const url = document.getElementById("add-url").value.trim();
   const out = document.getElementById("add-url-out");
@@ -638,20 +599,50 @@ document.getElementById("add-url").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("add-url-btn").click();
 });
 
-// bookmarklet（第 49 批）：小书签跳转回本页 ?add=<当前页URL>，由启动接收逻辑
-// 复用上面的手动收录链路提交——不新增机制；写凭据走同源会话 Cookie，
-// 令牌不进书签栏，第三方网页拿不到。
+// bookmarklet（第 49 批引入，第五十九批改为左缘小书签坞）：小书签跳转回本页
+// ?add=<当前页URL>，由落地接收逻辑复用手动收录链路提交——不新增机制；写凭据走
+// 同源会话 Cookie，令牌不进书签栏，第三方网页拿不到。
 document.getElementById("bookmarklet").href =
   `javascript:(function(){location.href='${location.origin}/index.html?add='+encodeURIComponent(location.href)})()`;
+// 拖拽期间保持面板展开（默认 hover 展开，拖走鼠标会收起导致拖拽体感差）
+document.getElementById("bookmarklet").addEventListener("dragstart",
+  () => document.getElementById("bm-dock").classList.add("dragging"));
+document.getElementById("bookmarklet").addEventListener("dragend",
+  () => document.getElementById("bm-dock").classList.remove("dragging"));
 
-document.getElementById("staged-btn").onclick = async (e) => {
-  refreshCurrent = () => e.target.click();  // 写操作后留在本视图
-  currentCat = null;
-  document.getElementById("crumb").textContent = "📥 暂存区（未分类条目）";
-  document.getElementById("filter").style.display = "none";
-  const data = await (await fetch("/api/uncategorized?limit=500")).json();
-  renderEntries(data.entries);
-};
+// ---- 顶层页签（第五十九批：布局三层信息架构）----
+// 检索（默认）/ 关系图 / 串联 / 词云 / 时间线 / 管理——每视图全屏。
+// 关系图与串联内嵌独立页面（iframe，保留 /graph.html /thread.html 深链），
+// 首次进入才加载；词云/时间线/管理为页内视图。
+const VIEWS = ["search", "graph", "thread", "cloud", "timeline", "mgmt"];
+function lazyFrame(id) {
+  const f = document.getElementById(id);
+  if (f && !f.src) f.src = f.dataset.src;
+}
+function showView(name) {
+  if (!VIEWS.includes(name)) name = "search";
+  curView = name;
+  for (const v of VIEWS) document.getElementById("view-" + v).hidden = v !== name;
+  document.querySelectorAll("#view-tabs .vtab").forEach(b =>
+    b.classList.toggle("on", b.dataset.view === name));
+  if (name === "graph") lazyFrame("graph-frame");
+  else if (name === "thread") lazyFrame("thread-frame");
+  else if (name === "cloud") { cloudWord = null; renderCloudTab(); }
+  else if (name === "timeline") renderTimelineTab();
+  else if (name === "mgmt") mgmtShow(mgmtCurrent);
+}
+function openGraph(node) {
+  const f = document.getElementById("graph-frame");
+  f.src = node ? "/graph.html?node=" + encodeURIComponent(node) : f.dataset.src;
+  showView("graph");
+}
+function openThread(id) {
+  const f = document.getElementById("thread-frame");
+  f.src = id ? "/thread.html?id=" + encodeURIComponent(id) : f.dataset.src;
+  showView("thread");
+}
+document.querySelectorAll("#view-tabs .vtab").forEach(b =>
+  b.onclick = () => showView(b.dataset.view));
 
 // ---- 统一入口工作台（第三十四批，契约 §9.4：模式是视图切换，不是启动分叉） ----
 // 检索提交后同时拉 FTS 与 topic_recall，按条目去重合并，三视图共享同一份结果：
@@ -669,6 +660,7 @@ function chLabel(ch) {
 }
 
 async function doWorkbench(q) {
+  showView("search");
   wb.q = q; wb.focusId = null; wb.tab = "agg";
   const box = document.getElementById("hits");
   box.innerHTML = "<small>聚合中…</small>";
@@ -701,8 +693,7 @@ async function doWorkbench(q) {
 
 function renderWorkbench() {
   const box = document.getElementById("hits");
-  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"],
-               ["cloud", "☁ 词云"], ["timeline", "📈 时间线"]];
+  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"]];
   box.innerHTML =
     `<div id="wb-tabs">` + tabs.map(([k, label]) =>
       `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
@@ -718,12 +709,10 @@ function renderWorkbench() {
     const res = await writeJSON("/api/threads",
       { name, entry_ids: wb.merged.map(x => x.id) });
     if (res.error) { alert("失败：" + res.error.message); return; }
-    location.href = "/thread.html?id=" + res.id;
+    openThread(res.id);  // 页签内打开串联工作区（不再整页跳转）
   };
   if (wb.tab === "agg") renderAggTab();
   else if (wb.tab === "threads") renderThreadsTab();
-  else if (wb.tab === "cloud") renderCloudTab();
-  else if (wb.tab === "timeline") renderTimelineTab();
   else renderRadiateTab();
 }
 
@@ -733,7 +722,7 @@ function renderWorkbench() {
 // 内容词元点击 → facet 过滤当前范围（出条目列表，复用统一条目渲染）。
 let cloudWord = null;  // 当前 facet 词（null=无 facet）
 async function renderCloudTab() {
-  const body = document.getElementById("wb-body");
+  const body = document.getElementById("cloud-view");
   body.innerHTML = "<small>聚合中…（jieba 分词，首次略慢）</small>";
   const scope = currentCat ? "?category_id=" + encodeURIComponent(currentCat) : "";
   const data = await (await fetch("/api/cloud" + scope)).json();
@@ -788,16 +777,6 @@ async function renderCloudTab() {
   });
 }
 
-document.getElementById("cloud-link").onclick = (e) => {
-  e.preventDefault();
-  cloudWord = null;
-  wb.tab = "cloud";
-  document.getElementById("crumb").textContent =
-    "☁️ 词云——范围随左侧树焦点分类子树变化（点分类词元下钻 / 点内容词元按词过滤）";
-  document.getElementById("filter").style.display = "none";
-  renderWorkbench();
-};
-
 // ---- 时间线视图（第四十四批：scoped timeline + 陈旧分支提醒） ----
 // 范围 = 左侧树当前焦点分类子树（currentCat；null=全库），随焦点切换；
 // 时间轴走 created_at（内容时间）；created_at 缺失只计数不编造时间；
@@ -806,7 +785,7 @@ document.getElementById("cloud-link").onclick = (e) => {
 let tlGranPref = null;   // 用户显式粒度偏好（null=自适应；切焦点后保留）
 let tlChart = null;      // ECharts 实例（重渲染前 dispose）
 async function renderTimelineTab() {
-  const body = document.getElementById("wb-body");
+  const body = document.getElementById("timeline-view");
   body.innerHTML = "<small>聚合中…</small>";
   const params = new URLSearchParams();
   if (currentCat) params.set("category_id", currentCat);
@@ -887,15 +866,6 @@ async function drillBucket(key) {
   bindEntryButtons();
 }
 
-document.getElementById("tl-link").onclick = (e) => {
-  e.preventDefault();
-  wb.tab = "timeline";
-  document.getElementById("crumb").textContent =
-    "📈 时间线——范围随左侧树焦点分类子树变化（时间轴 = 内容时间 created_at；点柱下钻；陈旧分支仅提醒）";
-  document.getElementById("filter").style.display = "none";
-  renderWorkbench();
-};
-
 function renderAggTab() {
   const body = document.getElementById("wb-body");
   if (!wb.merged.length) {
@@ -928,9 +898,11 @@ async function renderThreadsTab() {
     }
   body.innerHTML = agg.size
     ? [...agg.entries()].map(([tid, t]) =>
-        `<div class="entry"><a href="/thread.html?id=${tid}" target="_blank" rel="noopener">🧵 ${t.name}</a>`
+        `<div class="entry"><a href="#" class="thread-open" data-tid="${tid}">🧵 ${t.name}</a>`
         + `<span class="badge">含当前结果 ${t.count} 条</span></div>`).join("")
     : `<small>当前 ${wb.merged.length} 条结果都不在线索里——点右上「🧵 固化为线索」把这次探索沉淀下来。</small>`;
+  body.querySelectorAll(".thread-open").forEach(a =>
+    a.onclick = (e) => { e.preventDefault(); openThread(a.dataset.tid); });
 }
 
 async function renderRadiateTab() {
@@ -944,7 +916,9 @@ async function renderRadiateTab() {
   const data = await r.json();
   if (!data.nodes.length) {
     body.innerHTML = `<div class="wb-radiate-focus">🎯 焦点：${data.focus.name}</div>`
-      + `<small>该条目没有可放射的邻域（无挂接/同源/同线索关联）。<a href="/graph.html">去关系图总览</a></small>`;
+      + `<small>该条目没有可放射的邻域（无挂接/同源/同线索关联）。<a href="#" id="wb-open-graph">去关系图总览</a></small>`;
+    document.getElementById("wb-open-graph").onclick =
+      (e) => { e.preventDefault(); openGraph(); };
     return;
   }
   // 按主通道分组；通道顺序固定，可读优先
@@ -958,7 +932,7 @@ async function renderRadiateTab() {
   const chTitle = key => chLabel(key.replace(/:$/, ""));
   body.innerHTML =
     `<div class="wb-radiate-focus">🎯 焦点：${data.focus.name}`
-    + `　<a href="/graph.html?node=e:${wb.focusId}" target="_blank" rel="noopener">🕸️ 在图中打开</a></div>`
+    + `　<a href="#" id="wb-open-graph">🕸️ 在图中打开</a></div>`
     + Object.keys(groups).map(key =>
         `<div class="wb-channel">${chTitle(key)}（${groups[key].length}${data.truncated && data.truncated[key.replace(":", "")] ? `，还有 ${data.truncated[key.replace(":", "")]} 条未显示` : ""}）</div>`
         + groups[key].map(n =>
@@ -966,6 +940,8 @@ async function renderRadiateTab() {
             + `<span class="badge" title="关联解释">${n.reasons.map(chLabel).join("；")}</span>`
             + (n.kind === "entry" ? `<button class="wb-focus-btn" data-eid="${n.id.slice(2)}" title="以该条目为新焦点继续放射">🎯 切焦点</button>` : "")
             + `</div>`).join("")).join("");
+  document.getElementById("wb-open-graph").onclick =
+    (e) => { e.preventDefault(); openGraph("e:" + wb.focusId); };
   body.querySelectorAll(".wb-focus-btn").forEach(b =>
     b.onclick = () => { wb.focusId = b.dataset.eid; renderRadiateTab(); });
 }
@@ -978,7 +954,178 @@ document.getElementById("search").addEventListener("keydown", e => {
   if (e.key === "Enter") doWorkbench(e.target.value.trim());
 });
 
-// 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
+// ---- 管理页（第五十九批：六视图页签之六，集中暂存/待清理/失效/时效/已舍弃/数据管理）----
+// 日常消费页从此无管理控件；全部写操作后 refreshCurrent() 就地刷新。
+const _mgmtDesc = () => document.getElementById("mgmt-desc");
+const _mgmtBody = () => document.getElementById("mgmt-body");
+
+async function mgmtStaged() {
+  refreshCurrent = () => mgmtShow("staged");
+  _mgmtDesc().textContent = "未挂任何分类的条目——拖到左树分类上，或点条目「⇄改分类」归类。";
+  const data = await (await fetch("/api/uncategorized?limit=500")).json();
+  const body = _mgmtBody();
+  body.innerHTML = data.entries.length ? data.entries.map(entryHTML).join("")
+    : "<small>暂存区空。</small>";
+  bindEntryButtons();
+}
+
+async function mgmtNonk() {
+  refreshCurrent = () => mgmtShow("nonk");
+  _mgmtDesc().textContent = "规则或 LLM 判为「非具体知识」的候选（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
+  const data = await (await fetch("/api/not-knowledge")).json();
+  const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页",
+                        unreachable: "无法访问", unparseable: "解析失败", garbled: "乱码" };
+  const body = _mgmtBody();
+  body.innerHTML = data.entries.length
+    ? data.entries.map(x =>
+        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + (x.reason ? `<span class="badge" title="结构规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
+        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+        + `<button class="keep-btn" data-id="${x.id}">↩是知识，保留</button></div>`).join("")
+    : "<small>没有待清理候选。跑一次 ksync --value-scan（纯规则、零费用）或 ksync --reclassify（LLM 全量评估）。</small>";
+  bindEntryButtons();
+  document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
+    // 保留：置 value_flag=ok（之后规则与 LLM 都不再标记它；保留动作记录在 task_log）
+    await writeJSON(`/api/entries/${b.dataset.id}/unflag`, {});
+    refreshCurrent();
+  });
+  const ids = data.entries.map(x => x.id);
+  if (ids.length)
+    body.insertAdjacentHTML("beforeend",
+      `<button id="reject-all-nonk" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
+  document.getElementById("reject-all-nonk")?.addEventListener("click",
+    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
+      (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); refreshCurrent(); })();
+    } });
+}
+
+async function mgmtDead() {
+  refreshCurrent = () => mgmtShow("dead");
+  _mgmtDesc().textContent = "404/410 = 永久消失；error = 疑似临时故障，可重测（CLI：kcheck）。";
+  const data = await (await fetch("/api/dead-links")).json();
+  const body = _mgmtBody();
+  const row = (x, tag, code) =>
+    `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+    + `<span class="badge">${tag}${x.code ? " " + x.code : ""}</span>`
+    + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
+  const all = [...data.dead.map(x => row(x, "失效", x.code)),
+               ...data.error.map(x => row(x, "疑似临时", x.code))];
+  body.innerHTML = all.length ? all.join("")
+    : "<small>没有失效链接。用 CLI 跑体检：uv run python -m knowatlas kcheck</small>";
+  bindEntryButtons();
+  const rejectMany = async (ids) => {
+    for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {});
+    refreshCurrent();
+  };
+  if (data.dead.length)
+    body.insertAdjacentHTML("beforeend",
+      `<button id="reject-all-dead" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${data.dead.length} 条失效链接</button>`);
+  document.getElementById("reject-all-dead")?.addEventListener("click",
+    () => { if (confirm(`确认舍弃全部 ${data.dead.length} 条失效链接？（可在已舍弃里找回）`))
+      rejectMany(data.dead.map(x => x.id)); });
+}
+
+async function mgmtFresh() {
+  refreshCurrent = () => mgmtShow("fresh");
+  _mgmtDesc().textContent = "规则判为「过期或疑似过旧」（废弃关键词/正文日期过旧/同主题已有更新版本）。仅标记，由你决定。";
+  const data = await (await fetch("/api/freshness")).json();
+  const reasonLabel = { keyword: "废弃关键词", date_old: "日期过旧", newer_version: "有更新版本" };
+  const flagLabel = { stale: "明确过期", suspect: "疑似过旧" };
+  const rows = [...data.stale.map(x => ({...x, flag: "stale"})),
+                ...data.suspect.map(x => ({...x, flag: "suspect"}))];
+  const body = _mgmtBody();
+  body.innerHTML = rows.length
+    ? rows.map(x =>
+        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + `<span class="badge">${flagLabel[x.flag] || x.flag}</span>`
+        + (x.reason ? `<span class="badge" title="时效规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
+        + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+        + `<button class="keep-btn" data-id="${x.id}">↩不过时，保留</button></div>`).join("")
+    : "<small>没有时效候选。跑一次 ksync --freshness-scan（纯规则、零费用）。</small>";
+  bindEntryButtons();
+  document.querySelectorAll(".keep-btn").forEach(b => b.onclick = async () => {
+    // 保留：置 freshness_flag=ok（之后规则不再标记它；保留动作记录在 task_log）
+    await writeJSON(`/api/entries/${b.dataset.id}/unflag-freshness`, {});
+    refreshCurrent();
+  });
+  const ids = rows.map(x => x.id);
+  if (ids.length)
+    body.insertAdjacentHTML("beforeend",
+      `<button id="reject-all-fresh" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
+  document.getElementById("reject-all-fresh")?.addEventListener("click",
+    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
+      (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); refreshCurrent(); })();
+    } });
+}
+
+async function mgmtRejected() {
+  refreshCurrent = () => mgmtShow("rejected");
+  _mgmtDesc().textContent = "恢复后重新参与分类与检索。";
+  const data = await (await fetch("/api/rejected")).json();
+  const body = _mgmtBody();
+  body.innerHTML = data.entries.length
+    ? data.entries.map(x =>
+        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        + `<span class="badge">${srcLabel(x.source_type)}</span>`
+        + `<button class="restore-btn" data-id="${x.id}">↩恢复</button></div>`).join("")
+    : "<small>没有已舍弃的条目。</small>";
+  document.querySelectorAll(".restore-btn").forEach(b => b.onclick = async () => {
+    await writeJSON(`/api/entries/${b.dataset.id}/restore`, {});
+    refreshCurrent();
+  });
+}
+
+async function mgmtData() {
+  refreshCurrent = () => mgmtShow("data");
+  _mgmtDesc().textContent = "采集 / 清理入口与各源配置状态（改配置：config/knowatlas.toml）。";
+  const body = _mgmtBody();
+  body.innerHTML = "<small>载入中…</small>";
+  const [src, stats] = await Promise.all([
+    fetch("/api/sources").then(r => r.json()).catch(() => ({ sources: [] })),
+    fetch("/api/stats").then(r => r.json()).catch(() => ({})),
+  ]);
+  const bs = stats.by_source || {};
+  let html = `<div style="margin:4px 0 14px"><button id="open-ingest" style="cursor:pointer;padding:6px 14px">＋ 收录网页</button>`
+    + `<span style="font-size:12px;color:#888;margin-left:10px">或用左缘 📮 小书签（悬停展开，拖到书签栏）</span></div>`;
+  html += `<div class="wb-channel">库内条目（按来源）</div><div style="margin-bottom:12px">`
+    + (Object.keys(bs).length
+        ? Object.entries(bs).map(([k, v]) => `<span class="badge">${srcLabel(k)} ${v}</span>`).join(" ")
+        : "<small>无条目</small>")
+    + (stats.uncategorized !== undefined ? ` <span class="badge">未分类 ${stats.uncategorized}</span>` : "")
+    + (stats.archived !== undefined ? ` <span class="badge">归档 ${stats.archived}</span>` : "")
+    + (stats.contents !== undefined ? ` <span class="badge">正文块 ${stats.contents}</span>` : "")
+    + `</div>`;
+  const runs = stats.recent_runs || [];
+  if (runs.length) {
+    html += `<div class="wb-channel">最近任务</div><div style="margin-bottom:12px">`
+      + runs.map(r => `<span class="badge" title="${(r.started_at || "").replace(/"/g, "&quot;")}">${r.kind || "?"}</span>`).join(" ")
+      + `</div>`;
+  }
+  html += `<div class="wb-channel">源配置状态</div><div>`
+    + (src.sources || []).map(s =>
+        `<span class="badge" style="${s.configured ? "" : "opacity:.55"}" title="config [sources.${s.name}] ${s.configured ? "已配置" : "未配置"}">${s.label} ${s.configured ? "✓" : "—"}</span>`).join(" ")
+    + `</div>`;
+  body.innerHTML = html;
+  document.getElementById("open-ingest").onclick = () => openIngest();
+}
+
+function mgmtShow(sub) {
+  mgmtCurrent = sub;
+  document.querySelectorAll("#mgmt-tabs .mtab").forEach(b =>
+    b.classList.toggle("on", b.dataset.sub === sub));
+  if (sub === "staged") mgmtStaged();
+  else if (sub === "nonk") mgmtNonk();
+  else if (sub === "dead") mgmtDead();
+  else if (sub === "fresh") mgmtFresh();
+  else if (sub === "rejected") mgmtRejected();
+  else mgmtData();
+}
+document.querySelectorAll("#mgmt-tabs .mtab").forEach(b =>
+  b.onclick = () => mgmtShow(b.dataset.sub));
+
+// 设置：显示空分类（原侧栏选项，第五十九批移入顶栏 ⚙）
 const _emptyCb = document.getElementById("show-empty-cats");
 _emptyCb.checked = showEmptyCats;
 _emptyCb.onchange = (e) => {
@@ -986,44 +1133,38 @@ _emptyCb.onchange = (e) => {
   localStorage.setItem("knowatlas-show-empty", showEmptyCats ? "1" : "0");
   loadTree();
 };
-// bookmarklet 落地接收（第 49 批）：?add=<url> → 展开数据管理区、填入手动收录框、
+
+// bookmarklet 落地接收（第 49 批）：?add=<url> → 打开收录对话框、填入 URL、
 // 自动提交（复用同一条链路与结果展示）。只收 http(s)；先清掉 query 参数防刷新重发。
 const _addQ = new URLSearchParams(location.search).get("add") || "";
 const _addOk = /^https?:\/\//i.test(_addQ);
 if (_addOk) {
   history.replaceState(null, "", location.pathname);
-  document.getElementById("mgmt").open = true;
-  document.getElementById("add-url").value = _addQ;
+  openIngest(_addQ);
 }
 
-// 左栏折叠（第五十八批）：默认收起（知识窗口优先，用户定调），偏好记
-// localStorage「knowatlas-side」；收起后顶部悬浮条保留工作台搜索；[
-// 快捷键切换；?add= 落地自动展开（收录流程需要数据管理区可见）。
-const _sideBar = document.getElementById("side-bar");
-const _sideInput = document.getElementById("search-mini");
+// 左栏折叠（第五十八批纪律保留，第五十九批折叠键上移顶栏）：默认收起
+// （知识窗口优先，用户定调），偏好记 localStorage「knowatlas-side」；[
+// 快捷键切换（输入框聚焦时不触发）。页签化后搜索常驻顶栏，58 批的悬浮
+// 镜像条不再需要。
+const _sideBtn = document.getElementById("side-collapse");
 function sideApply(hide) {
   document.body.classList.toggle("side-hide", hide);
-  _sideBar.style.display = hide ? "flex" : "none";
+  _sideBtn.textContent = hide ? "▶" : "◀";
+  _sideBtn.title = hide ? "展开左栏（快捷键 [ ）" : "收起左栏（快捷键 [ ）";
   localStorage.setItem("knowatlas-side", hide ? "hide" : "show");
 }
 function sideToggle() {
   sideApply(!document.body.classList.contains("side-hide"));
 }
-document.getElementById("side-collapse").onclick = sideToggle;
-document.getElementById("side-expand").onclick = sideToggle;
-_sideInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") {
-    const q = _sideInput.value.trim();
-    if (q) { document.getElementById("search").value = q; doWorkbench(q); }
-  }
-});
+_sideBtn.onclick = sideToggle;
 document.addEventListener("keydown", e => {
   if (e.key === "[" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
       && !document.activeElement.isContentEditable) sideToggle();
 });
-const _sidePref = localStorage.getItem("knowatlas-side");
-sideApply(_addOk ? false : _sidePref !== "show");  // 默认收起；显式展开过的用户保持
+sideApply(localStorage.getItem("knowatlas-side") !== "show");  // 默认收起；显式展开过的用户保持
 
+// 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
 ensureSession().then(() => {
   loadTree();
   if (_addOk) document.getElementById("add-url-btn").click();

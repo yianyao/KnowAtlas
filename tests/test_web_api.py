@@ -243,23 +243,29 @@ def test_entry_summary_endpoint(client, dl):
 
 
 def test_static_pages_consumption_defaults():
-    """静态页探针（第三十七批）：弹窗卡仅 http(s) 出「打开原文」；管理入口默认折叠。"""
+    """静态页探针（第三十七批立；第五十九批页签化改版）：六页签+管理集中+收录对话框。"""
     from knowatlas.web.app import _STATIC_DIR
 
     graph = (_STATIC_DIR / "graph.html").read_text(encoding="utf-8")
     assert "/^https?:/i.test(loc)" in graph       # 只有 http(s) 渲染「打开原文」链接
     assert "ccopy" in graph                       # file:// / emmx:// 走 locator+复制
     index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
-    assert '<details id="mgmt"' in index          # 管理分组存在
-    assert 'details id="mgmt" open' not in index  # 且默认收起（消费页优先）
-    # 五个数据管理入口都在 details 块内（第四十二批起 add-url 手动收录也在其中）
-    for eid in ("add-url", "staged-btn", "rejected-link", "dead-link", "nonk-link",
-                "fresh-link"):
-        assert index.index('<details id="mgmt"') < index.index(f'id="{eid}"')
-    # 第四十二批：手动收录入口 + 复制条目 ID 统一注入（弹窗卡同款能力）
-    assert 'id="add-url-btn"' in index
+    # 六页签齐全（第五十九批）：检索 / 关系图 / 串联 / 词云 / 时间线 / 管理
+    for v in ("search", "graph", "thread", "cloud", "timeline", "mgmt"):
+        assert f'data-view="{v}"' in index
+    # 检索默认显示，其余视图默认隐藏
+    assert '<section id="view-search" class="view">' in index
+    for v in ("graph", "thread", "cloud", "timeline", "mgmt"):
+        assert f'<section id="view-{v}" class="view" hidden>' in index
+    # 管理页集中六入口（第五十九批：暂存/待清理/失效/时效/已舍弃/数据管理）
+    for sub in ("staged", "nonk", "dead", "fresh", "rejected", "data"):
+        assert f'data-sub="{sub}"' in index
+    # 手动收录上移顶栏对话框（同 kadd 链路；说明悬停出）；日常消费页无管理控件
+    assert 'id="ingest-dialog"' in index and 'id="add-url-btn"' in index
+    assert "同 kadd" in index
     assert "/api/entries" in index                # 收录走 kadd 同一链路
     assert 'class="cid-btn"' in index             # 条目行复制 ID
+    assert 'id="bm-dock"' in index                # bookmarklet 左缘小书签坞（收缩/hover 展开）
     assert "ccid" in graph                        # 弹窗卡 ID 行（点击复制）
 
 
@@ -333,6 +339,25 @@ def test_manual_ingest_endpoint_idempotent(client):
         assert client.post("/api/entries", json={}, headers=_auth()).status_code == 400
     finally:
         srv.shutdown()
+
+
+# ---- 源配置状态端点（第五十九批：管理页「数据管理」）----
+
+
+def test_sources_status_readonly(client):
+    """/api/sources 只报配置状态布尔，不回传任何路径/凭证明文。"""
+    r = client.get("/api/sources")
+    assert r.status_code == 200
+    data = r.json()["sources"]
+    names = {s["name"] for s in data}
+    assert {"bookmarks", "folders", "emmx", "mail", "session", "manual"} <= names
+    for s in data:
+        assert set(s) == {"name", "label", "configured"}
+        assert isinstance(s["configured"], bool)
+    # conftest cfg 只配置了 sources.manual（必填项）
+    manual = next(s for s in data if s["name"] == "manual")
+    assert manual["configured"] is True
+    assert "tmp" not in r.text and ".toml" not in r.text  # 无路径泄漏
 
 
 # ---- MCP 只读端点（第四十六批）----
