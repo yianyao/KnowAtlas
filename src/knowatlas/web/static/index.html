@@ -10,7 +10,21 @@
   aside { width: 340px; overflow: auto; border-inline-end: 1px solid #8884;
           padding: 12px; }
   main { flex: 1; overflow: auto; padding: 16px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
+  h1 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: center;
+       justify-content: space-between; }
+  /* 左栏折叠（第五十八批：知识窗口优先；默认收起，偏好记 localStorage） */
+  body.side-hide aside { display: none; }
+  #side-collapse { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                   background: transparent; color: inherit; font-size: 11px;
+                   padding: 2px 8px; }
+  #side-bar { position: fixed; left: 8px; top: 8px; z-index: 60; display: none;
+              gap: 6px; align-items: center; background: Canvas;
+              border: 1px solid #8888; border-radius: 8px; padding: 4px 8px;
+              box-shadow: 0 2px 8px #0002; }
+  #side-bar input { width: 240px; padding: 4px 8px; box-sizing: border-box; }
+  #side-bar button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                     background: transparent; color: inherit; font-size: 12px;
+                     padding: 3px 10px; }
   small { color: #888; }
   #search { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
   .wb-tab { cursor: pointer; border: 1px solid #8886; border-radius: 4px 4px 0 0;
@@ -110,7 +124,9 @@
 </head>
 <body>
 <aside>
-  <h1>知道 KnowAtlas</h1>
+  <h1>知道 KnowAtlas
+    <button id="side-collapse" title="收起左栏，扩大知识窗口（快捷键 [ 恢复）">◀ 收起</button>
+  </h1>
   <small>个人知识统一索引 · 分类树（点击下钻；悬停节点出现管理按钮）</small>
   <input id="search" placeholder="工作台：输入主题词 → 聚合结果 / 线索 / 放射 三视图">
   <a href="/graph.html" style="display:block;margin-bottom:8px;font-size:13px">🕸️ 知识关系图（下钻 / 放射探索 / 反查 / 路径固化）</a>
@@ -139,6 +155,12 @@
   </label>
   <div id="tree">加载中…</div>
 </aside>
+<!-- 左栏收起后的悬浮条（第五十八批）：恢复按钮 + 工作台搜索仍在 -->
+<div id="side-bar">
+  <button id="side-expand" title="展开左栏（快捷键 [ 收起）">▶</button>
+  <input id="search-mini" placeholder="工作台：输入主题词…" autocomplete="off">
+</div>
+<main>
 <div id="bulk-bar" style="display:none">
   <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
   <span id="ms-count">已选 0</span>
@@ -973,6 +995,35 @@ if (_addOk) {
   document.getElementById("mgmt").open = true;
   document.getElementById("add-url").value = _addQ;
 }
+
+// 左栏折叠（第五十八批）：默认收起（知识窗口优先，用户定调），偏好记
+// localStorage「knowatlas-side」；收起后顶部悬浮条保留工作台搜索；[
+// 快捷键切换；?add= 落地自动展开（收录流程需要数据管理区可见）。
+const _sideBar = document.getElementById("side-bar");
+const _sideInput = document.getElementById("search-mini");
+function sideApply(hide) {
+  document.body.classList.toggle("side-hide", hide);
+  _sideBar.style.display = hide ? "flex" : "none";
+  localStorage.setItem("knowatlas-side", hide ? "hide" : "show");
+}
+function sideToggle() {
+  sideApply(!document.body.classList.contains("side-hide"));
+}
+document.getElementById("side-collapse").onclick = sideToggle;
+document.getElementById("side-expand").onclick = sideToggle;
+_sideInput.addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    const q = _sideInput.value.trim();
+    if (q) { document.getElementById("search").value = q; doWorkbench(q); }
+  }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "[" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
+      && !document.activeElement.isContentEditable) sideToggle();
+});
+const _sidePref = localStorage.getItem("knowatlas-side");
+sideApply(_addOk ? false : _sidePref !== "show");  // 默认收起；显式展开过的用户保持
+
 ensureSession().then(() => {
   loadTree();
   if (_addOk) document.getElementById("add-url-btn").click();

@@ -1971,22 +1971,48 @@ class DataLayer:
         return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
     def _search_like(self, q: str, limit: int) -> list[SearchHit]:
+        """两字词 LIKE 兜底（第五十八批重写：拆双查询 + Python 去重）。
+
+        原实现把两路 LIKE 用 UNION 合成一条 SQL——真实库（约 1809 条 /
+        content_fts 约 130MB）上过期统计使 planner 选出灾难计划：entries 当
+        外层 × content_fts 虚表全扫当内层（条目数 × 130MB），单查询卡 1h+
+        且近乎 0 CPU；再叠加 /api/recall 在事件循环同步执行，整个 serve
+        冻结（UI「聚合中…」永转圈）。现拆两条计划安全的查询：
+        ① entries 三列 LIKE（走 idx_entries_status，小库毫秒级）；
+        ② content_fts LIKE 子查询 → idx_entries_hash 回表（FTS 全扫上限
+        约百毫秒级，已实测）。语义与原 UNION 等价（Python 去重 + LIMIT）。
+        """
         like = f"%{self._escape_like(q)}%"
+        sel = ("SELECT e.id, e.title, e.locator,"
+               " substr(COALESCE(e.inline_content,''),1,80) AS snip, 1.0 AS rank")
         rows = self._conn.execute(
-            "SELECT e.id, e.title, e.locator, substr(COALESCE(e.inline_content,''),1,80) AS snip,"
-            " 1.0 AS rank FROM entries e"
-            " WHERE e.status='active'" + _consumable("e") + " AND (e.title LIKE ? ESCAPE '\\'"
-            "    OR e.native_path LIKE ? ESCAPE '\\'"
-            "    OR e.inline_content LIKE ? ESCAPE '\\')"
-            " UNION"
-            " SELECT e.id, e.title, e.locator, substr(COALESCE(e.inline_content,''),1,80) AS snip,"
-            " 1.0 AS rank FROM entries e"
-            " JOIN content_fts c ON c.content_hash = e.content_hash"
-            " WHERE e.status='active'" + _consumable("e") + " AND c.text LIKE ? ESCAPE '\\'"
-            " LIMIT ?",
-            (like, like, like, like, limit),
+            f"{sel} FROM entries e"
+            " WHERE e.status='active'" + _consumable("e") +
+            "   AND (e.title LIKE ? ESCAPE '\\'"
+            "      OR e.native_path LIKE ? ESCAPE '\\'"
+            "      OR e.inline_content LIKE ? ESCAPE '\\') LIMIT ?",
+            (like, like, like, limit),
         ).fetchall()
-        return [SearchHit(r["id"], r["title"], r["locator"], r["snip"], r["rank"]) for r in rows]
+        if len(rows) < limit:
+            rows += self._conn.execute(
+                f"{sel} FROM entries e"
+                " JOIN (SELECT content_hash FROM content_fts"
+                "        WHERE text LIKE ? ESCAPE '\\') c"
+                "   ON c.content_hash = e.content_hash"
+                " WHERE e.status='active'" + _consumable("e") + " LIMIT ?",
+                (like, limit),
+            ).fetchall()
+        out: list[SearchHit] = []
+        seen: set[str] = set()
+        for r in rows:
+            if r["id"] in seen:
+                continue
+            seen.add(r["id"])
+            out.append(SearchHit(r["id"], r["title"], r["locator"],
+                                 r["snip"], r["rank"]))
+            if len(out) >= limit:
+                break
+        return out
 
     # ---- 日志与运行记录 ----
 

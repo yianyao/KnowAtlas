@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Body, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 _TOKEN_HEADER = "x-knowatlas-token"
@@ -258,10 +258,35 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     _CLOUD_PALETTE = ("#d1495b", "#e07a3c", "#c9a227", "#5f9e4e", "#2e9e83",
                       "#2b8fb3", "#3f6fb5", "#63599e", "#8d5aa8", "#b5497e",
                       "#a4485f", "#5f6b7a")
-    # 词元噪音停用词（真实库冒烟 2026-10-21：markdown 残片/数据导出占位符）
+    # 词元噪音停用词（真实库冒烟 2026-10-21：markdown 残片/数据导出占位符；
+    # 第五十八批按用户定调扩充「非知识性词汇」——网页/技术样板词 + 通用
+    # 虚词，这类词在词云里只有噪音价值，取舍原则：几乎不承载知识区分度）
     _CLOUD_NOISE = frozenset({
         "nan", "pass", "unnamed", "null", "none", "undefined", "na",
         "true", "false", "nbsp", "utf", "utf8", "utf-8",
+        # URL / HTML / 文件类型样板
+        "http", "https", "html", "htm", "www", "com", "org", "net", "cn",
+        "php", "png", "jpg", "jpeg", "gif", "svg", "ico", "css", "js",
+        "json", "xml", "url", "uri", "api", "localhost", "host", "server",
+        "web", "site", "page", "index", "main", "default", "title",
+        "content", "file", "files", "image", "images", "download",
+        "version", "install", "setup", "config", "support", "help",
+        "docs", "example", "examples", "test", "user", "users", "name",
+        "value", "values", "type", "types", "data", "list", "item",
+        "items", "error", "errors", "warning", "info", "note", "notes",
+        # 英文高频虚词 / 通用 UI 词
+        "your", "you", "the", "and", "for", "with", "this", "that",
+        "from", "are", "was", "will", "can", "all", "not", "have",
+        "one", "out", "how", "what", "when", "more", "use", "used",
+        "using", "new", "home", "menu", "search", "click", "here",
+        "please", "faq", "guide", "guides",
+        # 中文高频虚词 / 通用泛词（保留具体技术名词如 内核/控制台/重启）
+        "点击", "这里", "我们", "他们", "可以", "如果", "这个", "那个",
+        "一个", "没有", "或者", "以及", "关于", "相关", "内容", "使用",
+        "进行", "通过", "以下", "上面", "下面", "当前", "选择", "操作",
+        "方法", "问题", "情况", "时间", "需要", "不能", "出现", "显示",
+        "查看", "打开", "关闭", "进入", "完成", "开始", "支持", "并且",
+        "但是", "然后", "例如",
     })
 
     def _cloud_word_ok(kw: str) -> bool:
@@ -825,8 +850,10 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         return {"id": thread_id, "item_id": item_id, "position": position}
 
     @app.post("/api/threads/{thread_id}/suggest")
-    async def suggest_thread(thread_id: str, request: Request):
-        """thread_suggest：LLM 建议阅读顺序并应用（llm 不可用 = 原序，不写库）。"""
+    def suggest_thread(thread_id: str, request: Request):
+        """thread_suggest：LLM 建议阅读顺序并应用（llm 不可用 = 原序，不写库）。
+
+        同步 def（第五十八批）：LLM 调用可达秒-分钟级，禁止占用事件循环。"""
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard
@@ -869,13 +896,14 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "error": result.get("error")}
 
     @app.post("/api/threads/{thread_id}/digest")
-    async def digest_thread(thread_id: str, request: Request):
+    def digest_thread(thread_id: str, request: Request):
         """thread_digest + delta_summarize（第五十五批，§9.4，LLM 摘要后置）。
 
         delta_summarize：只对缺 meta.delta_summary 的条目跑（省 token），
         产物落 entries.meta.delta_summary；thread_digest：thread 层跑一次，
         产物落 threads.digest。llm 不可用/失败 = 两层都静默降级，不写库，
         线程视图照常显示原始正文（摘要是压缩表示，原始层永在）。
+        同步 def（第五十八批）：LLM 调用可达秒-分钟级，禁止占用事件循环。
         """
         guard = check_write_access(request, cfg)
         if guard is not None:
@@ -947,12 +975,17 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "summarized": written, "error": error}
 
     @app.post("/api/recall")
-    async def recall(request: Request):
-        """topic_recall 多路召回（只读，无需写令牌）：主题词或 c:/e: 节点 id。"""
-        body = await request.json()
-        topic = str(body.get("topic", "")).strip()
+    def recall(payload: dict = Body(default={})):
+        """topic_recall 多路召回（只读，无需写令牌）。
+
+        同步 def（第五十八批）：重计算走 anyio 线程池。曾为 async def 且在
+        事件循环上同步执行多路召回查询——一个慢查询即冻结整个 serve（包括
+        /api/session），前端表现为「聚合中…」永转圈；事件循环上永远不跑
+        重 DB/网络/LLM 调用，是本文件的纪律。
+        """
+        topic = str(payload.get("topic", "")).strip()
         try:
-            limit = max(1, min(int(body.get("limit", 60)), 200))
+            limit = max(1, min(int(payload.get("limit", 60)), 200))
         except (TypeError, ValueError):
             limit = 60
         from ..semantic.base import TaskContext
@@ -1013,11 +1046,12 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         ]}
 
     @app.post("/api/entries")
-    async def add_entry(request: Request):
+    def add_entry(request: Request, body: dict = Body(default={})):
+        """手动收录（同 kadd 链路）。同步 def（第五十八批）：ingest_url 内含
+        抓取网页的网络 I/O（可达秒-分钟级），禁止占用事件循环。"""
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard
-        body = await request.json()
         url = str(body.get("url", "")).strip()
         if not url:
             return JSONResponse({"error": {"code": "BAD_REQUEST", "message": "缺少 url"}},

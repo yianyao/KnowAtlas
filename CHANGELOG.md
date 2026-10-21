@@ -1873,3 +1873,38 @@ topic_recall 语义通道两处挂账收口）。降级纪律与 LLM 同构：[e
   起 PG 实例）**挂账**——代码路径与报错指引有测试，真机连接待环境
 - pytest 327 全绿（315→327）；无 DDL/canary 变更（scheme 与 config 键
   Phase 0 已冻结在案）；变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第五十八批：serve 冻结根因修复 + 左栏折叠 + 词云噪音词过滤
+
+**背景**：用户界面冒烟（2026-10-21 截图）反馈三问：①词云大量非知识性
+词汇（XAMPP/localhost/php/your…）②左栏默认收起、知识窗口更大
+③「聚合中…」永转圈、好慢。py-spy 栈转储定位到根因不是单点慢，而是两个
+缺陷叠加：`_search_like` 的 UNION 查询在真实库（1809 条 / content_fts
+约 130MB）上触发灾难计划（过期统计使 planner 估 entries 仅 61 行 →
+entries 当外层 × content_fts 虚表全扫当内层，条目数 × 130MB 扫描量，
+单查询 1h+ 0 CPU），且 `/api/recall` 是 async def 却在事件循环上同步跑
+重查询——一个慢查询冻结整个 serve（/api/session 都 8s 无响应），前端
+所有轮询全部挂死。诊断全程只读；修复后两字查询 36ms、recall 1.0s、
+/api/session 14ms。
+
+1. **db.py `_search_like` 重写**：UNION 拆成两条计划安全的查询 + Python
+   去重（语义等价）：①entries 三列 LIKE（走 idx_entries_status，毫秒级）
+   ②content_fts LIKE 子查询先出 content_hash → idx_entries_hash 回表
+   （实测百毫秒级）。测试断言只钉命中不钉顺序，无需改。
+2. **web/api.py 事件循环纪律**：`/api/recall`、POST /api/entries（内含
+   抓网页网络 I/O）、threads suggest/digest（LLM 秒-分钟级）四处
+   async def → sync def（FastAPI 自动入 anyio 线程池）。立纪律：事件
+   循环上永远不跑重 DB / 网络 / LLM 调用。
+3. **词云噪音词过滤**：`_CLOUD_NOISE` 从 12 词扩至 ~110 词（URL/HTML/
+   文件类型样板 + 英文高频虚词 + 中文通用泛词；保留 内核/控制台/重启 等
+   具体技术名词）。真实库验收：top30 全为知识性词元（md/skill/py/agent/
+   技能/模板/LLM…），XAMPP/php/your 等零残留。
+4. **index.html 左栏折叠**：默认收起（用户定调：知识窗口优先），偏好记
+   localStorage「knowatlas-side」；h1 加「◀ 收起」按钮，收起后左上
+   悬浮条（▶ 展开按钮 + 工作台搜索镜像框）；`[` 快捷键切换（输入框
+   聚焦时不触发）；bookmarklet ?add= 落地自动展开（收录流程需要数据
+   管理区可见）。browser 验收：默认收起/展开/再收起/重载记忆 4 项全过。
+5. pytest 355 全绿；无 DDL/canary/config 变更；变更文件 UTF-8 无 BOM + LF。
+
+**挂账**：全库词云首跑 ~8s（jieba 全量分词，tab 有「首次略慢」提示），
+如感慢可后续加内容签名缓存；本次未做（避免过度工程）。
