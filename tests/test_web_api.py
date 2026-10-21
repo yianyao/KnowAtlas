@@ -333,3 +333,82 @@ def test_manual_ingest_endpoint_idempotent(client):
         assert client.post("/api/entries", json={}, headers=_auth()).status_code == 400
     finally:
         srv.shutdown()
+
+
+# ---- MCP 只读端点（第四十六批）----
+
+
+def test_mcp_endpoints_readonly(client, dl):
+    """MCP 三端点：search/tree/entry 只读查询 + 404。"""
+    from knowatlas.models import Entry
+
+    dl.upsert_entries([Entry.build(
+        source_type="bookmark", source_key="https://mcp.test/1",
+        title="消息总线入门", locator="https://mcp.test/1",
+        locator_canonical="https://mcp.test/1",
+        inline_content="路由与过滤实践要点。", meta={"source_type": "bookmark"})])
+    eid = dl.list_entries(limit=10)[0].id
+
+    r = client.get("/api/mcp/search", params={"q": "消息总线"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["count"] >= 1 and j["hits"][0]["entry_id"] == eid
+    assert j["hits"][0]["title"] == "消息总线入门"
+
+    r2 = client.get("/api/mcp/tree")
+    assert r2.status_code == 200 and "tree" in r2.json()
+
+    r3 = client.get(f"/api/mcp/entry/{eid}")
+    assert r3.status_code == 200
+    j3 = r3.json()
+    assert j3["id"] == eid and j3["title"] == "消息总线入门"
+    assert "路由与过滤" in j3["content"]
+    assert j3["category_ids"] == []           # 未挂分类
+
+    assert client.get("/api/mcp/entry/0123456789abcdef").status_code == 404
+
+
+def test_mcp_handlers_ast_readonly():
+    """探针⑤：AST 级只读校验——三个 MCP handler 无任何写操作。
+
+    黑名单：DataLayer/管道层的写方法 + 裸 _conn.execute 非 SELECT。
+    （v0 REST 只读投影的硬约束，供 agent 安全调用。）
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path("src/knowatlas/web/api.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    handlers = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in ("mcp_search", "mcp_tree", "mcp_entry")):
+            handlers[node.name] = node
+    assert set(handlers) == {"mcp_search", "mcp_tree", "mcp_entry"}
+
+    write_methods = {
+        "put_entry", "put_content", "upsert_entries", "upsert_conv_messages",
+        "delete", "merge_meta", "set_status", "attach_category", "detach_category",
+        "create_category", "rename_category", "move_category", "attach_parent",
+        "create_thread", "add_thread_item", "remove_thread_item", "set_conv_thread",
+        "log_task", "start_run", "finish_run", "vacuum_into", "transaction",
+    }
+    for name, fn in handlers.items():
+        for sub in ast.walk(fn):
+            if isinstance(sub, ast.Call):
+                # dl.<写方法>(...) / self.dl.<写方法>(...)
+                func = sub.func
+                if isinstance(func, ast.Attribute) and func.attr in write_methods:
+                    raise AssertionError(f"{name} 调用了写方法 {func.attr}")
+                # 裸 _conn.execute(...)（只读端点不该摸私有连接）
+                if (isinstance(func, ast.Attribute) and func.attr == "execute"
+                        and isinstance(func.value, ast.Attribute)
+                        and func.value.attr == "_conn"):
+                    raise AssertionError(f"{name} 摸了私有 _conn")
+                # SQL 字面量非 SELECT（如 conn.execute("INSERT ...")）
+                if (isinstance(func, ast.Attribute) and func.attr == "execute"
+                        and sub.args and isinstance(sub.args[0], ast.Constant)
+                        and isinstance(sub.args[0].value, str)
+                        and not sub.args[0].value.lstrip().upper().startswith("SELECT")
+                        and "PRAGMA" not in sub.args[0].value.upper()):
+                    raise AssertionError(f"{name} 执行了非 SELECT SQL")

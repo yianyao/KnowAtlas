@@ -309,6 +309,13 @@ class DataLayer:
             out.setdefault(r["entry_id"], []).append(r["category_id"])
         return out
 
+    def entry_category_ids(self, entry_id: str) -> list[str]:
+        """单条目直挂分类 id 列表（按 rowid 序）——MCP 只读详情端点用
+        （第四十六批；all_entry_categories 的全量映射对单条目查询太重）。"""
+        return [r["category_id"] for r in self._conn.execute(
+            "SELECT category_id FROM entry_categories WHERE entry_id=? ORDER BY rowid",
+            (entry_id,))]
+
     def all_entry_locators(self) -> dict[str, list[str]]:
         """全部附加 locator（entry_id → locator 列表，按 is_primary 倒序+插入序）。
         导出投影用（第四十五批）；空 dict = 无任何附加 locator。"""
@@ -318,6 +325,15 @@ class DataLayer:
                 " ORDER BY is_primary DESC, rowid"):
             out.setdefault(r["entry_id"], []).append(r["locator"])
         return out
+
+    def vacuum_into(self, dest: Path) -> None:
+        """SQLite 官方一致性快照（VACUUM INTO）——备份专用（第四十六批）。
+
+        WAL 开启状态下安全：直接拷 .db 文件会丢 -wal 内未 checkpoint 的数据，
+        VACUUM INTO 是官方提供的一致性快照机制（含 WAL 内容），不自己拷文件。
+        目标文件必须不存在（调用方保证）。
+        """
+        self._conn.execute("VACUUM INTO ?", (dest.as_posix(),))
 
     def set_status(self, entry_ids: Sequence[str], status: str) -> None:
         if status not in STATUSES:

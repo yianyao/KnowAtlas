@@ -227,10 +227,22 @@ reader: 执行者（人与 agent）
       导出文件可被标准 XML 解析重建无损树（往返保真）
       - 探针：XML 可解析 ✅；outline 嵌套=分类层级 ✅；叶子数=http 条目数 ✅；
         往返重建无损 ✅；OPML 导入回路后置（ksync 新源独立批次）
-- [ ] 自动备份（同步前 VACUUM INTO 快照，保留 10 份轮换）+ 恢复演练
-      - 探针：WAL 开启状态下从快照恢复（含删 -wal/-shm）后条目数与快照时一致
-- [ ] MCP 只读查询端点（检索 + 树遍历，供 agent 查询）
-      - 探针：只读校验——端点无任何写操作
+- [x] 自动备份（同步前 VACUUM INTO 快照，保留 10 份轮换）+ 恢复演练——
+      SQLite 官方 VACUUM INTO 一致性快照（WAL 安全，不自己拷文件）；同步前
+      自动快照 + 节流（默认 24h，backup_min_interval_hours）；契约=没快照不
+      同步（备份失败中断、不写库；backup_on_sync=false 可关）；轮换删除白名单
+      （backup_dir 内 + knowledge- 前缀 + .db 后缀 + 时间戳名，绝不碰用户文件）；
+      恢复自包含（安全网快照 → 关连接 → 删 -wal/-shm → 拷回 → integrity + 条目数
+      对账），只接受 backup_dir 内自家快照（防路径穿越）
+      - 探针：WAL 开启状态下从快照恢复（含删 -wal/-shm）后条目数与快照时一致 ✅
+        （真实库副本演练：active 1837/全库 6976 破坏 -50 后完整恢复）
+- [x] MCP 只读查询端点（检索 + 树遍历，供 agent 查询）——
+      v0 = REST 只读投影：GET /api/mcp/search（FTS 检索）/ /api/mcp/tree
+      （树遍历）/ /api/mcp/entry/{id}（详情 + 正文前缀 substr 截取）；真 MCP
+      协议（stdio/SSE，mcp SDK）后置不加依赖；GET 无副作用不走写令牌，仍受
+      本机 Host 白名单约束
+      - 探针：只读校验——端点无任何写操作 ✅（AST 扫描三 handler：无写方法
+        调用、不摸私有 _conn、无非 SELECT SQL，测试钉死）
 - [ ] 打包安装：任意目录可用（2026-10-19 用户需求）
       - 内容：构建 wheel 发布（PyPI 或私有源）；数据目录策略——默认 `%USERPROFILE%/.knowatlas/`（db/config/data 均在此），环境变量 `KNOWATLAS_HOME` 覆盖；config 自动发现顺序 = `KNOWATLAS_HOME` → cwd → `~/.knowatlas`；路径推导禁硬编码用户名/盘符（项目可迁移铁律第 4 条）
       - 探针：新机器 `pip install knowatlas` 后在任意目录跑 `knowatlas serve`，数据落在 `~/.knowatlas/`；换 `KNOWATLAS_HOME` 后数据落新目录

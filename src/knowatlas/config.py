@@ -13,7 +13,8 @@ _TOP_SECTIONS = ("general", "web", "llm", "embedding", "fetch")
 
 # config schema 键集（canary 覆盖项：改动必须先写工单）
 CONFIG_SCHEMA_KEYS = (
-    "general.backup_dir", "general.content_root", "general.db_path",
+    "general.backup_dir", "general.backup_keep", "general.backup_min_interval_hours",
+    "general.backup_on_sync", "general.content_root", "general.db_path",
     "general.log_level", "general.server_host", "general.server_port",
     "web.token_env",
     "llm.api_key_env", "llm.backends", "llm.base_url", "llm.enabled", "llm.max_batch",
@@ -59,6 +60,20 @@ class Config:
     @property
     def backup_dir(self) -> Path:
         return Path(str(self.get("general.backup_dir", "data/backups")))
+
+    @property
+    def backup_on_sync(self) -> bool:
+        """同步前是否自动快照（第四十六批；false=显式关闭，没快照也不同步的契约由用户承担）。"""
+        return bool(self.get("general.backup_on_sync", True))
+
+    @property
+    def backup_keep(self) -> int:
+        return int(self.get("general.backup_keep", 10))
+
+    @property
+    def backup_min_interval_hours(self) -> int:
+        """快照节流：距上次快照不足该小时数则跳过（VACUUM INTO 全库重建成本高）。"""
+        return int(self.get("general.backup_min_interval_hours", 24))
 
     @property
     def log_level(self) -> str:

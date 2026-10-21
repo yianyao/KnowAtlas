@@ -6,6 +6,7 @@ import argparse
 import os
 import sys
 import uuid
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__
@@ -61,8 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     kexport.add_argument("--out", required=True)
 
     kbackup = sub.add_parser("kbackup", help="快照与恢复（VACUUM INTO）—— M5")
-    kbackup.add_argument("--snap", action="store_true")
-    kbackup.add_argument("--restore", metavar="FILE")
+    kbackup.add_argument("--snap", action="store_true", help="立即快照 + 轮换")
+    kbackup.add_argument("--restore", metavar="FILE", help="从快照恢复（恢复前自动安全网快照）")
+    kbackup.add_argument("--verify", metavar="FILE", help="恢复演练验证：integrity_check + 条目数")
+    kbackup.add_argument("--keep", type=int, default=None, help="轮换保留份数（默认配置 backup_keep=10）")
+    kbackup.add_argument("--no-throttle", action="store_true", help="忽略节流，强制快照")
 
     ktest = sub.add_parser("ktest", help="回归集 / 契约金丝雀运行器")
     ktest.add_argument("what", choices=["regress", "canary"])
@@ -224,7 +228,41 @@ def _cmd_kexport(args: argparse.Namespace) -> int:
 
 
 def _cmd_kbackup(args: argparse.Namespace) -> int:
-    return _unimplemented("kbackup", "Phase 5（M5）")
+    from .pipeline.backup import restore as _restore
+    from .pipeline.backup import snapshot as _snapshot
+    from .pipeline.backup import verify_snapshot as _verify
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+
+    if args.verify:
+        v = _verify(Path(args.verify))
+        print(f"{'OK' if v['ok'] else 'ERROR'} 快照验证：{v}")
+        return _EXIT_OK if v["ok"] else EXIT_BUSINESS
+
+    if args.restore:
+        # restore 自包含：内部先做安全网快照、再 close、换文件、sanity 对账
+        dl = _open(cfg)
+        r = _restore(cfg, dl, Path(args.restore))
+        print(f"{'OK' if r['ok'] else 'ERROR'} 恢复：{r}")
+        if r["ok"]:
+            print("提示：原库已自动快照留底（安全网），确认恢复无误后可手动清理旧快照。")
+        return _EXIT_OK if r["ok"] else EXIT_BUSINESS
+
+    # 默认/--snap：立即快照 + 轮换
+    dl = _open(cfg)
+    try:
+        stats = _snapshot(cfg, dl, keep=args.keep if args.keep is not None else cfg.backup_keep,
+                          min_interval_hours=0 if args.no_throttle else cfg.backup_min_interval_hours,
+                          force=args.no_throttle)
+    finally:
+        dl.close()
+    if stats.get("status") == "skipped":
+        print(f"SKIP 节流跳过（{stats['reason']}，最新快照 {stats['latest']}，"
+              f"{stats['age_hours']}h 前）；--no-throttle 可强制")
+        return _EXIT_OK
+    print(f"OK 快照完成：{stats}（目录 {cfg.backup_dir}）")
+    return _EXIT_OK
 
 
 def _cmd_ktest(args: argparse.Namespace) -> int:

@@ -12,7 +12,14 @@
 [general]
 db_path      = "data/knowledge.db"   # SQLite 库文件位置（相对项目根，一般不用改）
 content_root = "data/content"        # 可选；大正文外置时启用
-backup_dir   = "data/backups"        # 备份输出目录
+backup_dir   = "data/backups"        # 备份输出目录（快照文件名 knowledge-日期时间.db）
+# 同步前自动快照（VACUUM INTO 一致性快照，WAL 安全）；契约=没快照不同步——快照失败会
+# 中断同步（保证任何写入前都有恢复点）；确认不需要可设 false 关闭（风险自担）
+backup_on_sync = true
+backup_keep  = 10                    # 快照轮换保留份数（超出删最旧；0=不轮换只增不减）
+# 快照节流：距上次快照不足该小时数则跳过（VACUUM INTO 是全库重建，大库有成本；
+# ksync 频繁跑时不必每次全量重建）；kbackup --no-throttle 可强制
+backup_min_interval_hours = 24
 log_level    = "INFO"                # 日志级别：DEBUG / INFO / WARNING / ERROR
 server_host  = "127.0.0.1"           # Web 服务只监听本机（安全约束，不建议改 0.0.0.0）
 server_port  = 8420                  # Web 服务端口

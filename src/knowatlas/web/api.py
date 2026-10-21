@@ -363,6 +363,42 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 for e in data.get("entries", [])]
         return data
 
+    # ---- MCP 只读查询端点（第四十六批）----
+    # v0 形态 = REST 只读投影（/api/mcp/ 命名空间），供 agent 调用；
+    # 真 MCP 协议（stdio/SSE，需引入 mcp SDK）后置——YAGNI，先让 agent 能查。
+    # 只读纪律：三个 handler 只调 dl 的查询方法（search_fts/get_tree/
+    # get_entry/get_content_preview/subtree_category_ids/get_category_paths），
+    # 无任何写操作；tests/test_web_api.py 有 AST 级只读校验探针钉死。
+    @app.get("/api/mcp/search")
+    def mcp_search(q: str = "", limit: int = 20):
+        """检索（只读）：FTS 查询，返回命中条目（agent 查询入口）。"""
+        hits = dl.search_fts(q, limit=max(1, min(int(limit), 100)))
+        return {"query": q, "count": len(hits), "hits": [
+            {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
+             "snippet": h.snippet, "rank": h.rank} for h in hits]}
+
+    @app.get("/api/mcp/tree")
+    def mcp_tree():
+        """树遍历（只读）：全分类树 + 未分类计数（agent 遍历入口）。"""
+        return {"tree": dl.get_tree(), "uncategorized": len(dl.get_uncategorized(limit=1000))}
+
+    @app.get("/api/mcp/entry/{entry_id}")
+    def mcp_entry(entry_id: str, content_limit: int = 4000):
+        """单条目详情（只读）：元信息 + 分类路径 + 正文前缀（content_store
+        substr 截取，不整段进内存）。条目不存在 → 404。"""
+        e = dl.get_entry(entry_id)
+        if e is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        body = e.inline_content or ""
+        if e.content_hash:
+            body = dl.get_content_preview(e.content_hash, max(0, min(int(content_limit), 20000))) or body
+        return {"id": e.id, "title": e.title, "locator": e.locator,
+                "source_type": e.source_type, "status": e.status,
+                "created_at": e.created_at,
+                "category_ids": dl.entry_category_ids(e.id),
+                "meta": e.meta, "content": body}
+
     @app.get("/api/graph")
     def graph(max_entries: int = 400):
         """关系图数据（结构关系 v0：分类挂接 + 同域名）。保留兼容；新视图见下。"""

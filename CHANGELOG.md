@@ -1422,3 +1422,69 @@ CLI 的 kexport 骨架早已预留（--format json|obsidian|opml --out），SOP-
   bookmark 源中 locator_canonical 为空的条目天然排除，口径可解释）
 - canary 六面不变（无 DDL/枚举/配置键变化）；pytest 248 项全绿（+5）；
   五个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十六批：自动备份 + MCP 只读端点（M5 Gate 后半；打包安装按用户指示后挪）
+
+**背景**：TODO Phase 5 剩余两项（打包安装 2026-10-21 用户明示后挪，TODO 保留未勾选）。
+备份用 SQLite 官方 VACUUM INTO（一致性快照、WAL 安全——直接拷 .db 会丢 WAL 内
+数据，用内置机制不自己拷文件，开源轮子铁律）。
+
+**变更**
+
+1. **新增 pipeline/backup.py**（纯 SQLite 机制零自研）：
+   - `snapshot(cfg, dl, *, keep=10, min_interval_hours=24, force=False)`：
+     VACUUM INTO 落 `knowledge-YYYYmmdd-HHMMSS.db`；节流（目录内最新快照未超
+     min_interval_hours → skipped）；轮换保留最近 keep 份删最旧——删除白名单
+     （仅 backup_dir 内 + knowledge- 前缀 + .db 后缀 + 时间戳名格式，防误删
+     用户文件，个人文件安全纪律）。
+   - `restore(cfg, dl, snap_path)`：snap 须在 backup_dir 内（防路径穿越）；
+     恢复前对当前库自动快照（安全网）；调用方负责先 close dl（CLI 层做）；
+     删目标 db 的 -wal/-shm；copy2 快照回 db_path；恢复后 sanity
+     （integrity_check + 条目数）。
+   - `verify_snapshot(snap_path)`：integrity_check + entries 数 + 文件时间
+     （恢复演练验证手段）。
+2. **sync.py**：run_sync 主体（非 scan 分支、非 dry_run）开头 snapshot；
+   stats["backup"]。契约=没快照不同步：失败默认中断（返回 error 统计），
+   `general.backup_on_sync=false` 可显式关闭。
+3. **config.py**：CONFIG_SCHEMA_KEYS +3（backup_on_sync/backup_keep/
+   backup_min_interval_hours）+ 快捷属性；example toml [general] 补注释。
+4. **api.py**：`/api/mcp/search`（q/limit）、`/api/mcp/tree`、
+   `/api/mcp/entry/{id}`（正文前 4000 字符）——只读投影。真 MCP 协议
+   （stdio/SSE，需 mcp SDK）后置不加依赖；v0  REST 形态文档注明。
+5. **cli.py**：kbackup 落地——--snap / --restore FILE / --verify FILE /
+   --keep N / --no-throttle；restore 分支先 dl.close() 再操作。
+
+**复检探针**（实现后逐条命中）
+
+- 探针①：WAL 开启下从快照恢复（删 -wal/-shm）后条目数与快照时一致
+- 探针②：轮换 keep=2，快照 3 次后剩 2 份且最旧的被删
+- 探针③：节流——min_interval_hours 内二次快照 skipped；force 强制
+- 探针④：run_sync 主体后 backup_dir 有新快照；dry_run/scan 分支不产生
+- 探针⑤：MCP 只读校验——AST 扫描三个 handler：无写操作调用、无裸
+  _conn.execute 非 SELECT
+- 探针⑥：restore 前自动安全网快照（恢复前库多一份快照）
+- 真实库副本恢复演练一次成功（Gate「备份恢复演练一次成功」）
+- pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- tests/test_backup.py 9 项：探针① WAL 开启下恢复后条目数与快照时一致（3 条
+  快照 → 追加至 8 → 恢复回 3，-wal/-shm 已清；注意 WAL 模式持久化在 db 头、
+  之后新连接会重建 -wal 属正常行为）/ 探针② 轮换 keep=2 三次快照删最旧 /
+  探针③ 节流 skipped + force 强制 / 探针④ run_sync 主体后有新快照、dry_run
+  不产生 / 探针⑥ 安全网快照（恢复前 8 条形态留底）/ 白名单（目录外快照拒绝、
+  目录内非自家命名拒绝且原样不动）/ CLI 三模式真跑 / 备份失败中断同步不写库
+- tests/test_web_api.py +2：MCP 三端点 200+结构+404；探针⑤ AST 只读校验
+  （写方法黑名单 + 不摸私有 _conn + 无非 SELECT SQL，测试钉死）
+- 真实库副本恢复演练（Gate「备份恢复演练一次成功」）：快照 integrity=ok
+  全库 6976；模拟破坏（50 条 active→archived）后恢复，active 1837/全库 6976
+  与快照时完全一致；恢复前自动安全网快照留底
+- 真实库副本 MCP smoke：search q=python 20 命中 / tree 6 顶层分类 /
+  entry 详情含正文前缀 701 字符 / 404 正常
+- canary 升版：config_keys 31d80a965903→efd23b704e45（+3 备份配置键）；
+  pytest 258 项全绿（+10）；十一个变更文件 UTF-8 无 BOM + LF
+- 开发期修：①Windows 上 Path("/proc/...") 是项目根相对路径（mkdri 反而成功）
+  ——失败用例改用「文件当目录」构造，并清理项目根 proc 测试残留；②快照同秒
+  重名的避让名不合白名单正则 → 改为跨秒等待并同步 name；③restore 原要求
+  调用方先 close，但安全网快照需要活连接 → 改自包含（内部 close）；④dry_run
+  误走备份 → 加 not dry_run 条件；⑤_consumable 无关——本轮无消费面变更

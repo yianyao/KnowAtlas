@@ -506,6 +506,19 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         dl.finish_run(run_id, stats)
         return {"run_id": run_id, **stats}
 
+    # 同步前快照（第四十六批）：契约=没快照不同步——VACUUM INTO 失败即中断，
+    # 避免库写坏后连恢复点都没有；backup_on_sync=false 可显式关闭（用户自担风险）。
+    # dry_run 只读不备份；scan 分支（上列四个）只读零写，不备份。
+    if cfg.backup_on_sync and not dry_run:
+        try:
+            from ..pipeline.backup import snapshot as _snapshot
+            stats["backup"] = _snapshot(cfg, dl, keep=cfg.backup_keep,
+                                        min_interval_hours=cfg.backup_min_interval_hours)
+        except Exception as exc:  # 快照失败不写库：先保证有恢复点再同步
+            stats["backup"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+            dl.finish_run(run_id, stats)
+            return {"run_id": run_id, "aborted": "backup_failed", **stats}
+
     for name, collector in _BATCH_COLLECTORS.items():
         if source is not None and source != name:
             continue

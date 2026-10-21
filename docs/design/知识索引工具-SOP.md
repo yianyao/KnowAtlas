@@ -420,6 +420,53 @@ uv run python -m knowatlas kexport --format opml     # 书签类条目往返格�
 
 ---
 
+## 7.5 自动备份与恢复（SOP-B，0.2.0 第四十六批）
+
+```bash
+uv run python -m knowatlas kbackup --snap                       # 立即快照 + 轮换
+uv run python -m knowatlas kbackup --snap --no-throttle         # 忽略节流强制快照
+uv run python -m knowatlas kbackup --verify <快照文件>           # 恢复演练验证（integrity + 条目数）
+uv run python -m knowatlas kbackup --restore <快照文件>          # 从快照恢复
+```
+
+**机制**：SQLite 官方 `VACUUM INTO` 一致性快照（WAL 开启状态下安全——直接拷
+.db 文件会丢 -wal 内未 checkpoint 的数据，这是用内置机制不自己拷文件的理由）。
+快照落 `data/backups/knowledge-日期时间.db`。
+
+**同步前自动快照**：每次 `ksync` 真正写库前自动快照一次（节流：距上次快照不足
+`backup_min_interval_hours`（默认 24h）则跳过——VACUUM INTO 是全库重建有成本；
+`--no-throttle`/force 可强制）。契约=**没快照不同步**：快照失败会中断同步、
+不写库（保证任何写入前都有恢复点）；`backup_on_sync=false` 可显式关闭（风险自担）。
+
+**轮换与安全纪律**：默认保留最近 10 份（`backup_keep`），超出删最旧；删除只认
+自家白名单（备份目录内 + `knowledge-` 前缀 + `.db` 后缀 + 时间戳名格式），
+绝不碰用户放在同目录的其他文件。恢复只接受备份目录内的自家快照（防路径穿越），
+且**恢复前自动对当前库快照**（安全网：恢复错了也有后悔药）。
+
+**恢复注意事项**：恢复是文件级操作（内部自动关连接、删旧 -wal/-shm、拷快照回
+db_path、重开对账 integrity + 条目数）；恢复后如需继续用 Web/CLI 自行重启即可。
+数据重要性高的场景，建议定期 `kexport --format json` 与快照双保险（快照防库损坏，
+导出防锁定）。
+
+---
+
+## 7.6 MCP 只读查询端点（0.2.0 第四十六批）
+
+`serve` 启动后，agent 可通过以下只读端点查询（v0 = REST 形态，真 MCP 协议
+stdio/SSE 后置，需引入 mcp SDK——YAGNI 暂不加依赖）：
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/mcp/search?q=&limit=` | FTS 检索，返回命中条目（entry_id/title/locator/snippet/rank） |
+| `GET /api/mcp/tree` | 全分类树 + 未分类计数（遍历入口） |
+| `GET /api/mcp/entry/{entry_id}?content_limit=` | 单条目详情（元信息 + category_ids + 正文前缀，substr 截取不整段进内存） |
+
+只读纪律有测试钉死：AST 扫描三个 handler——无任何写方法调用、不摸私有 `_conn`、
+无非 SELECT SQL。只读端点不走写令牌校验（GET 无副作用），但仍受本机 Host 白名单
+约束（不监听非本机，H5 安全约束不变）。
+
+---
+
 ## 8. 常见故障处理
 
 | 现象 | 原因 | 处理 |
