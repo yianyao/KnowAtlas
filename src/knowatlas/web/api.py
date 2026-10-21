@@ -2,7 +2,7 @@
 
 安全约束（仅绑 127.0.0.1 不够——挡不住 CSRF 与 DNS rebinding）：
 1. Host 校验；2. Origin 校验；3. 写操作 X-KnowAtlas-Token；4. content-type 白名单；
-5. CORS 不放宽（bookmarklet 的 no-cors POST 把 token 放 query 参数 ?token=）。
+5. CORS 不放宽（bookmarklet 走 GET 跳转 index.html?add= 由首页同源提交会话请求，不做跨站 POST；?token= 仅作 CLI/脚本兜底）。
 """
 
 from __future__ import annotations

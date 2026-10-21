@@ -119,7 +119,7 @@ python -m venv .venv
 
 行为链：建条目（source_type=manual）→ 入"未分类"暂存区 → 调 http 获取器抓正文（默认 simple 后端，失败/正文过短自动升 DeepSeek Fetch）→ 跑语义分类 → 出现在分类树对应分支。已收藏过的 URL（canonical 规范化后命中 `locator_canonical`）自动合并，不重复建条目。
 
-Web UI 同等功能：首页输入框粘贴 URL 即可；浏览器 bookmarklet（在页面上拖动到书签栏）可把当前页面一键送入本地服务——no-cors POST 需带 token（query 参数 `?token=`，值取 `KNOWATLAS_WEB_TOKEN`）。手动入口与书签走完全相同的抓取 → 归类链路，不新增任何机制。
+Web UI 同等功能：首页「🛠 数据管理」输入框粘贴 URL 即可；浏览器 bookmarklet（同区的「📮 收藏小书签」拖到书签栏）在任意网页点击即跳回本地服务 `index.html?add=<当前页URL>`，页面自动展开收录框并复用手动收录链路提交（2026-10-21 第 49 批落地）。写凭据走同源会话 Cookie——令牌不进书签栏、任何第三方网页拿不到；本工具 CORS 不放宽，不做跨站 no-cors POST。手动入口与书签走完全相同的抓取 → 归类链路，不新增任何机制。
 
 ### 2.5 串联工作区（主题聚合 + 线索，0.2.0 第三十二批）
 

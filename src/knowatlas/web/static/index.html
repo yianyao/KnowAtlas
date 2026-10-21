@@ -110,6 +110,8 @@
     <button id="add-url-btn">🔗收录</button>
   </div>
   <div id="add-url-out" style="font-size:12px;color:#888;margin-bottom:8px;word-break:break-all"></div>
+  <a id="bookmarklet" href="#" style="display:block;margin-bottom:8px;font-size:13px"
+     title="把这个链接拖到浏览器书签栏；之后在任意网页点它，会跳回本地服务并自动收录当前页（走同 kadd 的抓取→归类链路）">📮 收藏小书签（拖到书签栏，任意网页一键收录）</a>
   <button id="staged-btn" style="width:100%;box-sizing:border-box;padding:6px;margin:8px 0">📥 暂存区（未分类条目）</button>
     <a href="#" id="rejected-link" style="display:block;margin-bottom:8px;font-size:13px">🗑️ 已舍弃条目</a>
     <a href="#" id="dead-link" style="display:block;margin-bottom:8px;font-size:13px">☠️ 失效链接（体检 dead）</a>
@@ -506,6 +508,12 @@ document.getElementById("add-url").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("add-url-btn").click();
 });
 
+// bookmarklet（第 49 批）：小书签跳转回本页 ?add=<当前页URL>，由启动接收逻辑
+// 复用上面的手动收录链路提交——不新增机制；写凭据走同源会话 Cookie，
+// 令牌不进书签栏，第三方网页拿不到。
+document.getElementById("bookmarklet").href =
+  `javascript:(function(){location.href='${location.origin}/index.html?add='+encodeURIComponent(location.href)})()`;
+
 document.getElementById("staged-btn").onclick = async (e) => {
   refreshCurrent = () => e.target.click();  // 写操作后留在本视图
   currentCat = null;
@@ -848,7 +856,19 @@ _emptyCb.onchange = (e) => {
   localStorage.setItem("knowatlas-show-empty", showEmptyCats ? "1" : "0");
   loadTree();
 };
-ensureSession().then(loadTree);
+// bookmarklet 落地接收（第 49 批）：?add=<url> → 展开数据管理区、填入手动收录框、
+// 自动提交（复用同一条链路与结果展示）。只收 http(s)；先清掉 query 参数防刷新重发。
+const _addQ = new URLSearchParams(location.search).get("add") || "";
+const _addOk = /^https?:\/\//i.test(_addQ);
+if (_addOk) {
+  history.replaceState(null, "", location.pathname);
+  document.getElementById("mgmt").open = true;
+  document.getElementById("add-url").value = _addQ;
+}
+ensureSession().then(() => {
+  loadTree();
+  if (_addOk) document.getElementById("add-url-btn").click();
+});
 </script>
 </body>
 </html>

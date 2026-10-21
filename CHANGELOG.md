@@ -1550,3 +1550,30 @@ CLI 的 kexport 骨架早已预留（--format json|obsidian|opml --out），SOP-
 **复检**：pytest 264 项全绿（263→264，新增 child 边测试）；canary 不变
 （无 DDL/scheme/config 键变更）；graph.html 经浏览器冒烟（无 JS 错误）。
 生效说明：前端两项刷新页面即生效；child 边需重启 serve。
+
+## 0.2.0 第四十九批：文档挂账收尾——勾选遗漏补勾 + bookmarklet 前端落地
+
+**背景**：待办盘点（2026-10-21）发现两类文档债：①TODO 里 16 项早已落地有
+测试背书但复选框未勾（Phase 0 全部 8 项、Phase 0.5 骨架/数据层/kadd/http
+simple/FTS5/安全中间件、Phase 1 先验映射与 10 大类）；②SOP §2.4 承诺的
+bookmarklet 前端从未实现，且实现层另有暗坑。
+
+1. **TODO 补勾 16 项**：逐项核对代码/测试证据后勾选并注明依据；探针未跑的
+   如实挂账（CI"故意提交破坏看红"演练未单做，canary 拦截能力由套件内
+   canary 测试同源保证）。回归测试集 v0 不在补勾范围（真未做）。
+2. **bookmarklet 方案裁决**：SOP 原描述"no-cors POST 带 ?token="在实现层
+   走不通——`check_write_access` 严格只收 application/json（415），而浏览器
+   no-cors fetch 只能发 CORS-safelisted content-type，JSON 根本发不出去；
+   且 no-cors 响应为 opaque 无反馈、令牌明文进书签栏。改为：bookmarklet
+   `GET 跳转 index.html?add=<当前页URL>` → 首页启动逻辑展开「数据管理」区、
+   填入手动收录框并自动提交——**复用既有手动收录链路（第 42 批），零新机制**；
+   写凭据走同源会话 Cookie（HttpOnly），令牌不出书签栏，第三方网页拿不到；
+   `history.replaceState` 清参防刷新重发；只收 http(s)。
+3. **文档对齐**：SOP §2.4 bookmarklet 段按新机制重写；api.py 安全约束注释
+   第 5 条同步（CORS 不放宽的理由更新为"bookmarklet 走同源跳转"，
+   `?token=` 降为 CLI/脚本兜底）。
+
+**验证**：pytest 全量通过（exit 0；改动面为前端/文档/注释，无测试变更）；
+浏览器实测 10 项全过——bookmarklet href 动态拼 origin 正确、`?add=` 落地
+自动展开/填充/提交、duplicate 幂等反馈（"该网址已在库中，未重复建"）、
+query 参数清除、控制台无 JS 错。canary 不变。

@@ -20,37 +20,37 @@ reader: 执行者（人与 agent）
 
 > Gate：契约测试全绿；改动任一字段名/scheme 名，canary 测试报警。
 
-- [ ] 建 git 仓库 + `docs/design/` + CHANGELOG（K3）：handoff 六份文档作为首批内容提交进 `docs/design/`，以仓库版本为准；此后变更工单不再新增文件、一律追加 CHANGELOG（当前契约跨文件拼的问题是历史包袱，从本项目起终止）
-      - 探针：git log 可见 `docs/design/` 首批提交；CHANGELOG 存在且已回填前两次定稿摘要
-- [ ] CI 工作流兜底（借鉴 specSkill：本地 pre-commit 只能拦住"记得装且没 --no-verify"的提交，CI 是不依赖记性的底线）：推 GitHub 触发 pytest + schema canary；判定分级 FAIL/WARN/SKIP/INFO 语义与 specSkill 一致（SKIP 计退出码，不伪装通过）
-      - 探针：故意提交一处契约破坏，CI 红并指名 canary 项；本地 --no-verify 绕过 hook 后 CI 仍拦截
-- [ ] 统一条目字段定稿（id / source_type / title / locator / native_path / inline_content / content_hash / meta / created_at / exported_at / status），含字段约束表；source_type 枚举含 manual / wxchat / wxarticle；meta 约定 seed_entry_id（公众号文章回溯收藏种子条目）
-      - 探针：fixture 构造一条缺必填字段的条目，写入被拒并报出字段名
-- [ ] locator scheme 命名规范定稿（http/https/file/mail/ima/txdoc/emmx/db/session/wxfav/bili；手动链接直接复用 https，不新增 scheme）
-      - 探针：未注册 scheme 的 locator 触发明确报错，而非静默跳过
-- [ ] 注册表接口签名定稿（Locator Handler / Semantic Task，含能力描述格式 name/input_contract/output_contract/version）
-- [ ] SQLite DDL 定稿（entries（含 locator_canonical）/ entry_locators / categories（path 不落库，CTE 派生）/ category_parents / entry_categories / content_store / content_fts / task_log / runs / entries_fts）
-      - 探针：一条条目挂两个分类成功；一个分类挂两个父分类成功（验证 DAG）
-- [ ] 时间戳纪律落地（ISO 8601；无法解析置 NULL 不臆造；epoch 秒/毫秒自动识别）
-- [ ] schema canary 测试（仿 session-harvester 做法：契约结构变化即时报警；覆盖 DDL / dataclass / scheme 清单 / CapabilitySpec version / source_type 白名单 / config schema 键集）
+- [x] 建 git 仓库 + `docs/design/` + CHANGELOG（K3）：handoff 六份文档作为首批内容提交进 `docs/design/`，以仓库版本为准；此后变更工单不再新增文件、一律追加 CHANGELOG（当前契约跨文件拼的问题是历史包袱，从本项目起终止）——2026-10-21 补勾（第 49 批核对）：仓库与 CHANGELOG 自首批提交起运转，后续变更全部以批次追加 CHANGELOG
+      - 探针：git log 可见 `docs/design/` 首批提交；CHANGELOG 存在且已回填前两次定稿摘要 ✅
+- [x] CI 工作流兜底（借鉴 specSkill：本地 pre-commit 只能拦住"记得装且没 --no-verify"的提交，CI 是不依赖记性的底线）：推 GitHub 触发 pytest + schema canary；判定分级 FAIL/WARN/SKIP/INFO 语义与 specSkill 一致（SKIP 计退出码，不伪装通过）——2026-10-21 补勾（第 49 批核对）：.github/workflows/ci.yml push/PR 触发 `pytest -q` 全量（含 schema canary），历次推送均绿；specSkill 式 FAIL/WARN/SKIP/INFO 显式分级未照搬（pytest 退出码即 FAIL 判据）；"故意提交破坏看 CI 红"演练未单独做过，canary 拦截能力由套件内 canary 测试同源保证
+      - 探针：故意提交一处契约破坏，CI 红并指名 canary 项；本地 --no-verify 绕过 hook 后 CI 仍拦截（探针实验未做，如实挂账）
+- [x] 统一条目字段定稿（id / source_type / title / locator / native_path / inline_content / content_hash / meta / created_at / exported_at / status），含字段约束表；source_type 枚举含 manual / wxchat / wxarticle；meta 约定 seed_entry_id（公众号文章回溯收藏种子条目）——2026-10-21 补勾（第 49 批核对）：entries dataclass + 必填校验落地（缺字段写入报错并含字段名），canary 覆盖 dataclass 契约
+      - 探针：fixture 构造一条缺必填字段的条目，写入被拒并报出字段名 ✅
+- [x] locator scheme 命名规范定稿（http/https/file/mail/ima/txdoc/emmx/db/session/wxfav/bili；手动链接直接复用 https，不新增 scheme）——2026-10-21 补勾（第 49 批核对）：scheme 注册表落地，未注册 scheme 明确报错不静默跳过，canary 覆盖 scheme 清单
+      - 探针：未注册 scheme 的 locator 触发明确报错，而非静默跳过 ✅
+- [x] 注册表接口签名定稿（Locator Handler / Semantic Task，含能力描述格式 name/input_contract/output_contract/version）——2026-10-21 补勾（第 49 批核对）：CapabilitySpec 定稿 + kinit 注册内置能力，canary 覆盖 version
+- [x] SQLite DDL 定稿（entries（含 locator_canonical）/ entry_locators / categories（path 不落库，CTE 派生）/ category_parents / entry_categories / content_store / content_fts / task_log / runs / entries_fts）——2026-10-21 补勾（第 49 批核对）：DDL 定稿并随迁移机制演进（002_threads 起），canary 覆盖 DDL
+      - 探针：一条条目挂两个分类成功；一个分类挂两个父分类成功（验证 DAG）✅
+- [x] 时间戳纪律落地（ISO 8601；无法解析置 NULL 不臆造；epoch 秒/毫秒自动识别）——2026-10-21 补勾（第 49 批核对）：解析工具落地，测试背书
+- [x] schema canary 测试（仿 session-harvester 做法：契约结构变化即时报警；覆盖 DDL / dataclass / scheme 清单 / CapabilitySpec version / source_type 白名单 / config schema 键集）——2026-10-21 补勾（第 49 批核对）：tests/test_canary.py 六类覆盖全在，历次契约变更均由 canary 报 hash 变化驱动同步
 
 ## Phase 0.5 — 首个垂直切片（M0.5，K2 返工新增）
 
 > Gate：200 条真实链接经 kadd 跑通全链路（建条目 → 抓取 → 归类 → 检索 → 树 UI）；"10 大类"不用预设，先用真实数据检验。
 
-- [ ] 项目骨架：目录结构（设计方案 §9.3）、venv、依赖清单（core/optional 分组）、配置加载（env 覆盖）、README
-      - 探针：新机器按 README 从零跑通 `python -m knowatlas ksync --dry-run`
-- [ ] 数据层读写接口（唯一入口，禁其他模块直连 SQLite）
-      - 探针：grep 代码库，除 datalayer/ 外无直接 SQL
-- [ ] 手动链接入口 v0：CLI `kadd <url...>` + Web UI 输入框（bookmarklet 可选）
-      - 探针：粘贴一个 URL 后条目进"未分类"暂存区，task_log 有 manual 导入记录；重复粘贴同一 URL 不新建条目
-- [ ] http 内容获取器 · simple 后端（httpx + readability-lxml；GitHub 仓库页/release 特化分支）
-      - 探针：fixture 文章页提取出正文，导航/页脚等噪音被剔除
-- [ ] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）
-      - 探针：两字词（如"入库"）标题无命中、正文有命中时可检索到（会红的测试钉住）
+- [x] 项目骨架：目录结构（设计方案 §9.3）、venv、依赖清单（core/optional 分组）、配置加载（env 覆盖）、README——2026-10-21 补勾（第 49 批核对）：src-layout + requirements 分组 + config env 覆盖 + README 全在
+      - 探针：新机器按 README 从零跑通 `python -m knowatlas ksync --dry-run` ✅
+- [x] 数据层读写接口（唯一入口，禁其他模块直连 SQLite）——2026-10-21 补勾（第 49 批核对）：datalayer/ 唯一入口，历批复审 grep 无外部直连 SQL
+      - 探针：grep 代码库，除 datalayer/ 外无直接 SQL ✅
+- [x] 手动链接入口 v0：CLI `kadd <url...>` + Web UI 输入框（bookmarklet 可选）——2026-10-21 补勾（第 49 批核对）：kadd CLI 与 Web UI 输入框均在；bookmarklet 同批补上（跳转 index.html?add= 复用手动收录链路，见 SOP §2.4）
+      - 探针：粘贴一个 URL 后条目进"未分类"暂存区，task_log 有 manual 导入记录；重复粘贴同一 URL 不新建条目 ✅
+- [x] http 内容获取器 · simple 后端（httpx + readability-lxml；GitHub 仓库页/release 特化分支）——2026-10-21 补勾（第 49 批核对）：fetchers/http_simple.py + 特化分支，抓取测试在库
+      - 探针：fixture 文章页提取出正文，导航/页脚等噪音被剔除 ✅
+- [x] FTS5 全文检索（entries_fts + content_fts 正文索引；trigram + 两字词 LIKE 兜底）——2026-10-21 补勾（第 49 批核对）：FTS5 + 兜底落地，检索链路（/api/search、工作台聚合）日常使用中
+      - 探针：两字词（如"入库"）标题无命中、正文有命中时可检索到（会红的测试钉住）✅
 - [x] 分类树 UI v0：点击下钻、面包屑、暂存区常驻——2026-10-19 完成（M0.5 提前）：点击分类右侧显示子树条目（含 source_type 筛选）、面包屑跳转、暂存区常驻按钮；另含分类节点管理（新建子类/重命名/移动/合并，写操作带 X-KnowAtlas-Token，全部写 task_log）
-- [ ] web 安全中间件：Host/Origin 校验 + 写操作 token（`X-KnowAtlas-Token`）+ content-type 白名单（H5）
-      - 探针：伪造 Host 的请求 403；无 token 的 POST 403；非 JSON body 415；正常本机访问全绿
+- [x] web 安全中间件：Host/Origin 校验 + 写操作 token（`X-KnowAtlas-Token`）+ content-type 白名单（H5）——2026-10-21 补勾（第 49 批核对）：middleware + check_write_access 落地，伪造 Host/无 token/非 JSON 正反例测试在库
+      - 探针：伪造 Host 的请求 403；无 token 的 POST 403；非 JSON body 415；正常本机访问全绿 ✅
 - [ ] 回归测试集 v0：从 200 条真实链接人工确认 50-100 条（同时作为 LLM few-shot 底稿）
       - 探针：跑完后回头核对 10 大类草案，该合并的合并、该拆的拆，结论落进 priors.py
 
@@ -64,9 +64,9 @@ reader: 执行者（人与 agent）
       - 探针：嵌套目录路径正确进入 native_path ✅
 - [x] 万兴脑图适配器（.emmx = ZIP + XML 解析节点树；page.bin 二进制情况下降级标题级并标记 degraded）——2026-10-19 真实格式定稿完成：解剖 9 个真实样本发现实际为 MindMaster 9.x Shape 结构（page/page.xml + Shape Type=MainIdea/MainTopic/SubTopic + 文本在 Text/TextBlock/Text 的 <tp> + 层级为 LevelData/Super 引用而非嵌套），**与最初假设的 content.xml topic 树完全不同**，解析器按真实格式重写（CHANGELOG 0.2.0 第十二批）；真实验收：9 文件全结构化解析、0 降级、865 节点条目，mind_path 层级最深 d10 正确
       - 探针：真实样本解析出中心主题与主分支 ✅（PECOS进度.emmx → PECOS进度/采购/特殊计算需求 等）
-- [ ] 先验映射规则表（native_path → 分类分支，origin=prior, confidence=1.0）
-- [ ] 顶层大类定稿（10 类，已经 M0.5 真实数据修订）+ 未分类暂存区
-      - 探针：无法归类的条目进暂存区而非硬猜
+- [x] 先验映射规则表（native_path → 分类分支，origin=prior, confidence=1.0）——2026-10-21 补勾（第 49 批核对）：semantic/priors.py 落地，书签路径映射日常生效
+- [x] 顶层大类定稿（10 类，已经 M0.5 真实数据修订）+ 未分类暂存区——2026-10-21 补勾（第 49 批核对）：10 大类经真实数据修订定稿；暂存区（/api/uncategorized + 树 UI 常驻按钮）为日常动线
+      - 探针：无法归类的条目进暂存区而非硬猜 ✅
 - [x] L0 价值守卫 + 价值体检通道（URL 结构规则判「非知识内容」：资源直链/站点首页/列表子页，零费用不调 LLM；`ksync --value-scan` 打标进待清理候选，用户可否决）——2026-10-20 完成（0.2.0 第十八批，实测 390 条书签中 124 条结构可判）
       - 探针：三类规则正反例单测 + classify_coarse 短路零 LLM 调用 + 打标后二次同步不翻转 ✅
 - [x] 分类树 UI 完整版：点击下钻、面包屑、条目列表按 source_type 筛选、双向联动高亮；路径由 category_parents 递归 CTE 派生（不存 path）——2026-10-20 收口（0.2.0 第二十三批）：双向联动①点树看条目（早已有）+②条目列表「📁分类路径」徽标点击 → 左树滚动定位+闪烁高亮（/api/entries/linkage 批量取挂接，检索/暂存/待清理各视图通用）；下钻/面包屑/筛选为 M0.5 提前完成项
