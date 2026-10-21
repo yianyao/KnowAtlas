@@ -403,12 +403,20 @@ scoped 思路）；工作台检索结果区也有「📈 时间线」tab。
 ## 7. 数据导出（SOP-E）
 
 ```bash
-.venv/Scripts/python -m knowatlas kexport --format json     # 全量 JSON（Schema 版本化）
-.venv/Scripts/python -m knowatlas kexport --format obsidian # 条目笔记 + 分类 MOC 笔记
-.venv/Scripts/python -m knowatlas kexport --format opml     # 书签类条目往返格式
+uv run python -m knowatlas kexport --format json     # 全量 JSON（Schema 版本化）
+uv run python -m knowatlas kexport --format obsidian # 条目笔记 + 分类 MOC 笔记
+uv run python -m knowatlas kexport --format opml     # 书签类条目往返格式
 ```
 
 导出是数据层的投影，不碰原始源。Obsidian 导出后可直接用现有笔记工具打开，作为防锁定出口。
+
+**各格式口径（0.2.0 第四十五批实现）**：
+
+| 格式 | 范围 | 正文策略 | 关键口径 |
+|------|------|---------|---------|
+| JSON | 全量（含 archived/rejected） | inline_content 内联；content_store 全量正文**不内联**（百万字符级，需要完整正文自行拷贝 content_store 目录） | schema_version 常量（当前 1.0）标记契约；categories 带 parents DAG、entries 带 locators/categories/meta；threads/thread_items 同投影 |
+| Obsidian | active 全量（含被守卫条目——防锁定优先；archived/rejected 不进） | 笔记正文 = inline_content（短摘要） | 条目笔记放主分类目录、所有父分类 MOC 都双链它（短链全局解析，多父不丢）；MOC 文件名=分类名（安全化避撞）； Obsidian 内重名分类的短链可能歧义（v0 已知限制） |
+| OPML | active 且 locator_canonical 以 http 开头的条目（书签类；file:///mail:///emmx:// 天然排除） | 无正文 | 分类 DAG 展平为 outline 树（多父重复出现）；未分类条目落「（未分类）」根；导出文件可被标准 XML 解析重建无损树（往返保真）；**OPML 导入回路后置**（作为 ksync 新源是独立批次） |
 
 ---
 

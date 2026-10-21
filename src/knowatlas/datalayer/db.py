@@ -286,6 +286,39 @@ class DataLayer:
                 (entry_id, locator, scheme, int(is_primary)),
             )
 
+    def all_categories_dag(self) -> list[dict[str, Any]]:
+        """全部分类的原始 DAG 投影（id/name/note/origin/created_at/parents/first_path）——
+        导出用（第四十五批）；多父分类在每个父的 children 展开由调用方按 parents 重建。"""
+        cats = {r["id"]: dict(r) for r in
+                self._conn.execute("SELECT * FROM categories").fetchall()}
+        parents: dict[str, list[str]] = {}
+        for r in self._conn.execute("SELECT category_id, parent_id FROM category_parents"):
+            parents.setdefault(r["category_id"], []).append(r["parent_id"])
+        paths = dict(self._all_paths())
+        return [
+            {"id": cid, "name": c["name"], "note": c["note"], "origin": c["origin"],
+             "created_at": c["created_at"], "parents": sorted(parents.get(cid, [])),
+             "path": paths.get(cid, c["name"])}
+            for cid, c in sorted(cats.items(), key=lambda kv: kv[1]["name"])]
+
+    def all_entry_categories(self) -> dict[str, list[str]]:
+        """全部条目→直挂分类 id 列表（按 rowid 序）——导出投影用（第四十五批）。"""
+        out: dict[str, list[str]] = {}
+        for r in self._conn.execute(
+                "SELECT entry_id, category_id FROM entry_categories ORDER BY rowid"):
+            out.setdefault(r["entry_id"], []).append(r["category_id"])
+        return out
+
+    def all_entry_locators(self) -> dict[str, list[str]]:
+        """全部附加 locator（entry_id → locator 列表，按 is_primary 倒序+插入序）。
+        导出投影用（第四十五批）；空 dict = 无任何附加 locator。"""
+        out: dict[str, list[str]] = {}
+        for r in self._conn.execute(
+                "SELECT entry_id, locator FROM entry_locators"
+                " ORDER BY is_primary DESC, rowid"):
+            out.setdefault(r["entry_id"], []).append(r["locator"])
+        return out
+
     def set_status(self, entry_ids: Sequence[str], status: str) -> None:
         if status not in STATUSES:
             raise ContractError(f"status 非法：{status}")

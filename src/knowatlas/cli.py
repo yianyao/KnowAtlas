@@ -195,7 +195,32 @@ def _unimplemented(name: str, phase: str) -> int:
 
 
 def _cmd_kexport(args: argparse.Namespace) -> int:
-    return _unimplemented("kexport", "Phase 5（M5）")
+    from pathlib import Path
+
+    from .config import load_config
+    from .pipeline import export as export_mod
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        out = Path(args.out)
+        if args.format == "json":
+            stats = export_mod.export_json(dl, out)
+        elif args.format == "obsidian":
+            stats = export_mod.export_obsidian(dl, out)
+        elif args.format == "opml":
+            stats = export_mod.export_opml(dl, out)
+        else:
+            print(f"ERROR 未知格式：{args.format}（支持 json|obsidian|opml）")
+            return EXIT_BUSINESS
+    finally:
+        dl.close()
+    print(f"OK 导出完成：{stats}")
+    if args.format == "json":
+        print("（inline_content 已内联；content_store 全量正文未内联——"
+              "需要完整正文请自行拷贝 content_store 目录）")
+    return _EXIT_OK
 
 
 def _cmd_kbackup(args: argparse.Namespace) -> int:

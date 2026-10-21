@@ -1356,3 +1356,69 @@ find_by_locator] → L0 价值守卫 judge_value 放行 → --expand-limit 截�
   bucket 2020 下钻 87 条 0.18s；子树范围隔离正常
 - canary 六面不变（无 DDL/枚举/配置键变化）；pytest 243 项全绿（+7）；
   五个变更文件 UTF-8 无 BOM + LF
+
+## 0.2.0 第四十五批：三种导出格式（M5 Gate 前半）——JSON/Obsidian/OPML
+
+**背景**：TODO Phase 5「导出与运维」Gate 前半「三种导出格式验证通过」。
+CLI 的 kexport 骨架早已预留（--format json|obsidian|opml --out），SOP-E 已
+约定形态；本批把三个 stub 实现落地。
+
+**设计**
+
+- 导出是数据层的**投影**，不碰原始源（SOP-E 纪律）；
+- JSON 走 schema 版本化契约（schema_version 常量，未来破坏性变更靠它分流）；
+- 正文策略：JSON 内联 inline_content（短摘要，检索摘要口径），content_store
+  全量正文不内联（百万字符级，用户按需自行拷贝目录——SOP-E 注明）；
+- OPML「书签类」判定 = locator_canonical 以 http 开头（知识源自网页的确定性
+  判据，可解释；file:///mail:///emmx:// 天然排除）；
+- OPML 导入（反向回路）后置——本批验证格式往返保真（导出文件可被标准 XML
+  解析重建无损树），作为 ksync 新源是独立批次；
+- Obsidian 条目笔记放**主分类**目录，但所有父分类 MOC 都双链它（Obsidian
+  短链全局解析，多父不丢）。
+
+**变更**
+
+1. **db.py**：新增 `all_entry_locators() -> dict[str, list[str]]`（一次查询拿全
+   附加 locator，供导出投影；公开方法，不摸 _conn）。
+2. **新增 pipeline/export.py**（纯投影零 LLM 零网络）：
+   - `export_json(dl, out) -> stats`：schema_version/generator/exported_at/
+     counts/categories（含 parents DAG）/entries（含 locators+categories+
+     meta+inline_content）/threads/conv_messages；
+   - `export_obsidian(dl, out_dir) -> stats`：条目笔记（frontmatter + 正文 +
+     `[[MOC]]` 回链）+ 每分类 MOC（`[[条目]]` 双链 + 子分类链接）；文件名
+     安全化（去 `\/:*?"<>|`、截 80、重名加 id 后缀）；
+   - `export_opml(dl, out) -> stats`：分类 DAG 展平为 outline 树（多父重复
+     出现），叶子 = http canonical 条目（htmlUrl + title）。
+3. **cli.py**：_cmd_kexport 落地——三格式分发 + 统计打印（目录自动建）。
+4. **SOP**：§7 补正文策略与 OPML 书签类判定说明。
+
+**复检探针**（实现后逐条命中）
+
+- JSON 含 schema_version 且 counts 与库对账；entries 带 locators/categories/meta（探针①）
+- Obsidian：每分类有 MOC；条目笔记有 frontmatter + `[[MOC]]` 回链；文件名
+  安全化；多父条目在所有父 MOC 出现（探针②）
+- OPML：XML 可解析；outline 嵌套=分类层级；叶子数=http 条目数；导出文件
+  解析重建树无损（往返保真）（探针③）
+- CLI 三格式真跑 tmp 目录成功；pytest 全绿；变更文件 UTF-8 无 BOM + LF
+
+**复检结果（2026-10-21，全命中）**
+
+- tests/test_export.py 5 项：探针① JSON（schema_version=1.0 + counts 对账
+  + entries 带 locators/categories/meta/inline_content + archived 在全量投影
+  + 分类 parents DAG）/ 探针② Obsidian（MOC 在各分类目录、条目 frontmatter +
+  回链全部父 MOC、多父条目两 MOC 都列、file/mail 条目在 vault、archived 不在、
+  文件名安全化重名避撞）/ 探针③ OPML（XML 可解析、嵌套=层级、e1 三路径多父
+  不丢、叶子=http 条目数、往返重建无损）/ CLI 三格式真跑 + 未知格式 EXIT_BUSY
+- 工单即时增补：db.py 增加 all_categories_dag / all_entry_categories 两个公开
+  投影方法（原计划只有 all_entry_locators——JSON/Obsidian/OPML 都需要分类 DAG
+  与条目-分类映射，公开方法不摸 _conn）
+- 开发期修三个真 bug：①`_EXIT_ERROR` 常量不存在（真名 EXIT_BUSINESS，NameError
+  直接暴露）；②Obsidian MOC 只列主分类条目——多父挂接的另一侧丢失（违背工单
+  「所有父 MOC 都双链它」承诺，改 MOC 列全部直挂、笔记目录仍用主分类）；
+  ③修②时把 cids 移出笔记循环导致 parent_links/tags 泄漏成最后一条目的分类
+  （Python 循环变量泄漏的经典坑，测试抓出）
+- 真实库副本冒烟：JSON 6976 条全量（15 分类，schema 1.0）；Obsidian 1837 篇
+  笔记 + 15 MOC（1852 个 md）；OPML 161 个 http canonical 书签叶（真实库
+  bookmark 源中 locator_canonical 为空的条目天然排除，口径可解释）
+- canary 六面不变（无 DDL/枚举/配置键变化）；pytest 248 项全绿（+5）；
+  五个变更文件 UTF-8 无 BOM + LF
