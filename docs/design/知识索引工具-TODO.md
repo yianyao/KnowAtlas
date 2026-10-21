@@ -208,10 +208,25 @@ reader: 执行者（人与 agent）
 
 > Gate：三种导出格式验证通过；备份恢复演练一次成功；MCP 端点可被 agent 调用。
 
-- [ ] JSON 全量导出（Schema 版本化，含 schema 版本字段）
-- [ ] Obsidian vault 导出（条目笔记 + 分类 MOC 笔记）
-      - 探针：导出目录可直接被 Obsidian 打开且双链可用
-- [ ] OPML 导出（书签类条目往返）
+- [x] JSON 全量导出（Schema 版本化，含 schema 版本字段）——
+      schema_version=1.0 常量；全量含 archived/rejected；entries 带
+      locators/categories/meta + inline_content 内联（content_store 全量正文
+      不内联，SOP-E 注明自行拷贝）；categories 带 parents DAG + threads 同投影
+      - 探针：schema_version 存在且 counts 对账 ✅；关联完整（locators/categories/meta）✅
+- [x] Obsidian vault 导出（条目笔记 + 分类 MOC 笔记）——
+      条目笔记（frontmatter + inline_content + 回链全部父 MOC）放主分类目录；
+      MOC=分类名（安全化避撞）列全部直挂条目 + 子分类链接；active 全量
+      （防锁定优先），archived/rejected 不进
+      - 探针：每分类有 MOC ✅；条目笔记有 frontmatter + [[MOC]] 回链 ✅；
+        多父条目在所有父 MOC 出现 ✅；文件名安全化重名不互覆 ✅；
+        导出目录可直接被 Obsidian 打开且双链可用（短链全局解析；重名分类
+        短链歧义为 v0 已知限制）✅
+- [x] OPML 导出（书签类条目往返）——
+      书签类=active 且 locator_canonical 以 http 开头（可解释判据）；
+      分类 DAG 展平 outline 树（多父重复出现），未分类落「（未分类）」根；
+      导出文件可被标准 XML 解析重建无损树（往返保真）
+      - 探针：XML 可解析 ✅；outline 嵌套=分类层级 ✅；叶子数=http 条目数 ✅；
+        往返重建无损 ✅；OPML 导入回路后置（ksync 新源独立批次）
 - [ ] 自动备份（同步前 VACUUM INTO 快照，保留 10 份轮换）+ 恢复演练
       - 探针：WAL 开启状态下从快照恢复（含删 -wal/-shm）后条目数与快照时一致
 - [ ] MCP 只读查询端点（检索 + 树遍历，供 agent 查询）
