@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -450,13 +451,17 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     async def recategorize(entry_id: str, request: Request):
         """人工校正：条目改挂目标分类（按路径，不存在则自动建，origin=manual）。
 
-        机器来源旧分类被摘除；人工校正（manual）永不覆盖（H3）。
+        默认替换语义：全部旧挂接摘除（含旧 manual——"manual 永不覆盖"约束
+        的是机器来源 H3，不约束人工自己的后续校正）。
+        keep_existing=true（多父挂接，第五十二批）：只追加新挂接不摘旧——
+        一条知识本来就常属多个分支（DAG 设计初衷）。
         """
         guard = check_write_access(request, cfg)
         if guard is not None:
             return guard
         body = await request.json()
         target_path = str(body.get("target_path", "")).strip().strip("/")
+        keep_existing = bool(body.get("keep_existing", False))
         if not target_path:
             return JSONResponse({"error": {"code": "BAD_REQUEST",
                                            "message": "缺少 target_path（如 技术开发/前端）"}},
@@ -466,17 +471,67 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
                                 status_code=404)
         old_links = dl.get_entry_categories(entry_id)
-        old_paths = [l["path"] for l in old_links if l["origin"] != "manual"]
+        old_paths = [l["path"] for l in old_links]
         cid = ensure_category_path(dl, target_path, "manual")
-        # 人工迁移语义：替换全部旧挂接（含旧 manual）——"manual 永不覆盖"约束的是
-        # 机器来源（H3），不约束人工自己的后续校正
-        for link in old_links:
-            if link["category_id"] != cid:
-                dl.detach_category(entry_id, link["category_id"])
+        if not keep_existing:
+            # 人工迁移语义：替换全部旧挂接（含旧 manual）
+            for link in old_links:
+                if link["category_id"] != cid:
+                    dl.detach_category(entry_id, link["category_id"])
+        else:
+            dl.detach_category(entry_id, cid)  # 幂等防重复挂接
         dl.attach_category(entry_id, cid, 1.0, "manual", "web-recategorize")
         dl.log_task(_now_iso(), "web", "recategorize", entry_id,
-                    {"old_paths": [l["path"] for l in old_links], "new_path": target_path})
+                    {"old_paths": old_paths, "new_path": target_path,
+                     **({"keep_existing": True} if keep_existing else {})})
         return {"entry_id": entry_id, "category_path": target_path}
+
+    @app.post("/api/entries/batch-recategorize")
+    async def batch_recategorize(request: Request):
+        """批量人工校正（第五十二批）：多个条目一起改挂/追加挂到目标路径。
+
+        复现性纪律与单条一致：每个条目独立写一条 task_log
+        （action=batch_recategorize，detail.batch_id 串联同一批）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        target_path = str(body.get("target_path", "")).strip().strip("/")
+        keep_existing = bool(body.get("keep_existing", False))
+        entry_ids = [str(x) for x in (body.get("entry_ids") or []) if str(x)]
+        if not target_path:
+            return JSONResponse({"error": {"code": "BAD_REQUEST",
+                                           "message": "缺少 target_path（如 技术开发/前端）"}},
+                                status_code=400)
+        if not entry_ids:
+            return JSONResponse({"error": {"code": "BAD_REQUEST",
+                                           "message": "缺少 entry_ids（条目 id 数组）"}},
+                                status_code=400)
+        cid = ensure_category_path(dl, target_path, "manual")
+        batch_id = uuid.uuid4().hex[:8]
+        done: list[str] = []
+        skipped: list[dict] = []
+        for eid in dict.fromkeys(entry_ids):  # 去重保序
+            entry = dl.get_entry(eid)
+            if entry is None:
+                skipped.append({"entry_id": eid, "reason": "not_found"})
+                continue
+            old_paths = [l["path"] for l in dl.get_entry_categories(eid)]
+            if not keep_existing:
+                for link in dl.get_entry_categories(eid):
+                    if link["category_id"] != cid:
+                        dl.detach_category(eid, link["category_id"])
+            else:
+                dl.detach_category(eid, cid)  # 幂等防重复挂接
+            dl.attach_category(eid, cid, 1.0, "manual", f"web-batch:{batch_id}")
+            dl.log_task(_now_iso(), "web", "batch_recategorize", eid,
+                        {"old_paths": old_paths, "new_path": target_path,
+                         "batch_id": batch_id,
+                         **({"keep_existing": True} if keep_existing else {})})
+            done.append(eid)
+        return {"batch_id": batch_id, "done": done, "skipped": skipped,
+                "category_path": target_path}
 
     @app.post("/api/entries/{entry_id}/confirm-category")
     async def confirm_category(entry_id: str, request: Request):

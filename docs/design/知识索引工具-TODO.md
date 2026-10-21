@@ -71,8 +71,8 @@ reader: 执行者（人与 agent）
       - 探针：三类规则正反例单测 + classify_coarse 短路零 LLM 调用 + 打标后二次同步不翻转 ✅
 - [x] 分类树 UI 完整版：点击下钻、面包屑、条目列表按 source_type 筛选、双向联动高亮；路径由 category_parents 递归 CTE 派生（不存 path）——2026-10-20 收口（0.2.0 第二十三批）：双向联动①点树看条目（早已有）+②条目列表「📁分类路径」徽标点击 → 左树滚动定位+闪烁高亮（/api/entries/linkage 批量取挂接，检索/暂存/待清理各视图通用）；下钻/面包屑/筛选为 M0.5 提前完成项
       - 探针：移动分类位置后，其子树路径派生正确（无级联重写）✅（CTE 派生 + 多父 DAG 测试在库）
-- [ ] 人工校正 UI：改类/合并/移动/多父挂接，全部写 task_log
-      - 探针：任意一次校正可在 task_log 复现前后值
+- [x] 人工校正 UI：改类/合并/移动/多父挂接，全部写 task_log——2026-10-21 收口（第五十二批）：分类侧管理（新建子类/重命名/移动/合并）随 M0.5 树 UI 交付；条目侧本批补齐——单条改类弹窗（早有）+ **多父挂接**（recategorize keep_existing=true 只追加不摘旧，对话框勾选）+ **批量改类**（底部浮动条多选模式，POST batch-recategorize 逐条 task_log、batch_id 串联）+ **拖拽**（条目拖到左树节点=改挂该分类，预填路径）；task_log 统一记 old_paths/new_path（含模式），任意校正可复现前后值
+      - 探针：任意一次校正可在 task_log 复现前后值 ✅（tests/test_corrections.py：keep/replace/batch/多父/复现性 5 项）
 
 ## Phase 2 — 内容层（M2）
 

@@ -1663,3 +1663,38 @@ exact 0/prefix 0/miss 4，**暴露两条规则误判**（GooglePythonStyleGuide
    （GET /api/session 存 Cookie → 带 Cookie POST）+ 查库为准；本轮
    curl 全链路 200 + regress_cases 落库（log_seed 覆盖为 manual，
    改主意语义正确）+ task_log 出现 confirm_regress 记录。
+
+## 0.2.0 第五十二批：人工校正 UI 收口（Phase 1 最后一项，TODO 全勾）
+
+**交付**（Phase 1 人工校正 UI 的条目侧三能力；分类侧管理 M0.5 已有）：
+
+1. **多父挂接**：recategorize 增 `keep_existing`（默认 false 保持替换
+   语义不变）——true 只追加新挂接不摘旧（幂等防重复：先 detach 目标类
+   再 attach）；move-dialog 增「保留原挂接」勾选。一条知识挂多个分支
+   （DAG 设计初衷）从此是 UI 一等能力。
+2. **批量改类**：POST /api/entries/batch-recategorize {entry_ids,
+   target_path, keep_existing?}——逐条复用单条语义；每条独立 task_log
+   （action=batch_recategorize，detail.batch_id 串联同一批，old_paths
+   记前值）；not_found 跳过进 skipped、entry_ids 去重保序。
+   **复现性纪律与单条一致**（TODO 探针）。
+3. **前端**：
+   - 多选模式：底部浮动条（多选开关/已选 N/移到…/取消）——勾「多选」
+     body.multiselect → 条目行注入复选框（**跨视图累计**：检索/暂存/
+     待清理/词云切面全通用，bindEntryButtons 尾部统一注入不碰 8 处模板）；
+     视图刷新后按 selection Set 回填勾选态。
+   - 拖拽：条目行 draggable（拖选择集或单条，dataTransfer 自定义类型
+     text/knowatlas-ids）→ 树节点 drop（dragover 虚线提示）→ 弹窗预填
+     目标路径。
+   - 弹窗单/批统一：moveTargets 数组，>1 走 batch 端点；skipped 有值时
+     alert 提示跳过数。
+4. task_log 复现性补全：recategorize 的 old_paths 原来只记非 manual 挂接
+   （替换语义下旧 manual 路径丢失）——改为记全部旧挂接，替换/追加两种
+   模式均可完整复现。
+
+**验证**：pytest 279 全绿（274→279：test_corrections.py 5 项——keep
+追加语义/默认替换/批量 task_log 复现性+去重+幽灵跳过/批量多父/400+403
+校验）；浏览器实测多选全流程 9 步通过（浮动条、复选框注入、计数、批量
+弹窗、提交后条目出现在目标分类、模式退出清空）；拖拽链路代码简单
+（标准 HTML5 DnD）留人工日常检验；serve 已重启至本批代码（PID 18228）。
+
+**Phase 1 至此全部收口**（书签/文件夹/脑图三源 + 树 UI + 校正 UI 全勾）。

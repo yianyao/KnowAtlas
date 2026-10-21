@@ -62,6 +62,18 @@
               background: transparent; color: #4a9eff; font-size: 11px;
               padding: 0 6px; margin-left: 6px; display: none; }
   .entry:hover .confirm-btn { display: inline-block; }
+  /* 人工校正：拖拽落点提示 + 多选模式（第五十二批） */
+  .tree-node > .row > .name.drop-hint { outline: 2px dashed #4a9eff; outline-offset: 1px; }
+  .entry { cursor: default; }
+  .entry .sel-cb { display: none; margin-right: 6px; vertical-align: -2px; }
+  body.multiselect .entry .sel-cb { display: inline-block; }
+  #bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+              background: Canvas; border: 1px solid #8888; border-radius: 8px;
+              padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+              box-shadow: 0 2px 10px #0003; z-index: 50; font-size: 13px; }
+  #bulk-bar button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                     background: transparent; color: inherit; padding: 2px 10px; }
+  #bulk-bar button.primary { border-color: #4a9eff88; color: #4a9eff; }
   #filter { margin: 8px 0; }
   /* 词云视图（第四十三批） */
   .cloud-scope { font-size: 13px; margin: 4px 0 10px; }
@@ -127,11 +139,20 @@
   </label>
   <div id="tree">加载中…</div>
 </aside>
+<div id="bulk-bar" style="display:none">
+  <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
+  <span id="ms-count">已选 0</span>
+  <button id="ms-move" class="primary">移到…</button>
+  <button id="ms-cancel">取消</button>
+</div>
 <dialog id="move-dialog">
   <form method="dialog" id="move-form">
     <div id="move-title" style="font-weight:600"></div>
     <input id="move-input" list="catlist" placeholder="输入或从列表选择分类路径" autocomplete="off">
     <datalist id="catlist"></datalist>
+    <label style="display:block;font-size:12px;margin-top:6px;cursor:pointer">
+      <input type="checkbox" id="move-keep" style="vertical-align:-2px"> 保留原挂接（多父挂接——同一知识挂到多个分支）
+    </label>
     <div class="btns">
       <button type="button" id="move-cancel">取消</button>
       <button type="submit" id="move-ok">确定</button>
@@ -202,19 +223,28 @@ async function loadTree() {
     Object.keys(pathToId).map(p => `<option value="${p}">`).join("");
   const box = document.getElementById("tree");
   box.textContent = "";
-  const render = (nodes, parent) => {
+  const render = (nodes, parent, prefix) => {
     for (const n of nodes) {
       if (n.count === 0 && !showEmptyCats) continue;  // 空枝默认隐藏（count 缺失≠空，防旧后端误杀）
       const div = document.createElement("div");
       div.className = "tree-node";
       const row = document.createElement("div"); row.className = "row";
       const name = document.createElement("span");
+      const path = prefix ? `${prefix}/${n.name}` : n.name;
       name.className = "name" + (n.id === currentCat ? " active" : "")
                      + (n.count === 0 ? " empty" : "");
       if (n.count === 0) name.title = "该分类（含子分类）下暂无 active 条目";
       name.textContent = n.name;
       name.onclick = () => showCategory(n.id);
       nodeEls[n.id] = name;  // 双向联动②：供条目徽标点击时定位
+      name.dataset.path = path;  // 拖拽落点（第五十二批）：条目拖到节点=改挂该分类
+      name.addEventListener("dragover", e => { e.preventDefault(); name.classList.add("drop-hint"); });
+      name.addEventListener("dragleave", () => name.classList.remove("drop-hint"));
+      name.addEventListener("drop", e => {
+        e.preventDefault(); name.classList.remove("drop-hint");
+        const ids = JSON.parse(e.dataTransfer.getData("text/knowatlas-ids") || "[]");
+        if (ids.length) opRecategorize(ids, "", path);
+      });
       const ops = document.createElement("span"); ops.className = "ops";
       const mk = (label, title, fn) => {
         const b = document.createElement("button");
@@ -228,10 +258,10 @@ async function loadTree() {
       row.appendChild(name); row.appendChild(ops);
       div.appendChild(row);
       parent.appendChild(div);
-      render(n.children, div);
+      render(n.children, div, path);
     }
   };
-  render(data.tree, box);
+  render(data.tree, box, "");
   if (!data.tree.length) box.innerHTML = "<small>暂无分类；用 kadd / ksync 收录第一批条目。</small>";
 }
 
@@ -332,22 +362,78 @@ async function attachCatChips() {
       b.textContent = "✓已确认"; setTimeout(() => { b.textContent = "✓"; }, 1200);
     } else if (res.error) alert("确认失败：" + res.error.message);
   });
+  // 人工校正（第五十二批）：条目行统一注入多选框 + 拖拽源——所有生成
+  // .entry[data-id] 的视图（分类/暂存/检索/词云切面等）自动生效。
+  document.querySelectorAll("#hits .entry[data-id]").forEach(d => {
+    if (!d.querySelector(".sel-cb")) d.insertAdjacentHTML("afterbegin",
+      `<input type="checkbox" class="sel-cb" data-id="${d.dataset.id}" title="加入多选">`);
+    d.draggable = true;
+    d.ondragstart = (e) => {
+      // 已有选择集且当前条目在集内 → 拖整个选择集；否则拖单条
+      const checked = currentSelection();
+      const ids = checked.includes(d.dataset.id) ? checked : [d.dataset.id];
+      e.dataTransfer.setData("text/knowatlas-ids", JSON.stringify(ids));
+      e.dataTransfer.effectAllowed = "move";
+    };
+    const cb = d.querySelector(".sel-cb");
+    cb.checked = selection.has(d.dataset.id);
+    cb.onchange = () => { cb.checked ? selection.add(d.dataset.id) : selection.delete(d.dataset.id); updateBulkBar(); };
+  });
 }
-let moveTargetId = null;
-function opRecategorize(entryId, title) {
-  moveTargetId = entryId;
-  document.getElementById("move-title").textContent = `把「${title.slice(0, 60)}」移到：`;
-  document.getElementById("move-input").value = "";
+// 多选模式（第五十二批）：selection 跨视图保留（Set 全局）；勾「多选」开
+// 模式（body.multiselect → 条目行显示 checkbox），「移到…」批量改挂，
+// 「取消」清空并关模式。视图刷新后 checkbox 由 bindEntryButtons 按集回填。
+const selection = new Set();
+const currentSelection = () => [...selection];
+function updateBulkBar() {
+  document.getElementById("ms-count").textContent = `已选 ${selection.size}`;
+}
+function clearSelection() {
+  selection.clear();
+  document.querySelectorAll(".sel-cb").forEach(cb => cb.checked = false);
+  updateBulkBar();
+}
+document.getElementById("ms-toggle").onchange = (e) => {
+  document.body.classList.toggle("multiselect", e.target.checked);
+  if (!e.target.checked) clearSelection();
+};
+document.getElementById("ms-cancel").onclick = () => {
+  document.getElementById("ms-toggle").checked = false;
+  document.body.classList.remove("multiselect");
+  clearSelection();
+};
+document.getElementById("ms-move").onclick = () => {
+  if (!selection.size) { alert("先勾选条目（勾上「多选」后条目前会出现复选框）"); return; }
+  opRecategorize(currentSelection(), "");
+};
+// 改类对话框（第五十二批重做）：单条（条目行「移」/拖拽 drop）与批量
+// （多选模式浮动条）共用——moveTargets 为条目 id 数组；keep 勾选=多父挂接
+// （只追加不摘旧）；prefill 预填目标路径（拖拽场景=拖到的树节点路径）。
+let moveTargets = [];
+function opRecategorize(entryIds, title, prefill = "") {
+  moveTargets = Array.isArray(entryIds) ? entryIds : [entryIds];
+  const label = moveTargets.length > 1 ? `${moveTargets.length} 条条目` : `「${String(title).slice(0, 60)}」`;
+  document.getElementById("move-title").textContent = `把 ${label} 移到：`;
+  document.getElementById("move-input").value = prefill;
+  document.getElementById("move-keep").checked = false;
   document.getElementById("move-dialog").showModal();
 }
 document.getElementById("move-cancel").onclick = () => document.getElementById("move-dialog").close();
 document.getElementById("move-form").onsubmit = async (e) => {
   e.preventDefault();
   const p = document.getElementById("move-input").value.trim().replace(/^\/+|\/+$/g, "");
-  if (!p || !moveTargetId) return;
-  const res = await writeJSON(`/api/entries/${moveTargetId}/recategorize`, { target_path: p });
+  const keep = document.getElementById("move-keep").checked;
+  if (!p || !moveTargets.length) return;
+  let res;
+  if (moveTargets.length === 1) {
+    res = await writeJSON(`/api/entries/${moveTargets[0]}/recategorize`, { target_path: p, keep_existing: keep });
+  } else {
+    res = await writeJSON("/api/entries/batch-recategorize", { entry_ids: moveTargets, target_path: p, keep_existing: keep });
+  }
   document.getElementById("move-dialog").close();
   if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.skipped && res.skipped.length) alert(`完成 ${res.done.length} 条；跳过 ${res.skipped.length} 条（条目不存在）`);
+  clearSelection();
   // 留在当前视图，只局部刷新（不跳转）
   refreshCurrent ? refreshCurrent() : loadTree();
 }
