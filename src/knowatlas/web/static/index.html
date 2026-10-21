@@ -79,6 +79,14 @@
                 background: transparent; color: inherit; font-size: 11px;
                 padding: 0 4px; }
   .crumb { margin-bottom: 10px; }
+  /* 空状态首页（大类快捷入口） */
+  #home-board { padding: 24px 4px; }
+  #home-board .hb-title { font-size: 15px; font-weight: 600; margin-bottom: 14px; }
+  #home-board .hb-cats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; max-width: 720px; }
+  #home-board .hb-cats button { cursor: pointer; padding: 8px 14px; border-radius: 6px;
+    border: 1px solid #8886; background: transparent; color: inherit; font-size: 13px; }
+  #home-board .hb-cats button:hover { border-color: #4a9eff; color: #4a9eff; }
+  #home-board .hb-cats button .n { opacity: .55; font-size: 11px; margin-left: 6px; }
   .crumb span { cursor: pointer; color: #4a9eff; }
   .entry { margin: 8px 0; padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
   .entry a { font-weight: 600; }
@@ -203,7 +211,16 @@
       <option value="bookmark">书签</option>
       <option value="manual">手动</option>
     </select>
-    <div id="hits" class="entry-host"><small>点击左侧分类查看条目；或输入关键词全文检索。</small></div>
+    <!-- 空状态首页（2026-10-22 用户抽检反馈「啥也没有」）：左栏默认收起（58 批纪律）时
+         主区给大类快捷入口兜底——点击展开左栏并进入该类；任何检索/分类交互后整板被
+         renderEntries 覆盖，不再复活（与原一行提示同生命周期） -->
+    <div id="hits" class="entry-host">
+      <div id="home-board">
+        <div class="hb-title">🧭 从这里开始</div>
+        <div id="hb-cats" class="hb-cats"><small>分类加载中…</small></div>
+        <small>或在上方输入关键词回车检索；左上 ▶ 展开完整分类树（快捷键 [ ）。</small>
+      </div>
+    </div>
   </section>
   <section id="view-graph" class="view" hidden>
     <iframe id="graph-frame" data-src="/graph.html" title="知识关系图"></iframe>
@@ -368,6 +385,28 @@ async function loadTree() {
   };
   render(data.tree, box, "");
   if (!data.tree.length) box.innerHTML = "<small>暂无分类；用 kadd / ksync 收录第一批条目。</small>";
+  return data;  // 供启动时空状态首页取大类清单（一次请求两用）
+}
+
+// 空状态首页：左栏默认收起时的主区兜底（见 HTML 内注释）；只在启动渲染一次，
+// 之后 renderEntries 整体覆盖 #hits，本板自然消失
+function renderHomeBoard(topNodes) {
+  const cats = document.getElementById("hb-cats");
+  if (!cats) return;   // 已被检索/分类结果覆盖
+  if (!topNodes.length) { cats.innerHTML = "<small>暂无分类；用顶部「＋ 收录」或 kadd 收录第一批条目。</small>"; return; }
+  const total = topNodes.reduce((s, n) => s + (n.count || 0), 0);
+  document.getElementById("home-board").querySelector(".hb-title").textContent =
+    `🧭 从这里开始——已归类 ${total} 条`;
+  cats.innerHTML = "";
+  for (const n of topNodes) {
+    if (n.count === 0 && !showEmptyCats) continue;
+    const b = document.createElement("button");
+    b.innerHTML = `${n.name}<span class="n">${n.count || 0}</span>`;
+    b.title = `${n.name}：子树 ${n.count || 0} 条，点击进入`;
+    b.onclick = () => { sideApply(false); showCategory(n.id); };  // 自动展开左栏（纪律不回退）
+    cats.appendChild(b);
+  }
+  if (!cats.children.length) cats.innerHTML = "<small>各大类暂无条目；先收录。</small>";
 }
 
 async function opAddChild(n) {
@@ -1283,8 +1322,9 @@ document.addEventListener("keydown", e => {
 sideApply(localStorage.getItem("knowatlas-side") !== "show");  // 默认收起；显式展开过的用户保持
 
 // 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
-ensureSession().then(() => {
-  loadTree();
+ensureSession().then(async () => {
+  const treeData = await loadTree();
+  renderHomeBoard(treeData ? treeData.tree : []);
   if (_addOk) document.getElementById("add-url-btn").click();
 });
 </script>

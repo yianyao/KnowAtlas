@@ -223,7 +223,7 @@ function render(data, crumbText, opts = {}) {
     }
     return {
       id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
-      reasons: n.reasons || [], path: n.path || "",
+      reasons: n.reasons || [], path: n.path || "", _ovText: n._ovText || null,
       symbolSize: size,
       x, y,
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
@@ -237,7 +237,8 @@ function render(data, crumbText, opts = {}) {
                     || (n.kind === "entry" && data.nodes.length <= 50),
                fontSize: n.kind === "category" ? 13 : 10,
                fontWeight: isFocus ? "bold" : "normal",
-               color: n.ctx ? "#6b7f94" : undefined },
+               color: n.ctx ? "#6b7f94" : undefined,
+               formatter: p => p.data._ovText || p.data.name },
     };
   });
   const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
@@ -287,6 +288,12 @@ async function showOverview(push = true) {
     render({ nodes: [], links: [] }, "大类总览");
     return;
   }
+  // 总览气泡带子树条目数（2026-10-22 用户抽检反馈：层级模式总览只有光秃秃的大类名，
+  // 初始信息量近零）——经 _ovText 标记透传（render 会逐字段重建节点，直接设 label
+  // 会被丢弃），无标记的子树/放射视图节点在 formatter 里回退原名，零影响
+  for (const n of data.nodes)
+    if (n.kind === "category" && typeof n.value === "number")
+      n._ovText = `${n.name} · ${n.value}`;
   render(data, "大类总览——点大类下钻，或输入关键字搜索");
   if (push) { nav.length = 0; nav.push({ label: "大类总览", load: showOverview }); renderBread(); }
 }
