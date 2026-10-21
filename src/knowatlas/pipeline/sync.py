@@ -489,7 +489,7 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              limit: int | None = None, fetch_limit: int | None = None,
              reclassify: bool = False, value_scan: bool = False,
              dedupe_scan: bool = False,
-             freshness_scan: bool = False) -> dict[str, Any]:
+             freshness_scan: bool = False, errata_scan: bool = False) -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
@@ -515,6 +515,12 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         return {"run_id": run_id, **stats}
     if freshness_scan:
         stats["freshness_scan"] = _freshness_scan(dl, dry_run)
+        dl.finish_run(run_id, stats)
+        return {"run_id": run_id, **stats}
+    if errata_scan:
+        from .errata import run_errata_scan
+
+        stats["errata_scan"] = run_errata_scan(dl, dry_run)
         dl.finish_run(run_id, stats)
         return {"run_id": run_id, **stats}
 

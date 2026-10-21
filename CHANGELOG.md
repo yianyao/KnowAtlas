@@ -2137,3 +2137,65 @@ javascript），现有 showSubtree 子孙分类+挂接条目混显+祖先链，�
       （test_sweep_expired_unique_content_recycled / test_sweep_shared_content_
       only_decrements / test_ksync_runs_sweep）；
 - [ ] 全量 suspect LLM 判定与真实库删除——**等用户裁决**（模型档位 + 是否执行）。
+
+## 0.2.0 第六十四批：勘误三级·代码部分（Phase 7 批次 65a，方案 §7.6）
+
+**背景**：方案 §7.6 勘误三级 + §9 批次 65 的**工程子集**（65a）：L1 确定性
+错误检查 + L2 带依据核查代码 + L3 勘误附注层（errata 并显，原文永不改写）。
+**不做**全量 L2 核查（技术类 ~600 条，硬闸门：无人值守 LLM 预算 ≤¥1、全量
+须用户先裁决模型档位）；L1 扫描零费用，真实库由用户下次 `ksync --errata-scan`
+自然执行，本批不主动对真实库落标记；测试全用人造 fixture（临时库）+ LLM 替身，
+零真实 LLM 费用。
+
+1. **L1 确定性检查**（semantic/errata.py，纯函数零费用，**只做确定性错误**
+   防误报——L1 误报会淹没裁决队列毁掉功能信誉）：完整 Python 围栏代码块
+   ast.parse 语法验证 + **已移除 API 对照表**（标准库 PEP 594/632 移除批
+   14 模块 + 著名第三方 removed API，每条附官方依据与替代方案）。
+   **防误报纪律（宁漏勿误）**：节选特征（REPL `>>>`/首行缩进/`...` 占位/
+   语言未标）一律不下结论；对照表只收 removed 级（deprecated 仍能跑不收）；
+   正文提及不算（讲废弃的文章是正常内容）只查代码块；`np.float64` 词边界
+   后向断言防合法名误报。死链（确定性错误第三类）已有 kcheck→link_status=dead
+   独立通道，不重复承接。
+2. **L2 errata_check 任务**（semantic/tasks/errata_check.py，CapabilitySpec
+   errata_check@1.0.0）：事实一致性核查「该说法在当前版本是否仍然成立」
+   （batch 20 单次调用，降级纪律同 aging_judge）。结论三值：**error**=确认
+   错误进裁决队列（**必须附可核查依据**：官方文档 URL/版本号，给不出依据
+   自动降级 suspect——防幻觉闸门 §7.6 定稿口径）/ **ok**=成立否决不再标 /
+   **suspect**=疑似证据不足——**不到确认级不出裁决队列**（探针钉死）。
+3. **kerrata 流水线 + CLI**（pipeline/errata.py + cli.py）：L1 `run_errata_scan`
+   （freshness_scan 同构：无游标全量重扫，跳过 ok 否决/待清理/死链；命中打
+   meta.errata_flag=error+errata_kind+errata_reason）挂 `ksync --errata-scan`
+   与 `kerrata --scan`；L2 `run_errata_check`（候选=active+有正文+
+   errata_checked_at 游标幂等，--limit 默认 10 试跑口径、--dry-run；LLM 未
+   启用 SKIP exit 3、单批失败记 error 不阻塞）。
+4. **L3 勘误附注层 + Web**（方案 §7.6 定稿：改正=附注并显，**原文永不改写**
+   ——溯源链保住，同 55 批摘要哲学）：GET /api/errata 裁决队列（**只出
+   确认级 error**，suspect 不出队；附 errata 附注数组并显返回）；
+   POST /api/entries/{id}/errata 人裁改正=meta.errata 追加（多次附注累加）
+   + 清 errata_flag 退出队列，inline_content/content_store 一字不动；
+   POST .../errata/dismiss 误报否决置 ok（L1/L2 不再标记，freshness 同口径）；
+   废弃复用 64 批 reject→30 天冷却→物理删除出口。全部动作 task_log 留痕。
+   index.html 管理页第七子页签「🩹 勘误裁决」：确认错误列表 + 错误类型/
+   依据徽标 + ✍️附勘误/↩误报保留/🚫舍弃三裁决按钮 + 已附勘误并显（📌 勘误
+   附注块）。条目详情端点 meta 全量返回，附注数据源天然可用。
+5. **测试**：tests/test_errata.py 26 项（代码块提取/节选四特征/语法确认/
+   对照表命中附依据/正文提及不误报/词边界防误报/干净文本零结论、L1 扫描
+   打标+ok·待清理·死链三跳过+dry-run+ksync 挂钩、L2 三值+防幻觉降级+
+   非法输出/未启用/故障降级、游标幂等+limit+dry-run、裁决队列只出确认级、
+   附注追加原文 diff 为零+二次附注累加+详情并显+task_log、误报否决+L1 重扫
+   不翻转、写端点 403 守卫）；test_contract 能力集增 errata_check；test_web_api
+   管理页静态探针六→七入口。pytest 365 → 391 全绿（390 passed + 1 skip，
+   EXIT=0）。canary capabilities 升版 37e239ecaeaf→a5755f57d4f2（零 DDL 变更）。
+   SOP 增 §2.20。api/db/cli/sync 改动，serve 已按三条件重启（/api/sources 与
+   /api/errata 均 200）。
+
+**复检探针**（TODO Phase 7 批次 65 口径，本批可验子集）：
+- [x] 疑似错误不到确认级不出裁决队列
+      （test_task_error_without_evidence_downgrades_to_suspect /
+      test_queue_only_confirmed_not_suspect）；
+- [x] 改正以附注并显、原文 diff 为零
+      （test_errata_add_appends_note_original_untouched：inline_content 一字
+      不动 + meta.errata 追加 + 详情端点并显返回）；
+- [ ] L2 全量核查（~600 条技术类）——**等用户裁决**（模型档位 + 是否执行，
+      65b；试跑 ≤10 条预算 ≤¥1）。
+

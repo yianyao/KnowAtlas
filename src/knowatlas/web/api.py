@@ -299,6 +299,71 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "unflag_freshness", entry_id, {})
         return {"entry_id": entry_id, "freshness_flag": "ok"}
 
+    # ---- 勘误三级 L3（0.2.0 第六十四批，方案 §7.6：附注层不篡改原文） ----
+
+    @app.get("/api/errata")
+    def errata_queue(limit: int = 500):
+        """勘误裁决队列：**只出确认级**（meta.errata_flag=error）。
+
+        来源两路：L1 确定性错误（完整代码块语法验证/已移除 API，kerrata --scan
+        或 ksync --errata-scan，零费用）与 L2 带依据核查（errata_check，error
+        必附 evidence）。疑似（suspect）不到确认级不出裁决队列（方案 §7.6
+        防幻觉纪律——防 LLM 幻觉直接废掉正确知识）；errata 附注层条目并显返回。
+        """
+        out = []
+        for e in dl.list_by_errata_flag("error", limit=limit):
+            out.append({"id": e.id, "title": e.title, "locator": e.locator,
+                        "source_type": e.source_type,
+                        "kind": e.meta.get("errata_kind"),
+                        "reason": e.meta.get("errata_reason"),
+                        "evidence": e.meta.get("errata_evidence"),
+                        "errata": e.meta.get("errata") or []})
+        return {"entries": out}
+
+    @app.post("/api/entries/{entry_id}/errata")
+    async def add_errata(entry_id: str, request: Request):
+        """人裁「改正」= 勘误附注层：修正文字挂 meta.errata 追加，**原文永不改写**
+        （inline_content/content_store 一字不动，溯源链保住）；附注后清 errata_flag
+        （裁决完成，退出裁决队列）。展示时原文+勘误并显（方案 §7.6 定稿口径）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        body = await request.json()
+        text = str(body.get("text", "")).strip()
+        if not text:
+            return JSONResponse({"error": {"code": "VALIDATION",
+                                           "message": "勘误文字不能为空"}},
+                                status_code=400)
+        note = {"text": text, "evidence": str(body.get("evidence", "")).strip(),
+                "at": _now_iso(), "source": "user"}
+        notes = list(entry.meta.get("errata") or []) + [note]
+        old_flag = entry.meta.get("errata_flag")
+        dl.merge_meta(entry_id, {"errata": notes, "errata_flag": None,
+                                 "errata_kind": None, "errata_reason": None,
+                                 "errata_evidence": None})
+        dl.log_task(_now_iso(), "web", "errata_add", entry_id,
+                    {"old_flag": old_flag, "note_chars": len(text)})
+        return {"entry_id": entry_id, "errata_count": len(notes),
+                "original_untouched": True}
+
+    @app.post("/api/entries/{entry_id}/errata/dismiss")
+    async def dismiss_errata(entry_id: str, request: Request):
+        """人裁否决（误报）：置 errata_flag=ok，L1/L2 之后不再标记它
+        （freshness/unflag 同口径）；裁决动作 task_log 留痕。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        if dl.get_entry(entry_id) is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        dl.merge_meta(entry_id, {"errata_flag": "ok"})
+        dl.log_task(_now_iso(), "web", "errata_dismiss", entry_id, {})
+        return {"entry_id": entry_id, "errata_flag": "ok"}
+
     _CLOUD_PALETTE = ("#d1495b", "#e07a3c", "#c9a227", "#5f9e4e", "#2e9e83",
                       "#2b8fb3", "#3f6fb5", "#63599e", "#8d5aa8", "#b5497e",
                       "#a4485f", "#5f6b7a")

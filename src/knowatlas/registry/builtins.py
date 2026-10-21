@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from ..fetchers import file_reader, http_simple
 from ..semantic.tasks import (
-    aging_judge, classify_coarse, classify_deep, delta_summarize, point_extract,
-    tag_keywords, thread_digest, thread_suggest, topic_recall,
+    aging_judge, classify_coarse, classify_deep, delta_summarize, errata_check,
+    point_extract, tag_keywords, thread_digest, thread_suggest, topic_recall,
 )
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
@@ -47,4 +47,6 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
     semantics.register(point_extract.SPEC, point_extract.run)
     # 老化三级 L2（第六十三批，方案 §7.5）：suspect 时效复核，结论升级/否决/下沉人裁
     semantics.register(aging_judge.SPEC, aging_judge.run)
+    # 勘误三级 L2（第六十四批，方案 §7.6）：事实一致性核查，error 必附依据否则降 suspect
+    semantics.register(errata_check.SPEC, errata_check.run)
     return locators, semantics

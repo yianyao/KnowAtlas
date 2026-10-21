@@ -264,9 +264,11 @@ def test_static_pages_consumption_defaults():
     assert '<section id="view-search" class="view">' in index
     for v in ("graph", "thread", "cloud", "timeline", "mgmt"):
         assert f'<section id="view-{v}" class="view" hidden>' in index
-    # 管理页集中六入口（第五十九批：暂存/待清理/失效/时效/已舍弃/数据管理）
-    for sub in ("staged", "nonk", "dead", "fresh", "rejected", "data"):
+    # 管理页集中七入口（第五十九批六入口 + 第六十四批勘误裁决：暂存/待清理/失效/时效/勘误/已舍弃/数据管理）
+    for sub in ("staged", "nonk", "dead", "fresh", "errata", "rejected", "data"):
         assert f'data-sub="{sub}"' in index
+    # 勘误三级 L3 探针（第六十四批，方案 §7.6）：附注并显 + 原文不改写说明在 UI
+    assert "errata" in index and "原文永不改写" in index
     # 手动收录上移顶栏对话框（同 kadd 链路；说明悬停出）；日常消费页无管理控件
     assert 'id="ingest-dialog"' in index and 'id="add-url-btn"' in index
     assert "同 kadd" in index

@@ -223,6 +223,7 @@
       <button class="mtab" data-sub="nonk">🔬 待清理</button>
       <button class="mtab" data-sub="dead">☠️ 失效链接</button>
       <button class="mtab" data-sub="fresh">⏳ 时效候选</button>
+      <button class="mtab" data-sub="errata">🩹 勘误裁决</button>
       <button class="mtab" data-sub="rejected">🗑️ 已舍弃</button>
       <button class="mtab" data-sub="data">🛠 数据管理</button>
     </nav>
@@ -1131,6 +1132,45 @@ async function mgmtFresh() {
     } });
 }
 
+// 勘误裁决（第六十四批，方案 §7.6）：只出确认级错误；改正=勘误附注并显，原文永不改写；
+// 废弃走同款 reject（30 天冷却）；误报否决置 ok 后规则与 LLM 不再标记。
+async function mgmtErrata() {
+  refreshCurrent = () => mgmtShow("errata");
+  _mgmtDesc().textContent = "确认错误才进本队列（L1 确定性扫描：完整代码块语法/已移除 API；L2 带依据核查须附官方依据）。改正=勘误附注（原文永不改写，附注并显）；误报否决后不再标记；舍弃走 30 天冷却。CLI：kerrata --scan（零费用）/ kerrata（L2 试跑 ≤10）。";
+  const kindLabel = { syntax: "语法错误", api: "已移除 API", llm_fact: "事实核查" };
+  const data = await (await fetch("/api/errata")).json();
+  const body = _mgmtBody();
+  body.innerHTML = data.entries.length
+    ? data.entries.map(x => {
+        const notes = (x.errata || []).map(n =>
+          `<div style="margin:4px 0 0 16px;padding:4px 8px;border-left:3px solid #c9a227;font-size:12px">`
+          + `📌 勘误：${n.text}${n.evidence ? `（依据：${n.evidence}）` : ""}</div>`).join("");
+        return `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+          + `<span class="badge">${srcLabel(x.source_type)}</span>`
+          + (x.kind ? `<span class="badge" title="${(x.reason || "").replace(/"/g, "&quot;")}">${kindLabel[x.kind] || x.kind}</span>` : "")
+          + (x.evidence ? `<span class="badge" title="可核查依据：${x.evidence.replace(/"/g, "&quot;")}">📎 依据</span>` : "")
+          + `<button class="errata-btn" data-id="${x.id}">✍️ 附勘误</button>`
+          + `<button class="errata-keep-btn" data-id="${x.id}">↩误报，保留</button>`
+          + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
+          + notes + `</div>`;
+      }).join("")
+    : "<small>没有确认级勘误候选。跑 kerrata --scan（L1 确定性扫描，零费用）或 kerrata（L2 带依据核查试跑）。</small>";
+  bindEntryButtons();
+  document.querySelectorAll(".errata-btn").forEach(b => b.onclick = async () => {
+    // 改正 = 勘误附注层：原文永不改写（方案 §7.6 定稿——溯源链保住）
+    const text = prompt("勘误文字（将与原文并显，原文不改写）：");
+    if (!text || !text.trim()) return;
+    const evidence = prompt("可核查依据（官方文档 URL/版本号，可空）：") || "";
+    await writeJSON(`/api/entries/${b.dataset.id}/errata`, { text: text.trim(), evidence: evidence.trim() });
+    refreshCurrent();
+  });
+  document.querySelectorAll(".errata-keep-btn").forEach(b => b.onclick = async () => {
+    // 误报否决：errata_flag=ok，L1/L2 不再标记
+    await writeJSON(`/api/entries/${b.dataset.id}/errata/dismiss`, {});
+    refreshCurrent();
+  });
+}
+
 async function mgmtRejected() {
   refreshCurrent = () => mgmtShow("rejected");
   _mgmtDesc().textContent = "舍弃即 rejected（树/检索/词云/导出全面不可见）——30 天冷却期=误裁反悔窗口，期满 ksync 自动物理删除；恢复立即回到 active。";
@@ -1196,6 +1236,7 @@ function mgmtShow(sub) {
   else if (sub === "nonk") mgmtNonk();
   else if (sub === "dead") mgmtDead();
   else if (sub === "fresh") mgmtFresh();
+  else if (sub === "errata") mgmtErrata();
   else if (sub === "rejected") mgmtRejected();
   else mgmtData();
 }

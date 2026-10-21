@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="跨源去重存量扫描：canonical/正文 hash 完全一致的条目合并为一条（主条目保留全部 locator 可跳转，副条目隐藏、可逆）；配合 --dry-run 只出报告")
     ksync.add_argument("--freshness-scan", action="store_true",
                        help="时效体检：纯规则标记过期/疑似过旧的知识（废弃关键词/正文日期过旧/同主题新旧并存），只标不删、可否决；配合 --dry-run 只出报告")
+    ksync.add_argument("--errata-scan", action="store_true",
+                       help="勘误 L1 体检：纯规则确定性错误扫描（完整 Python 代码块语法验证/已移除 API 对照表），只标不删、可否决；配合 --dry-run 只出报告")
     ksync.add_argument("--expand", metavar="ENTRY_ID", default=None,
                        help="书签扩散抓取（显式触发）：对指定书签/http 条目抓取其同目录系列页（同一目录页同一主题）")
     ksync.add_argument("--expand-limit", type=int, default=20,
@@ -102,6 +104,17 @@ def build_parser() -> argparse.ArgumentParser:
     kaging.add_argument("--sweep", action="store_true",
                         help="执行删除出口清扫：冷却期满（30 天）的 rejected 条目物理删除"
                              "+ content_store 引用计数回收（审计留痕）；默认每轮 ksync 自动执行")
+
+    kerrata = sub.add_parser(
+        "kerrata", help="勘误三级：--scan 跑 L1 确定性错误扫描（零费用）；"
+                        "默认跑 L2 带依据核查（方案 §7.6）")
+    kerrata.add_argument("--limit", type=int, default=10,
+                         help="本次最多核查条数（默认 10——试跑口径，全量核查须用户裁决模型档位）")
+    kerrata.add_argument("--dry-run", action="store_true",
+                         help="只判定与报告，不写库（LLM 费用照常发生；--scan 时只出报告）")
+    kerrata.add_argument("--scan", action="store_true",
+                         help="跑 L1 确定性错误扫描（完整 Python 代码块语法验证 + 已移除"
+                              " API 对照表，零费用；同 ksync --errata-scan）")
 
     return parser
 
@@ -201,7 +214,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                          limit=args.limit, fetch_limit=args.fetch_limit,
                          reclassify=args.reclassify, value_scan=args.value_scan,
                          dedupe_scan=args.dedupe_scan,
-                         freshness_scan=args.freshness_scan)
+                         freshness_scan=args.freshness_scan,
+                         errata_scan=args.errata_scan)
     finally:
         dl.close()
     print(f"OK 同步完成：{stats}")
@@ -433,6 +447,38 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kerrata(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .pipeline.errata import run_errata_check, run_errata_scan
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        if args.scan:
+            stats = run_errata_scan(dl, dry_run=args.dry_run)
+            head = "OK L1 扫描报告（dry-run 未写库）" if args.dry_run else "OK L1 扫描完成"
+            print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+            print("（确定性错误直接进裁决队列；节选特征不下结论宁漏勿误；"
+                  "裁决在 Web 管理页「勘误裁决」）")
+            return _EXIT_OK
+        stats = run_errata_check(cfg, dl, limit=max(1, args.limit),
+                                 dry_run=args.dry_run)
+    finally:
+        dl.close()
+    if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）
+        print(f"SKIP {stats['skipped']}")
+        return _EXIT_SKIP
+    head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 核查完成"
+    print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+    for err in stats.get("errors", [])[:5]:
+        print(f"  ERROR {err}")
+    print("（结论三值：error=确认错误附依据进裁决队列 / ok=成立已否决 / "
+          "suspect=疑似不出裁决队列留观）")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -444,6 +490,7 @@ _COMMANDS = {
     "kcheck": _cmd_kcheck,
     "kpoints": _cmd_kpoints,
     "kaging": _cmd_kaging,
+    "kerrata": _cmd_kerrata,
 }
 
 

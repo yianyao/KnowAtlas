@@ -1263,6 +1263,16 @@ class DataLayer:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def list_by_errata_flag(self, errata_flag: str, limit: int = 500) -> list[Entry]:
+        """按勘误标记列出条目（meta.errata_flag；error=确认错误进裁决队列，
+        suspect=疑似留观不出队，ok=用户否决不再标。第六十四批勘误三级）。"""
+        rows = self._conn.execute(
+            "SELECT * FROM entries WHERE status='active'"
+            "   AND json_extract(meta, '$.errata_flag')=? ORDER BY rowid LIMIT ?",
+            (errata_flag, limit),
+        ).fetchall()
+        return [self._row_to_entry(r) for r in rows]
+
     # ---- 词云视图（第四十三批：scoped cloud 聚合数据源） ----
 
     def category_names(self) -> dict[str, str]:

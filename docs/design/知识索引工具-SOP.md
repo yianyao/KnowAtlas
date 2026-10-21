@@ -405,6 +405,33 @@ uv run python -m knowatlas kaging --sweep --dry-run      # 只出删除报告，
 suspect 判定（现库 ~87 条）属批次 64 全量**，无人值守预算闸门 ≤¥1（≤10 条
 试跑）；全量与任何真实库删除须用户在场裁决（V4-Flash/Pro 档位，方案 §6）。
 
+### 2.20 勘误三级（0.2.0 第六十四批，Phase 7 批次 65a，方案 §7.6）
+
+**用途**：知识勘误三级——**L1 只做确定性错误**（完整 Python 围栏代码块
+ast.parse 语法验证 + 已移除 API 对照表，零费用；节选特征 REPL/首行缩进/
+`...`/语言未标一律不下结论宁漏勿误；死链已有 §2.15 失效链接通道不重复）；
+**L2 带依据核查**（errata_check：问「该说法在当前版本是否仍然成立」，batch 20，
+error 必须附官方文档 URL/版本号依据，给不出依据自动降级 suspect；suspect
+**不到确认级不出裁决队列**——防 LLM 幻觉废掉正确知识）；**L3 人裁**：改正=
+勘误附注层（meta.errata 追加，原文+勘误并显，**原文永不改写**——溯源链保住）
+or 废弃（同 §2.19 删除出口：reject→30 天冷却→物理删除）or 误报否决（置 ok
+不再标记）。
+
+**用法**：
+
+```bash
+uv run python -m knowatlas kerrata --scan                  # L1 确定性扫描（零费用，同 ksync --errata-scan）
+uv run python -m knowatlas kerrata --scan --dry-run        # 只出报告不写库
+uv run python -m knowatlas kerrata --limit 10              # L2 核查 10 条（默认，试跑口径）
+uv run python -m knowatlas kerrata --limit 10 --dry-run    # 只判定报告，不写库
+```
+
+**规则**：裁决在 Web 管理页「🩹 勘误裁决」子页签（只出确认级 error，附注并显）；
+结论落 meta（errata_flag/errata_kind/errata_reason/errata_evidence/
+errata_checked_at）可抽检；L2 游标 errata_checked_at 幂等重跑零重复。**全量
+L2 核查（技术类 ~600 条）属批次 65 全量**，无人值守预算闸门 ≤¥1（≤10 条
+试跑）；全量须用户裁决模型档位（V4-Flash/Pro，方案 §6）。
+
 ---
 
 
