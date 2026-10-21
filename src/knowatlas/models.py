@@ -154,3 +154,4 @@ class Thread:
     created_at: str
     updated_at: str
     items: tuple[ThreadItem, ...] = ()
+    digest: str | None = None  # thread_digest 产物（迁移 005，第五十五批）

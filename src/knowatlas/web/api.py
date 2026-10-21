@@ -654,7 +654,8 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
     # ---- Thread 串联工作区（完整方案 §9.4，0.2.0 第三十二批） ----
 
     def _thread_payload(thread) -> dict:
-        """线索详情：items 展开为条目信息（标题/来源/状态），position 即阅读序。"""
+        """线索详情：items 展开为条目信息（标题/来源/状态），position 即阅读序；
+        digest 与各轮 delta_summary 为 LLM 摘要产物（第五十五批，可空）。"""
         items: list[dict[str, Any]] = []
         if thread.items:
             entries = {e.id: e for e in
@@ -668,10 +669,12 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                     "locator": e.locator if e else "",
                     "source_type": e.source_type if e else "",
                     "status": e.status if e else "",
+                    "delta_summary": (e.meta.get("delta_summary") or "") if e else "",
                 })
         return {"id": thread.id, "name": thread.name, "note": thread.note,
                 "thread_type": thread.thread_type, "created_at": thread.created_at,
-                "updated_at": thread.updated_at, "items": items}
+                "updated_at": thread.updated_at, "digest": thread.digest,
+                "items": items}
 
     @app.get("/api/threads")
     def list_threads(thread_type: str | None = None):
@@ -864,6 +867,84 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "rationale": result.get("rationale", ""),
                 "llm_used": result.get("llm_used", False), "applied": applied,
                 "error": result.get("error")}
+
+    @app.post("/api/threads/{thread_id}/digest")
+    async def digest_thread(thread_id: str, request: Request):
+        """thread_digest + delta_summarize（第五十五批，§9.4，LLM 摘要后置）。
+
+        delta_summarize：只对缺 meta.delta_summary 的条目跑（省 token），
+        产物落 entries.meta.delta_summary；thread_digest：thread 层跑一次，
+        产物落 threads.digest。llm 不可用/失败 = 两层都静默降级，不写库，
+        线程视图照常显示原始正文（摘要是压缩表示，原始层永在）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        thread = dl.get_thread(thread_id)
+        if thread is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "线索不存在"}},
+                                status_code=404)
+        from ..semantic.base import TaskContext
+        from ..semantic.llm import LlmClient
+
+        if not thread.items:
+            return {"id": thread_id, "llm_used": False, "applied": False,
+                    "digest": thread.digest or "", "summaries": {},
+                    "rationale": "线索为空，无摘要对象"}
+        entries = {e.id: e for e in
+                   dl.get_entries_by_ids([i.entry_id for i in thread.items])}
+        # 各轮增量正文：邮件条目 inline_content 即 quote_strip 产物；无 inline 的
+        # 非 mail 条目回退 content_store（截断），照常参与 thread_digest
+        def _delta(e) -> str:
+            if e is None:
+                return ""
+            text = (e.inline_content or "").strip()
+            if not text and e.content_hash:
+                text = (dl.get_content(e.content_hash) or "").strip()
+            return text
+
+        ctx = TaskContext(run_id="web-threads", llm=LlmClient.from_config(cfg),
+                          config=cfg, datalayer=dl)
+        _, delta_run = semantics.resolve_task("delta_summarize")
+        _, digest_run = semantics.resolve_task("thread_digest")
+
+        # ① delta_summarize：缺摘要的条目才跑
+        pending = []
+        for it in thread.items:
+            e = entries.get(it.entry_id)
+            if e is not None and not (e.meta.get("delta_summary") or "").strip():
+                pending.append({"entry_id": e.id, "title": e.title,
+                                "delta": _delta(e)[:2000],
+                                "sender": (e.meta.get("from") or ""),
+                                "sent_at": (e.meta.get("date") or "")})
+        d_result = delta_run(pending, ctx) if pending else {"summaries": {}, "llm_used": False}
+        written = 0
+        if d_result.get("summaries"):
+            for eid, s in d_result["summaries"].items():
+                if str(s).strip():
+                    dl.merge_meta(eid, {"delta_summary": str(s).strip()})
+                    written += 1
+
+        # ② thread_digest：全量轮次跑一次（读全量重新组织，不拼各轮摘要）
+        turns = [{"sender": (entries[it.entry_id].meta.get("from") or "") if it.entry_id in entries else "",
+                  "sent_at": (entries[it.entry_id].meta.get("date") or "") if it.entry_id in entries else "",
+                  "title": entries[it.entry_id].title if it.entry_id in entries else "",
+                  "delta": _delta(entries.get(it.entry_id))[:2500]}
+                 for it in thread.items if it.entry_id in entries]
+        t_result = digest_run(turns, thread.name, ctx) if turns else {"digest": "", "llm_used": False}
+        applied = False
+        if t_result.get("digest"):
+            try:
+                dl.set_thread_digest(thread_id, t_result["digest"])
+                applied = True
+            except Exception:
+                applied = False
+        llm_used = bool(d_result.get("llm_used")) or bool(t_result.get("llm_used"))
+        error = d_result.get("error") or t_result.get("error")
+        return {"id": thread_id, "llm_used": llm_used, "applied": applied,
+                "digest": t_result.get("digest", ""),
+                "summaries": d_result.get("summaries", {}),
+                "summarized": written, "error": error}
 
     @app.post("/api/recall")
     async def recall(request: Request):

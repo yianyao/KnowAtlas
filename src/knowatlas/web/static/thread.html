@@ -44,6 +44,10 @@
   .empty { color: #888; }
   #thread-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   #thread-note { color: #888; font-size: 13px; }
+  #digest-box { border: 1px dashed #4a9eff66; border-radius: 6px; padding: 8px 12px;
+                margin: 10px 0; font-size: 13px; white-space: pre-wrap; }
+  #digest-box .digest-head { color: #4a9eff; font-size: 12px; margin-bottom: 4px; }
+  .delta-sum { color: #888; font-size: 12px; margin-top: 2px; }
   .toolbar { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
   dialog { border: 1px solid #8888; border-radius: 8px; padding: 16px;
            background: Canvas; color: CanvasText; min-width: 320px; }
@@ -76,8 +80,10 @@
       <button id="rename-btn" class="btn">✎ 重命名</button>
       <button id="note-btn" class="btn">✎ 备注</button>
       <button id="suggest-btn" class="btn">✨ LLM 建议排序</button>
+      <button id="digest-btn" class="btn">📝 LLM 摘要</button>
       <button id="delete-btn" class="btn danger">🗑 删除线索</button>
     </div>
+    <div id="digest-box" style="display:none"></div>
     <div id="items"></div>
   </div>
 </main>
@@ -195,6 +201,15 @@ function renderThread() {
   p.style.display = "block";
   document.getElementById("thread-name").textContent = "🧵 " + currentThread.name;
   document.getElementById("thread-note").textContent = currentThread.note || "";
+  const dbox = document.getElementById("digest-box");
+  if (currentThread.digest) {
+    dbox.style.display = "block";
+    dbox.innerHTML = `<div class="digest-head">📝 线程摘要（LLM 生成，可重新生成覆盖）</div>`
+      + esc(currentThread.digest);
+  } else {
+    dbox.style.display = "none";
+    dbox.innerHTML = "";
+  }
   const box = document.getElementById("items");
   if (!currentThread.items.length) {
     box.innerHTML = `<small class="empty">线索为空——在下方召回结果里点「＋加入」，或在任何条目视图「固化为线索」。</small>`;
@@ -203,7 +218,9 @@ function renderThread() {
   box.innerHTML = currentThread.items.map((it, idx) =>
     `<div class="item" data-item="${it.item_id}">`
     + `<span class="pos">${idx + 1}</span>`
-    + `<span class="t">${entryLine(it)}</span>`
+    + `<span class="t">${entryLine(it)}`
+    + (it.delta_summary ? `<div class="delta-sum">💬 ${esc(it.delta_summary)}</div>` : "")
+    + `</span>`
     + `<select data-rel="${it.item_id}" title="与上一条的关系">`
     + Object.keys(REL_LABEL).map(k =>
         `<option value="${k}"${it.relation_type === k ? " selected" : ""}>${REL_LABEL[k]}</option>`).join("")
@@ -336,6 +353,26 @@ document.getElementById("suggest-btn").onclick = async () => {
   const why = res.rationale ? "\n\n建议理由：\n" + res.rationale : "";
   alert(`已应用 LLM 建议排序${res.applied ? "" : "（未能写入，请刷新后重试）"}。${why}`);
   openThread(currentThread.id);
+};
+document.getElementById("digest-btn").onclick = async () => {
+  if (!currentThread) return;
+  const btn = document.getElementById("digest-btn");
+  btn.disabled = true;
+  btn.textContent = "⏳ 生成中…";
+  try {
+    const res = await writeJSON(`/api/threads/${currentThread.id}/digest`, {});
+    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (!res.llm_used) {
+      alert("LLM 不可用或未配置（[llm] enabled + key）——摘要未生成，线程视图不受影响。");
+      openThread(currentThread.id);
+      return;
+    }
+    alert(`摘要完成：${res.summarized} 条「本轮新增」已落条目，线程级摘要${res.applied ? "已写入" : "未能写入（请重试）"}。`);
+    openThread(currentThread.id);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "📝 LLM 摘要";
+  }
 };
 document.getElementById("recall-btn").onclick = doRecall;
 document.getElementById("recall-input").addEventListener("keydown", (e) => {

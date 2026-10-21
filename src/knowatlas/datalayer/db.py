@@ -1587,7 +1587,7 @@ class DataLayer:
         ).fetchall()
         return Thread(id=row["id"], name=row["name"], note=row["note"],
                       thread_type=row["thread_type"], created_at=row["created_at"],
-                      updated_at=row["updated_at"],
+                      updated_at=row["updated_at"], digest=row["digest"],
                       items=tuple(self._row_to_item(r) for r in items))
 
     def list_threads(self, thread_type: str | None = None,
@@ -1605,6 +1605,7 @@ class DataLayer:
         return [
             {"id": r["id"], "name": r["name"], "note": r["note"],
              "thread_type": r["thread_type"], "item_count": r["item_count"],
+             "digest": r["digest"],
              "created_at": r["created_at"], "updated_at": r["updated_at"]}
             for r in self._conn.execute(sql, params).fetchall()
         ]
@@ -1634,6 +1635,23 @@ class DataLayer:
             )
             self.log_task(_now(), "threads", "update", thread_id,
                           {"changed": sorted(fields)})
+
+    def set_thread_digest(self, thread_id: str, digest: str) -> None:
+        """写入 thread_digest 产物（第五十五批；可重复调用=重算覆盖，原始层不受影响）。"""
+        text = (digest or "").strip()
+        if not text:
+            raise ContractError("digest 为空（LLM 关闭或未产出时不应写库）")
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT id FROM threads WHERE id=?", (thread_id,)).fetchone()
+            if row is None:
+                raise ContractError(f"线索不存在：{thread_id}")
+            conn.execute(
+                "UPDATE threads SET digest=?, updated_at=? WHERE id=?",
+                (text, _now(), thread_id),
+            )
+            self.log_task(_now(), "threads", "digest", thread_id,
+                          {"chars": len(text)})
 
     def delete_thread(self, thread_id: str) -> None:
         """删除线索；thread_items 经 FK ON DELETE CASCADE 级联清除。"""

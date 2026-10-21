@@ -66,13 +66,13 @@ def _seed_entries(dl: DataLayer) -> list[Entry]:
 def test_fresh_db_gets_latest_schema(tmp_path):
     dl = DataLayer(tmp_path / "fresh.db")
     try:
-        assert dl.init_schema() == latest_version() == 4
+        assert dl.init_schema() == latest_version() == 5
         conn = sqlite3.connect(tmp_path / "fresh.db")
         try:
             tables = {r[0] for r in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
             assert {"threads", "thread_items", "conv_messages", "regress_cases"} <= tables
-            assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         finally:
             conn.close()
     finally:
@@ -80,11 +80,11 @@ def test_fresh_db_gets_latest_schema(tmp_path):
 
 
 def test_old_db_upgrades_without_data_loss(tmp_path):
-    """旧库（user_version=1，只有 001）再次打开自动应用 002，既有条目无损。"""
+    """旧库（user_version=1，只有 001）再次打开自动应用 002..005，既有条目无损。"""
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
     conn.executescript(load_initial_schema())
-    conn.execute("PRAGMA user_version = 2")
+    conn.execute("PRAGMA user_version = 1")
     conn.execute(
         "INSERT INTO entries (id, source_type, title, locator, meta, exported_at, status)"
         " VALUES ('aabbccddeeff0011','manual','旧条目','https://old.example/x','{}',"
@@ -94,11 +94,11 @@ def test_old_db_upgrades_without_data_loss(tmp_path):
 
     dl = DataLayer(db)
     try:
-        assert dl.init_schema() == 4
+        assert dl.init_schema() == 5
         e = dl.get_entry("aabbccddeeff0011")
         assert e is not None and e.title == "旧条目"
         # 迁移幂等：再初始化不报错不重复建表
-        assert dl.init_schema() == 4
+        assert dl.init_schema() == 5
     finally:
         dl.close()
 

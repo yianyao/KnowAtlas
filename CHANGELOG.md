@@ -1746,3 +1746,43 @@ embedding+聚类+混合检索+语义边（再下一批）。
 **验证**：pytest 285 全绿（283→285：few-shot 注入断言 + 降级安全 ×2）；
 回归重跑路径（run_regress ctx.llm 恒 None）不受影响——few-shot 只在 L3
 实际执行时读取。
+
+## 0.2.0 第五十五批：线程语义压缩（delta_summarize + thread_digest，§9.4 LLM 后置层）
+
+**背景**：quote_strip（第三十九批，规则层）已剥出增量正文落
+entries.inline_content，本批补齐其后的 LLM 压缩层——§9.4 语义任务三件套
+的最后两件。可独立关闭：LLM 关闭/故障一律静默降级不写库，线程视图照常
+显示原始正文（摘要是压缩表示，原始层永在）。
+
+1. **迁移 005_thread_digest.sql**：threads 加 `digest TEXT` 列（thread_digest
+   产物，组装后的纯文本，可空=未生成；可重复生成=重算覆盖）。canary ddl
+   979471412904→35c2852837b5；迁移版本断言 4→5（test_threads 三处）。
+2. **delta_summarize**（semantic/tasks/）：输入缺摘要条目的增量正文列表，
+   输出 entry_id→1-3 句「本轮新增了什么」；产物落 entries.meta.delta_summary
+   （merge_meta，无 DDL）。LLM 输出 JSON 数组（extract_json_array 容错），
+   无法解析/故障降级空。delta 空的条目照常送审（prompt 规则 3 要求照实短写）。
+3. **thread_digest**（semantic/tasks/）：thread 层一次调用，读全量轮次
+   重新组织成「问题→关键进展→当前结论/待办」，**不拼接各轮摘要**（与
+   delta_summarize 互不依赖）；三节组装成【节标记】行纯文本落 threads.digest，
+   空节剔除；全部为空视为未产出拒写。
+4. **数据层**：Thread dataclass 加 digest 字段；get_thread/list_threads 带出；
+   set_thread_digest（空串拒写 ContractError，task_log action=digest）。
+5. **Web**：POST /api/threads/{id}/digest（写守卫）——①delta_summarize 只跑
+   缺 meta.delta_summary 的条目（省 token，二次调用零 delta 开销）；②
+   thread_digest 全量轮次；sender/sent_at 取 meta.from/meta.date（邮件条目）；
+   无 inline_content 的非 mail 条目回退 content_store 截断。GET /api/threads/
+   {id} 返回 digest + 每条 item.delta_summary。
+6. **前端 thread.html**：工具栏「📝 LLM 摘要」按钮（生成中禁用防重复提交）；
+   线程级摘要虚线框展示（可重新生成覆盖）；每条目下「💬 本轮新增」小字。
+7. **注册**：builtins 登记 delta_summarize/thread_digest v1.0.0；capabilities
+   074a5d9a6582→13b73497bbc5。
+
+**复检探针**（实现后逐条命中）
+
+- 探针①：关闭 LLM 后 quote_strip 产物（inline_content）仍工作、线程视图
+  照常（digest=None 不渲染摘要框）——test_digest_endpoint_no_llm_writes_nothing
+- 探针②：thread_digest 关闭不影响检索与线程视图（不写库不改条目）
+- LLM 正常：meta.delta_summary 与 threads.digest 双落库、GET 回读一致；
+  二次调用 delta 层零调用（缺摘要条目为空）
+- LLM 故障：两层均不写库、返回 error、原始正文视图不受影响
+- canary 新值落常量；pytest 全绿；变更文件 UTF-8 无 BOM + LF
