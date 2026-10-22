@@ -499,6 +499,106 @@ def test_emmx_rejudge_validation(client):
                        headers={}).status_code == 403
 
 
+def test_rename_preview_and_merge(client, dl):
+    """批次 71：改名（display_name 覆盖层）+ 预览 + 合并（locator/点/分类归主）。"""
+    from knowatlas.models import Entry
+    import uuid
+    batch = uuid.uuid4().hex[:6]
+    # 主条目（有点 + 分类挂接）+ 被并条目（不同 locator）
+    main = Entry.build(source_type="manual", source_key=f"m71:{batch}",
+                       title="原主条目", locator=f"https://m71.example/{batch}/main",
+                       inline_content="主条目正文，预览应显示。",
+                       meta={"source_type": "manual"})
+    sub = Entry.build(source_type="bookmark", source_key=f"s71:{batch}",
+                      title="被并书签", locator=f"https://s71.example/{batch}/sub",
+                      inline_content="被并正文。", meta={"source_type": "bookmark"})
+    dl.upsert_entries([main, sub])
+    from knowatlas.models import FetchResult
+    fr = FetchResult(text="主条目正文，预览应显示。", content_hash="h71pv" + batch,
+                     fetcher="test", fetched_at="2026-10-22T00:00:00+08:00")
+    dl.put_content(fr)  # 正文块落库 → preview 可取
+    dl._conn.execute("UPDATE entries SET content_hash=? WHERE id=?",
+                     (fr.content_hash, main.id))
+    dl._conn.commit()
+    dl.put_point({"content_hash": "h71" + batch, "text": "点" * 50,
+                  "summary": "主点", "source_type": "manual", "judge": "integral",
+                  "meta": {"judge_reason": "测试"}},
+                 {"entry_id": sub.id, "char_offset": 0, "anchor": "点"})  # 点挂在被并条目上
+    # 改名：写覆盖层 → get_entry 标题即新名（_row_to_entry 统一应用）
+    r = client.post(f"/api/entries/{sub.id}/rename",
+                    json={"name": "知识化短名"}, headers=_auth()).json()
+    assert r["name"] == "知识化短名"
+    assert dl.get_entry(sub.id).title == "知识化短名"
+    # 覆盖层写进 meta；entries.title 原值仍在（重同步冲不回）
+    assert dl.get_entry(sub.id).meta["display_name"] == "知识化短名"
+    # 空名=清除覆盖回归源标题
+    client.post(f"/api/entries/{sub.id}/rename", json={"name": ""}, headers=_auth())
+    assert dl.get_entry(sub.id).title == "被并书签"
+    # 120 字上限 400；404；403
+    assert client.post(f"/api/entries/{sub.id}/rename", json={"name": "x" * 121},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/ghost/rename", json={"name": "x"},
+                       headers=_auth()).status_code == 404
+    assert client.post(f"/api/entries/{sub.id}/rename", json={"name": "x"},
+                       headers={}).status_code == 403
+    # 合并：sub 并入 main → locator 挂接 + 点溯源转移 + sub 舍弃带冷却
+    r2 = client.post("/api/entries/merge",
+                     json={"primary_id": main.id, "merge_ids": [sub.id]},
+                     headers=_auth()).json()
+    assert r2["merged"] == 1 and r2["points_moved"] >= 1
+    assert dl.get_entry(sub.id).status == "rejected"
+    assert dl.get_entry(sub.id).meta.get("merged_into") == main.id
+    locs = {r["locator"] for r in dl._conn.execute(
+        "SELECT locator FROM entry_locators WHERE entry_id=?", (main.id,)).fetchall()}
+    assert f"https://s71.example/{batch}/sub" in locs  # 被并 locator 挂主条目
+    moved = dl._conn.execute(
+        "SELECT ps.entry_id FROM point_sources ps JOIN points p ON p.id=ps.point_id"
+        " WHERE p.summary='主点'").fetchone()["entry_id"]
+    assert moved == main.id  # 点溯源随并转移（点不丢）
+    # 预览：display_name/正文/分类/来源计数
+    r3 = client.get(f"/api/entries/{main.id}/preview").json()
+    assert r3["title"] == "原主条目" and "主条目正文" in r3["body"]
+    assert len(r3["extra_locators"]) >= 1 and r3["source_type"] == "manual"
+    # 参数校验：缺 primary 400 / 主在列表 400 / 主不存在 400 / 无 token 403
+    assert client.post("/api/entries/merge", json={"merge_ids": [sub.id]},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/merge",
+                       json={"primary_id": main.id, "merge_ids": [main.id]},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/merge",
+                       json={"primary_id": "ghost", "merge_ids": [sub.id]},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/merge",
+                       json={"primary_id": main.id, "merge_ids": [sub.id]},
+                       headers={}).status_code == 403
+
+
+def test_auto_name_degrades_and_skips(client, dl, monkeypatch):
+    """批次 71：AI 起名——已有名跳过/无正文降级剪尾/LLM 缺失不炸。"""
+    from knowatlas.models import Entry
+    import uuid
+    batch = uuid.uuid4().hex[:6]
+    e1 = Entry.build(source_type="bookmark", source_key=f"an71a:{batch}",
+                     title="以MVP思维，解析最小可行的进销存产品 | 人人都是产品经理",
+                     locator=f"https://an71.example/{batch}/a",
+                     meta={"source_type": "bookmark"})  # 无正文 → 降级剪尾
+    e2 = Entry.build(source_type="bookmark", source_key=f"an71b:{batch}",
+                     title="已有名书签", locator=f"https://an71.example/{batch}/b",
+                     meta={"source_type": "bookmark", "display_name": "已命名"})
+    dl.upsert_entries([e1, e2])
+    r = client.post("/api/entries/auto-name",
+                    json={"ids": [e1.id, e2.id]}, headers=_auth()).json()
+    assert r["count"] == 1 and r["skipped"][0]["id"] == e2.id
+    d1 = r["degraded"][0]
+    assert d1["name"] == "以MVP思维，解析最小可行的进销存产品"  # 尾巴剪净
+    assert dl.get_entry(e1.id).meta["display_name"] == d1["name"]
+    # 空 ids 400 / 无 token 403
+    assert client.post("/api/entries/auto-name", json={"ids": []},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/auto-name", json={"ids": [e1.id]},
+                       headers={}).status_code == 403
+
+
 def test_bulk_status_and_pending_queue(client, dl):
     """批次 68：批量流转（activate/reject）+ 待审队列——审查闭环。"""
     from knowatlas.models import Entry

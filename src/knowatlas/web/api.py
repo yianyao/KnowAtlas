@@ -18,6 +18,7 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from ..datalayer.db import REJECT_COOLING_DAYS
+from ..errors import ContractError
 from ..semantic.keywords import word_ok as _cloud_word_ok
 
 _TOKEN_HEADER = "x-knowatlas-token"
@@ -242,6 +243,112 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             done.append(eid)
         return {"done": done, "missing": missing, "status": status,
                 "cooling_days": REJECT_COOLING_DAYS if action == "reject" else None}
+
+    @app.post("/api/entries/{entry_id}/rename")
+    def rename_entry(request: Request, entry_id: str, body: dict = Body(default={})):
+        """条目改名（批次 71，截图痛点「网页原标题带站点尾巴毫无知识味」）。
+
+        body: name=新名字（1..120 字）。写 meta.display_name 覆盖层——数据层
+        _row_to_entry 统一应用，列表/检索/图全部生效；full 重同步冲不回（覆盖层
+        在 meta）。name 为空串=清除覆盖回归源标题。task_log 留痕。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        name = str(body.get("name", "")).strip()
+        if len(name) > 120:
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST", "message": "名字最长 120 字"}},
+                status_code=400)
+        dl.merge_meta(entry_id, {"display_name": name or None})
+        dl.log_task(_now_iso(), "web", "rename", entry_id,
+                    {"old": entry.title[:60], "new": name[:120] or None})
+        return {"entry_id": entry_id, "name": name or None,
+                "title": dl.get_entry(entry_id).title}
+
+    @app.post("/api/entries/merge")
+    def merge_entries_ep(request: Request, body: dict = Body(default={})):
+        """条目合并（批次 71，截图批注「PECOS×3 这种就该合并」）。
+
+        body: primary_id=主条目、merge_ids=[被并条目…]（≤50）。被并条目的
+        locator/知识点溯源/分类全部归主条目，自身置 rejected（带冷却起点，
+        30 天后老化物理删除出口自动清）。task_log 留痕。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        primary_id = str(body.get("primary_id", "")).strip()
+        merge_ids = [str(x).strip() for x in (body.get("merge_ids") or []) if str(x).strip()]
+        merge_ids = list(dict.fromkeys(merge_ids))[:50]
+        if not primary_id or not merge_ids:
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "需要 primary_id 和 merge_ids（至少 1 条）"}},
+                status_code=400)
+        if primary_id in merge_ids:
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST", "message": "主条目不能出现在 merge_ids"}},
+                status_code=400)
+        try:
+            stats = dl.merge_entries(primary_id, merge_ids, reason="web_merge")
+        except ContractError as e:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": str(e)}},
+                                status_code=400)
+        return stats
+
+    @app.get("/api/entries/{entry_id}/preview")
+    def entry_preview(request: Request, entry_id: str):
+        """条目预览（批次 71，截图痛点「点条目直接跳 file:// 或离开站内」）。
+
+        返回 display_name/正文前 2000 字（content_store）/元信息（来源/分类/
+        附加 locator/点数）——前端弹层展示，「打开原文」走 locator。
+        """
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        body_text = ""
+        if entry.content_hash:
+            full = dl.get_content(entry.content_hash) or ""
+            body_text = full[:2000] + ("…[截断]" if len(full) > 2000 else "")
+        cats = [c["name"] for c in dl.get_entry_categories(entry_id)]
+        extra_locs = dl.all_entry_locators().get(entry_id, [])
+        pts = dl.points_of_entries([entry_id])
+        n_points = len(pts.get(entry_id, [])) if isinstance(pts, dict) else len(pts)
+        return {"id": entry_id, "title": entry.title, "locator": entry.locator,
+                "source_type": entry.source_type, "native_path": entry.native_path,
+                "status": entry.status, "categories": cats,
+                "extra_locators": extra_locs, "points_count": n_points,
+                "merged_from": entry.meta.get("merged_from") or [],
+                "body": body_text}
+
+    @app.post("/api/entries/auto-name")
+    def auto_name(request: Request, body: dict = Body(default={})):
+        """AI 批量起名（批次 71，截图批注「按知识的名字来命名」）。
+
+        对 ids（≤50）条目：取正文 → LLM 起 8-20 字知识化短名（默认提示词可用
+        body.prompt 覆盖）→ 写 meta.display_name。同步 def（LLM 网络调用禁占
+        事件循环）。已有 display_name 的跳过（force=true 强制重起）。返回逐条
+        新名与跳过清单。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        ids = [str(x).strip() for x in (body.get("ids") or []) if str(x).strip()]
+        ids = list(dict.fromkeys(ids))[:50]
+        force = bool(body.get("force"))
+        prompt_override = str(body.get("prompt", "")).strip()
+        if not ids:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": "ids 为空"}},
+                                status_code=400)
+        from ..semantic.naming import auto_name_entries
+        result = auto_name_entries(cfg, dl, ids, force=force,
+                                   prompt_override=prompt_override or None)
+        return result
 
     @app.get("/api/pending")
     def pending_entries(limit: int = 500):

@@ -2459,4 +2459,45 @@ emmx 拒绝）。全量 pytest 419 通过（1 skip）。方案文档 §9 批次�
   删除出口扫不到这批（永不自动删）。处置挂账等用户裁决（补 rejected_at 起
   冷却 / 保持人工）。
 
+### 第七十一批：条目命名体系 + 合并 + 预览（Phase 7 批次 71，2026-10-22）
+
+**背景**：用户截图批注——①书签标题是网页原标题（「以MVP思维，解析最小的进销存
+产品 | 人人都是产品经理」），「能不能按知识的名字来命名」；②PECOS×3 同主题
+重复「这种就该合并」；③点条目直接跳 file://（浏览器拦）或离开站内，「点开啥
+也看不出来」。另用户四问裁决了批次顺序：分类浏览集分组/关系图密度→72，
+bge-m3/PG 真机→73。
+
+**①改名（display_name 覆盖层）**：`POST /api/entries/{id}/rename` 写
+meta.display_name（1..120 字，空串=清除覆盖）；_row_to_entry 统一应用——
+列表/检索/图全部消费面自动生效，full 重同步冲不回（覆盖层在 meta，upsert
+只冲 entries.title）。前端 ✏️ 按钮 + prompt 输入。
+
+**②合并**：db.merge_entries——被并条目 locator 挂主条目（entry_locators，
+INSERT OR IGNORE）、点溯源 UPDATE OR IGNORE 转移（点不丢，共享点归并）、
+分类挂接搬移（confidence/origin/task_run_id 原样带）、自身置 rejected
+（rejected_at 冷却起点，30 天老化出口物理删）、merged_into/merged_from
+双向锚（Python 侧读改写——SQL json_set 拼数组易 malformed，本批教训）。
+`POST /api/entries/merge`（primary_id + merge_ids≤50）；前端多选 ≥2 条
+「⇒合并」，第一条为主条目（confirm 明示主被并名单）。
+
+**③预览面板**：`GET /api/entries/{id}/preview`（display_name/正文前 2000 字
+content_store/分类/附加 locator 数/点数/merged_from）；前端点条目标题弹
+dialog（不跳走），「打开原文 ↗」保留原 locator 新标签；Ctrl/Shift 点击
+保留浏览器默认（新标签直达）。
+
+**④AI 批量起名**：semantic/naming.py——正文 1500 字交 LLM 起 8-20 字知识化
+短名（默认提示词前端可改，POST body.prompt 覆盖）；已有 display_name 跳过
+（force 重起）；无正文降级剪「| 站点名」尾巴（正则，零费用）；LLM 失败单条
+记录不中断。`POST /api/entries/auto-name`（ids≤50，同步 def）；前端多选
+「✨AI 起名」+ 提示词 prompt 编辑 + 结果摘要（起名/跳过/降级/失败计数）。
+
+**测试**：test_web_api +2（rename 全路径含空名清除/120 上限/404/403；merge
+全路径含 locator 挂接验证/点溯源转移验证/400×3/403；preview 含正文与
+extra_locators；auto-name 含跳过/降级剪尾/400/403）。全量 pytest 421 通过
+（1 skip）。修复过程：ContractError 导入缺失/entry_categories 列名
+（confidence/task_run_id 非 weight/run_id）/point_sources 无 content_hash
+列（经 points JOIN）/put_content 走 FetchResult。孤儿点 627 清理（folder
+purge 挂账，并入本批收尾）。UTF-8 无 BOM + LF（naming.py Write 落盘 CRLF
+转 LF——Write 工具在 Windows 的默认行为，收尾扫描必查）。
+
 

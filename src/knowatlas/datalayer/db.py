@@ -228,11 +228,16 @@ class DataLayer:
 
     @staticmethod
     def _row_to_entry(row: sqlite3.Row) -> Entry:
+        meta = json.loads(row["meta"])
+        # display_name 覆盖层（批次 71）：用户改名/AI 起名优先于源标题——
+        # full 重同步会冲回 entries.title（upsert 覆盖），覆盖层在 meta 不受影响；
+        # 统一在数据层应用，所有消费面（列表/检索/图/导出）自动生效。
+        title = str(meta.get("display_name") or row["title"] or "")
         return Entry(
-            id=row["id"], source_type=row["source_type"], title=row["title"],
+            id=row["id"], source_type=row["source_type"], title=title,
             locator=row["locator"], locator_canonical=row["locator_canonical"],
             native_path=row["native_path"], inline_content=row["inline_content"],
-            content_hash=row["content_hash"], meta=json.loads(row["meta"]),
+            content_hash=row["content_hash"], meta=meta,
             created_at=row["created_at"], exported_at=row["exported_at"], status=row["status"],
         )
 
@@ -289,6 +294,76 @@ class DataLayer:
                 " VALUES (?,?,?,?)",
                 (entry_id, locator, scheme, int(is_primary)),
             )
+
+    def merge_entries(self, primary_id: str, merge_ids: list[str], *,
+                      reason: str = "web_merge") -> dict[str, Any]:
+        """条目合并（批次 71）：同主题多条并成一条——用户截图「PECOS×3 该合并」。
+
+        - merge_ids 各条的 locator 逐个挂到主条目（entry_locators，跨源合并落点）；
+        - 点溯源转移：point_sources.entry_id 改指主条目（点与溯源不丢，主条目
+          溯源变多）；共享点自动归并；
+        - 分类挂接合并：entry_categories INSERT OR IGNORE（主条目获得缺失分类）；
+        - 其余条目置 rejected（带 rejected_at 冷却起点——用户舍弃语义，30 天后
+          kaging 可物理删除；不物理删：正文引用计数归零回收自动发生）；
+        - meta 记 merged_into / merged_from 双向锚（审计与理解来路）；
+        - 返回 {merged, primary_locators, points_moved}。task_log 留痕。
+        """
+        if primary_id in merge_ids:
+            raise ContractError("主条目不能出现在合并列表里", entry_id=primary_id)
+        moved_points = 0
+        with self.transaction() as conn:
+            primary = conn.execute("SELECT id, locator FROM entries WHERE id=?",
+                                   (primary_id,)).fetchone()
+            if primary is None:
+                raise ContractError(f"主条目不存在：{primary_id}", entry_id=primary_id)
+            n_moved = 0
+            for mid in merge_ids:
+                row = conn.execute(
+                    "SELECT id, locator, source_type, title FROM entries WHERE id=?",
+                    (mid,)).fetchone()
+                if row is None:
+                    continue
+                loc = row["locator"]
+                if loc and loc != primary["locator"]:
+                    scheme = loc.split("://", 1)[0].lower()
+                    if scheme in SCHEMES:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO entry_locators (entry_id, locator,"
+                            " scheme, is_primary) VALUES (?,?,?,0)", (primary_id, loc, scheme))
+                conn.execute("UPDATE OR IGNORE point_sources SET entry_id=? WHERE entry_id=?",
+                             (primary_id, mid))
+                moved_points += conn.execute(
+                    "SELECT changes()").fetchone()[0]
+                # 分类挂接搬给主条目（重复自动忽略）
+                conn.execute(
+                    "INSERT OR IGNORE INTO entry_categories (entry_id, category_id,"
+                    " confidence, origin, task_run_id)"
+                    " SELECT ?, category_id, confidence, origin, task_run_id"
+                    " FROM entry_categories WHERE entry_id=?",
+                    (primary_id, mid))
+                # 被并条目：舍弃（带冷却起点）+ 双向锚
+                conn.execute(
+                    "UPDATE entries SET status='rejected',"
+                    " meta=json_set(meta,'$.merged_into',?,'$.rejected_at',?) WHERE id=?",
+                    (primary_id, _now(), mid))
+                n_moved += 1
+            # merged_from 双向锚：Python 侧读-改-写（SQL JSON 拼接数组易 malformed）
+            prow = conn.execute("SELECT meta FROM entries WHERE id=?",
+                                (primary_id,)).fetchone()
+            pmeta = json.loads(prow["meta"]) if prow and prow["meta"] else {}
+            prev = pmeta.get("merged_from") or []
+            pmeta["merged_from"] = list(prev) + merge_ids[:20]
+            conn.execute("UPDATE entries SET meta=? WHERE id=?",
+                         (json.dumps(pmeta, ensure_ascii=False), primary_id))
+            conn.execute(
+                "INSERT INTO task_log (at, task_name, action, target, detail)"
+                " VALUES (?,?,?,?,?)",
+                (_now(), "web", "merge_entries", primary_id,
+                 json.dumps({"merged": n_moved, "merge_ids": merge_ids[:20],
+                             "points_moved": moved_points, "reason": reason},
+                            ensure_ascii=False)))
+        return {"merged": n_moved, "primary": primary_id,
+                "points_moved": moved_points}
 
     def all_categories_dag(self) -> list[dict[str, Any]]:
         """全部分类的原始 DAG 投影（id/name/note/origin/created_at/parents/first_path）——

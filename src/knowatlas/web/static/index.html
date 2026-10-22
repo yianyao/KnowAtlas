@@ -273,8 +273,20 @@
   <button id="ms-move" class="primary">移到…</button>
   <button id="ms-activate" title="批量转正：待审→入库消费面（批次 68）">✅ 转正</button>
   <button id="ms-reject" title="批量舍弃：→ 已舍弃，30 天冷却可反悔">🗑 舍弃</button>
+  <button id="ms-merge" title="合并为一条（批次 71）：选中的第一条为主条目，其余的链接/知识点/分类全部归它，主条目之外的置已舍弃">⇒合并</button>
+  <button id="ms-autoname" title="AI 起名（批次 71）：按正文生成知识化短名（默认提示词，可改）；已有名字的跳过">✨AI 起名</button>
   <button id="ms-cancel">取消</button>
 </div>
+<!-- 预览面板（批次 71）：点条目标题弹出——正文预览+元信息+打开原文 -->
+<dialog id="preview-dialog" style="border:1px solid #ddd;border-radius:10px;max-width:720px;width:88vw;padding:0">
+  <div style="padding:14px 18px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <b id="pv-title" style="font-size:15px"></b>
+    <span><a id="pv-open" href="#" target="_blank" rel="noopener" class="primary" style="text-decoration:none;font-size:13px">打开原文 ↗</a>
+    <button onclick="document.getElementById('preview-dialog').close()" style="margin-left:8px">✕</button></span>
+  </div>
+  <div id="pv-meta" style="padding:8px 18px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
+  <pre id="pv-body" style="margin:0;padding:12px 18px 16px;white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--mono,monospace);max-height:60vh;overflow:auto;color:#333"></pre>
+</dialog>
 <!-- bookmarklet 左缘小书签坞（第五十九批）：默认收缩到左缘，悬停展开显示用途；
      拖到书签栏后任意网页一键收录。拖拽期间保持展开。 -->
 <div id="bm-dock">
@@ -466,14 +478,51 @@ async function opMerge(n) {
 const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散", opml: "OPML" };
 function srcLabel(t) { return SRC_LABEL[t] || t; }
 function entryHTML(e) {
-  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
        + `<span class="badge">${srcLabel(e.source_type)}</span>`
+       + `<button class="rename-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}" title="改名（批次 71：写覆盖层，重同步不冲回）">✏️</button>`
        + `<button class="move-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
        + `<button class="reject-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
+}
+// 预览面板（批次 71，截图批注「点开啥也看不出来」）：点条目标题不跳走，
+// 弹层显示正文预览+元信息；「打开原文」按钮走原 locator。Esc/×关闭。
+async function openPreview(id) {
+  const res = await fetch(`/api/entries/${id}/preview`);
+  if (!res.ok) { alert("预览失败：" + res.status); return; }
+  const d = await res.json();
+  const dlg = document.getElementById("preview-dialog");
+  document.getElementById("pv-title").textContent = d.title || "(无题)";
+  document.getElementById("pv-meta").innerHTML =
+    `<span class="badge">${srcLabel(d.source_type)}</span>`
+    + (d.categories || []).map(c => `<span class="badge">📁${c}</span>`).join(" ")
+    + (d.extra_locators && d.extra_locators.length
+       ? `<span class="badge" title="合并条目的其他来源（entry_locators）">🔗${d.extra_locators.length} 来源</span>` : "")
+    + (d.points_count ? `<span class="badge">◆ ${d.points_count} 点</span>` : "")
+    + (d.native_path ? `<small style="color:#888"> ${d.native_path}</small>` : "");
+  document.getElementById("pv-body").textContent = d.body || "（无正文预览——未抓取或二进制文件。可在数据管理页跑 --fetch-limit 抓正文。）";
+  document.getElementById("pv-open").href = d.locator;
+  dlg.showModal();
+}
+// 改名（批次 71，截图批注「这名字看着不爽」）：prompt 输入新名；空串=清除
+// 覆盖回归源标题。写 meta.display_name，前端刷新当前视图。
+async function opRename(id, oldTitle) {
+  const name = prompt(`改名为（留空则清除覆盖、回归源标题）：\n${oldTitle.slice(0, 80)}`, "");
+  if (name === null) return;  // 取消
+  const res = await writeJSON(`/api/entries/${id}/rename`, { name });
+  if (res.__aborted) return;
+  if (res.error) { alert("改名失败：" + res.error.message); return; }
+  refreshCurrent();
 }
 function bindEntryButtons() {
   document.querySelectorAll(".move-btn").forEach(b => b.onclick = () => opRecategorize(b.dataset.id, b.dataset.title));
   document.querySelectorAll(".reject-btn").forEach(b => b.onclick = () => opReject(b.dataset.id, b.dataset.title));
+  document.querySelectorAll(".rename-btn").forEach(b => b.onclick = () => opRename(b.dataset.id, b.dataset.title));
+  // 标题点击 → 预览面板（批次 71）：拦截默认跳转；修饰键/Ctrl 点击保留原行为（新标签打开链接）
+  document.querySelectorAll(".entry-title-link").forEach(a => a.onclick = (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey) return;
+    ev.preventDefault();
+    openPreview(a.dataset.id);
+  });
   // 复制条目 ID（第四十二批）：统一注入到所有带 data-id 的条目行——
   // 检索/词云切面/时间线桶/管理页等全部 entry-host 视图自动获得，无需逐视图改模板。
   // 主要用途：拿 id 跑 ksync --expand <entry_id> 扩散抓取。
@@ -728,6 +777,45 @@ async function bulkStatus(action) {
 }
 document.getElementById("ms-activate").onclick = () => bulkStatus("activate");
 document.getElementById("ms-reject").onclick = () => bulkStatus("reject");
+// 条目合并（批次 71，截图批注「PECOS×3 这种就该合并」）：勾选 ≥2 条 →
+// 第一条为主条目（保留），其余并入（链接/知识点/分类归主条目，自身舍弃）。
+// 顺序敏感——提示用户主条目是第一条；合并后预览主条目确认。
+document.getElementById("ms-merge").onclick = async () => {
+  if (selection.size < 2) { alert("合并至少勾选 2 条；第一条为主条目（保留），其余并入它"); return; }
+  const ids = [...selection];
+  const names = ids.map(id => {
+    const d = document.querySelector(`.entry[data-id="${id}"]`);
+    return d ? (d.querySelector(".entry-title-link") || {}).textContent || id : id;
+  });
+  if (!confirm(`合并 ${ids.length} 条 → 保留第 1 条为主条目：\n\n① ${names[0]}\n其余 ${ids.length - 1} 条的链接/知识点/分类并入它，自身置「已舍弃」。\n\n主条目：\n${names[0]}\n被并：\n${names.slice(1).map((n, i) => `${i + 2}. ${n}`).join("\n")}`)) return;
+  const res = await writeJSON("/api/entries/merge", { primary_id: ids[0], merge_ids: ids.slice(1) });
+  if (res.__aborted) return;
+  if (res.error) { alert("合并失败：" + res.error.message); return; }
+  alert(`已合并：${res.merged} 条并入主条目，知识点溯源移动 ${res.points_moved} 条。`);
+  clearSelection();
+  refreshCurrent();
+};
+// AI 起名（批次 71，截图批注「能不能按知识的名字来命名」）：勾选条目 →
+// 可改提示词 → LLM 按正文起知识化短名。无正文条目降级剪「| 站点名」尾巴。
+document.getElementById("ms-autoname").onclick = async () => {
+  if (!selection.size) { alert("先勾选要起名的条目（建议书签类）"); return; }
+  const promptTxt = prompt(
+    "AI 起名提示词（可改，取消=不执行）：\n（对每条取正文交 LLM 生成 8-20 字知识化短名）",
+    "你是知识库管理员。根据文档正文给它起一个知识化的短名字。\n要求：\n1. 8-20 个字，中文为主（专有名词保留原文）\n2. 直说知识内容本身，不要「浅谈」「一文读懂」等水词\n3. 去掉网站名、作者署名、管道符尾巴\n4. 只输出名字本身，不要引号或解释");
+  if (promptTxt === null) return;
+  const ids = [...selection];
+  if (!confirm(`对 ${ids.length} 条执行 AI 起名？（几分钱/条；已有名字的跳过）`)) return;
+  const res = await writeJSON("/api/entries/auto-name", { ids, prompt: promptTxt });
+  if (res.__aborted) return;
+  if (res.error) { alert("AI 起名失败：" + res.error.message); return; }
+  const parts = [`起名 ${res.count} 条`];
+  if (res.skipped.length) parts.push(`跳过 ${res.skipped.length}（已有名字/不存在）`);
+  if (res.degraded.length) parts.push(`降级 ${res.degraded.length}（无正文，剪站点尾巴）`);
+  if (res.errors.length) parts.push(`失败 ${res.errors.length}`);
+  alert(parts.join("；") + (res.count ? "\n\n" + res.named.slice(0, 8).map(n => `「${n.old.slice(0, 30)}」→「${n.new}」`).join("\n") : ""));
+  clearSelection();
+  refreshCurrent();
+};
 // 改类对话框（第五十二批重做）：单条（条目行「移」/拖拽 drop）与批量
 // （多选模式浮动条）共用——moveTargets 为条目 id 数组；keep 勾选=多父挂接
 // （只追加不摘旧）；prefill 预填目标路径（拖拽场景=拖到的树节点路径）。
