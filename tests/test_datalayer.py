@@ -297,16 +297,16 @@ def test_graph_subtree_entries_ancestors_and_locator(dl):
     assert data is not None
     kinds = {n["id"]: n for n in data["nodes"]}
     assert set(kinds) == ({f"c:{a.id}", f"c:{b.id}"}
-                          | {f"e:{e.id}" for e in es[:3]} | {"d:h.com"})  # 同域聚合节点
+                          | {f"e:{e.id}" for e in es[:3]})   # 无域名节点（用户裁决：域名不作关联项）
     # 条目带 locator（前端点击打开原文）
     assert kinds[f"e:{es[1].id}"]["locator"] == "https://h.com/1"
-    # 挂接边连子树内分类；同域边连域名节点——均不出子树范围
-    assert all(l["target"].startswith(("c:", "d:")) for l in data["links"])
+    # 挂接边连子树内分类——均不出子树范围
+    assert all(l["target"].startswith("c:") for l in data["links"])
     assert dl.get_graph_subtree("nonexistent0") is None
 
 
 def test_graph_subtree_hierarchy_next_level_only(dl):
-    """层级模式（批次 63）：非叶子只出下一级子分类（child 边+value），不出条目/域名/祖先链。"""
+    """层级模式（批次 63）：非叶子只出下一级子分类（child 边+value），不出条目/祖先链。"""
     a, b, es = _graph_fixture(dl)
     data = dl.get_graph_subtree(a.id, hierarchy=True)
     by_id = {n["id"]: n for n in data["nodes"]}
@@ -322,8 +322,7 @@ def test_graph_subtree_hierarchy_leaf_shows_entries_no_ancestors(dl):
     data = dl.get_graph_subtree(b.id, hierarchy=True)
     kinds = {n["id"] for n in data["nodes"]}
     assert f"c:{a.id}" not in kinds                      # 祖先链不出现
-    assert kinds == ({f"c:{b.id}"} | {f"e:{e.id}" for e in es[1:3]}
-                     | {"d:h.com"})                      # B 挂 2 条（同 host）+ 域名聚合
+    assert kinds == ({f"c:{b.id}"} | {f"e:{e.id}" for e in es[1:3]})   # B 挂 2 条（同 host 也不聚合出域名节点）
 
 
 def test_graph_subtree_hierarchy_all_children_pruned_falls_leaf(dl):
@@ -336,7 +335,7 @@ def test_graph_subtree_hierarchy_all_children_pruned_falls_leaf(dl):
     ids = {n["id"] for n in data["nodes"]}
     assert f"c:{empty.id}" not in ids                    # 剪枝口径与经典视图一致
     assert f"e:{es[0].id}" in ids                        # 落叶子装配：条目出现
-    assert not any(n["id"].startswith("d:") for n in data["nodes"])   # 单条目不出域名节点
+    assert not any(n["id"].startswith("d:") for n in data["nodes"])   # 域名节点已废（不作关联项）
 
 
 def test_graph_search_matches_title_and_category_with_chain(dl):
@@ -354,12 +353,16 @@ def test_graph_search_matches_title_and_category_with_chain(dl):
     assert dl.search_graph("%")["nodes"] == []
 
 
-def test_graph_search_groups_same_host(dl):
+def test_graph_search_no_domain_nodes(dl):
+    """域名节点已废（2026-10-22 用户裁决「域名也作为关联项，毫无意义」）：
+    同 host 条目只各自出现，不再聚合出 d: 节点。"""
     es = [make_entry(source_key=f"https://z.com/{i}", locator=f"https://z.com/{i}",
                      title=f"同站{i}") for i in range(2)]
     dl.upsert_entries(es)
     data = dl.search_graph("同站")
-    assert any(n["kind"] == "domain" and n["name"] == "z.com" for n in data["nodes"])
+    assert {f"e:{e.id}" for e in es} <= {n["id"] for n in data["nodes"]}
+    assert not any(n["kind"] == "domain" or n["id"].startswith("d:")
+                   for n in data["nodes"])
 
 
 

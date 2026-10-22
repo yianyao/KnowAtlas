@@ -2384,3 +2384,27 @@ missing；linkage mind_paths 含空态）。全量 pytest 414 通过（1 skip）
 首轮 FAIL 为浏览器缓存假阴性（serve 端直查确认新代码）。改动文件 UTF-8 无
 BOM + LF。
 
+### 关系图去域名节点（第六十八批后用户截图反馈修正，2026-10-22）
+
+**用户截图批注**：「域名也作为关联项，毫无意义」——子树/搜索/总览图里，≥2 条
+同 host 条目会聚合出一个 `d:<域名>` 灰色枢纽节点，纯噪音。
+
+**裁决**：域名不作为关联项出图。同域关系只在两个带解释的位置保留：
+radiate 放射视图的 `same_host:<host>` 通道（条目↔条目，悬停见理由）与反查
+面板的「同域名」列表项——那里域名是解释，不是节点。
+
+**改动**：
+- db.py：`get_graph_data`（v0 总览）/`get_graph_subtree`（经典+层级叶子层）/
+  `search_graph` 三个构建器移除域名节点与 same_host 边；删 `_host_group_links`；
+  条目节点不再携带仅用于分组的 host 字段
+- graph.html：清理域名渲染死分支（尺寸 10/灰色 #999/恒显标签/统计行「域名 N」/
+  点击恒走放射）
+- 测试：test_datalayer 图断言去 d: 节点（3 处）+ `test_graph_search_no_domain_nodes`
+  （原 groups_same_host 反转）；test_web_api `test_graph_data_shape` 反转
+  （断言无域名节点/无 same_host 边）。radiate/reverse 域名焦点测试不变（API 能力保留）
+
+**真库验证**：serve 重启后 `/api/graph` 416 节点 / 4592 边——domain 节点 0、
+same_host 边 0；graph.html 部署面无 domain 渲染分支。全量 pytest 414 通过
+（1 skip）。UTF-8 无 BOM + LF。
+
+

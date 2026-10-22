@@ -727,13 +727,12 @@ class DataLayer:
             "SELECT COUNT(*) FROM entries WHERE status=?", (status,)).fetchone()[0]
 
     def get_graph_data(self, max_entries: int = 400) -> dict[str, Any]:
-        """关系图数据（结构关系 v0）：分类节点 + 条目节点 + 域名节点。
+        """关系图数据（结构关系 v0）：分类节点 + 条目节点。
 
-        边的三类来源：条目↔分类（挂接，含 origin）、条目↔域名（locator host 归组，
-        星型防边爆炸）。语义级关系（引用/相似度）随 M2 正文与 M4 embedding 接入后扩展。
+        边的来源：条目↔分类（挂接，含 origin）。语义级关系（引用/相似度）随
+        M2 正文与 M4 embedding 接入后扩展。（域名节点已废——2026-10-22 用户裁决：
+        「域名也作为关联项，毫无意义」，同域关系只在 radiate/reverse 通道保留。）
         """
-        from urllib.parse import urlsplit
-
         entries = self._conn.execute(
             "SELECT id, title, locator FROM entries WHERE status='active'"
             + _consumable("entries") + " LIMIT ?",
@@ -748,13 +747,9 @@ class DataLayer:
         nodes: list[dict[str, Any]] = []
         links: list[dict[str, Any]] = []
         seen_cids: set[str] = set()
-        host_members: dict[str, list[str]] = {}
         for e in entries:
-            host = urlsplit(e["locator"]).hostname or ""
             nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
-                          "kind": "entry", "host": host})
-            if host:
-                host_members.setdefault(host, []).append(f"e:{e['id']}")
+                          "kind": "entry"})
         for r in ecat:
             cid = r["category_id"]
             if cid not in cats:
@@ -764,13 +759,6 @@ class DataLayer:
                 nodes.append({"id": f"c:{cid}", "name": cats[cid], "kind": "category"})
             links.append({"source": f"e:{r['entry_id']}", "target": f"c:{cid}",
                           "kind": r["origin"]})
-        for host, members in host_members.items():
-            if len(members) < 2:
-                continue
-            domain_id = f"d:{host}"
-            nodes.append({"id": domain_id, "name": host, "kind": "domain"})
-            for m in members:
-                links.append({"source": m, "target": domain_id, "kind": "same_host"})
         return {"nodes": nodes, "links": links}
 
     # ---- 关系图三视图（0.2.0 第二十二批：总览 → 搜索/下钻按需子图） ----
@@ -823,25 +811,6 @@ class DataLayer:
         """LIKE 模式（转义 %/_，配 ESCAPE '\\' 使用）。"""
         return "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
-    def _host_group_links(self, entry_nodes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """匹配条目间的同域名聚合（≥2 条才出域名节点）——与 v0 口径一致。"""
-        from urllib.parse import urlsplit
-
-        members: dict[str, list[str]] = {}
-        for n in entry_nodes:
-            host = n.get("host") or ""
-            if host:
-                members.setdefault(host, []).append(n["id"])
-        nodes: list[dict[str, Any]] = []
-        links: list[dict[str, Any]] = []
-        for host, ids in members.items():
-            if len(ids) < 2:
-                continue
-            nodes.append({"id": f"d:{host}", "name": host, "kind": "domain"})
-            for m in ids:
-                links.append({"source": m, "target": f"d:{host}", "kind": "same_host"})
-        return nodes, links
-
     def get_graph_overview(self) -> dict[str, Any]:
         """大纲图：只含一级大类节点，value = 子树 active 条目数（前端按它定气泡大小）。"""
         has_parent = {r["category_id"] for r in
@@ -864,7 +833,7 @@ class DataLayer:
 
         条目节点带 locator（前端点击可打开原链接）；分类不存在返回 None。
         hierarchy=True（纯层级模式，批次 63）：只出下一级子分类（child 边，
-        value=子树可消费数），不出条目/域名/祖先链——叶子层（无未剪空子类）
+        value=子树可消费数），不出条目/祖先链——叶子层（无未剪空子类）
         自动出本子树条目；非叶子层条目由前端「显示条目」显式拉经典视图。
         """
         cat = self._conn.execute(
@@ -911,12 +880,10 @@ class DataLayer:
             if cid != category_id and self._consumable_count(self._cat_descendants(cid)) == 0:
                 continue
             nodes.append({"id": f"c:{cid}", "name": cats.get(cid, "?"), "kind": "category"})
-        from urllib.parse import urlsplit
         entry_nodes: list[dict[str, Any]] = []
         for e in entries:
-            host = urlsplit(e["locator"]).hostname or ""
             entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
-                                "kind": "entry", "locator": e["locator"], "host": host})
+                                "kind": "entry", "locator": e["locator"]})
         nodes.extend(entry_nodes)
         links: list[dict[str, Any]] = []
         if entry_ids:
@@ -927,9 +894,6 @@ class DataLayer:
                     (*entry_ids, *sub_ids)):
                 links.append({"source": f"e:{r['entry_id']}", "target": f"c:{r['category_id']}",
                               "kind": r["origin"]})
-        d_nodes, d_links = self._host_group_links(entry_nodes)
-        nodes.extend(d_nodes)
-        links.extend(d_links)
         return {"root": category_id, "nodes": nodes, "links": links}
 
     def search_graph(self, q: str, limit: int = 80) -> dict[str, Any]:
@@ -937,8 +901,6 @@ class DataLayer:
 
         只带命中条目、其直挂分类与祖先链——不扩散拉全子树，保证子图小而相关。
         """
-        from urllib.parse import urlsplit
-
         pat = self._like_pattern(q)
         matched_entries = self._conn.execute(
             "SELECT id, title, locator FROM entries WHERE status='active'"
@@ -955,9 +917,8 @@ class DataLayer:
         entry_ids = [e["id"] for e in matched_entries]
         entry_nodes: list[dict[str, Any]] = []
         for e in matched_entries:
-            host = urlsplit(e["locator"]).hostname or ""
             entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
-                                "kind": "entry", "locator": e["locator"], "host": host})
+                                "kind": "entry", "locator": e["locator"]})
         nodes.extend(entry_nodes)
         # 命中分类节点（含其祖先链，保证能看见大类归属）
         involved: set[str] = set(matched_cats)
@@ -976,9 +937,6 @@ class DataLayer:
         for cid in involved:
             if cid in cats:
                 nodes.append({"id": f"c:{cid}", "name": cats[cid], "kind": "category"})
-        d_nodes, d_links = self._host_group_links(entry_nodes)
-        nodes.extend(d_nodes)
-        links.extend(d_links)
         return {"query": q, "nodes": nodes, "links": links}
 
     # ---- 放射导航（0.2.0 第三十三批：§9.4 探索导向迭代，不推翻三视图） ----

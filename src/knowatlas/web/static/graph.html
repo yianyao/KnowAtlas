@@ -80,7 +80,7 @@ function fmtReason(r) {
   const raw = r.slice(i + 1), tail = KIND_LABEL[raw];
   return tail ? `${head}·${tail}` : `${head}:${raw}`;
 }
-const KIND_NAME = { category: "分类", entry: "条目", domain: "域名" };
+const KIND_NAME = { category: "分类", entry: "条目" };
 const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
                         same_host: "同域名", thread: "同线索", host_member: "域内条目" };
 const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
@@ -207,13 +207,13 @@ function render(data, crumbText, opts = {}) {
   // 否则邻域从原点随机起步，包围盒左上角即焦点，自动 fit 后焦点连同挂接
   // 条目整团挤在视口左上被裁剪（第四十八批截图实锤）；环形布种让包围盒
   // 以焦点为中心，fit 后焦点居中、邻域向外放射。
-  const RING_R = { category: 260, entry: 170, domain: 140 };
+  const RING_R = { category: 260, entry: 170 };
   const nodes = data.nodes.map((n, i) => {
     const isFocus = radiateView && n.id === data.focus.id;
     const size = isFocus ? 34
       : n.kind === "category"
         ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)
-        : (n.kind === "domain" ? 10 : 7);
+        : 7;
     let x, y;
     if (isFocus) { x = 0; y = 0; }
     else if (radiateView) {
@@ -229,11 +229,11 @@ function render(data, crumbText, opts = {}) {
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
       itemStyle: { color: isFocus ? "#ffd04b"
                      : n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
-                     : n.kind === "domain" ? "#999" : "#7ba7d7",
+                     : "#7ba7d7",
                    opacity: n.ctx ? 0.55 : 1,
                    borderColor: isFocus ? "#c8871a" : undefined,
                    borderWidth: isFocus ? 2 : 0 },
-      label: { show: isFocus || n.kind === "category" || n.kind === "domain"
+      label: { show: isFocus || n.kind === "category"
                     || (n.kind === "entry" && data.nodes.length <= 50),
                fontSize: n.kind === "category" ? 13 : 10,
                fontWeight: isFocus ? "bold" : "normal",
@@ -257,8 +257,7 @@ function render(data, crumbText, opts = {}) {
     .map(([k, v]) => `${CHANNEL_LABEL[k] || k} ${v} 条未显示`);
   tip.textContent =
     `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length}` +
-    ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}` +
-    ` / 域名 ${nodes.filter(n=>n.kind==="domain").length}），边 ${links.length}` +
+    ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}），边 ${links.length}` +
     (radiateView
       ? `。每条关联都带解释（悬停可看）${truncParts.length ? "；" + truncParts.join("，") : ""}。点邻域节点继续放射，焦点为黄。`
       : `。点分类下钻 / 点条目打开原文 / 回车搜索。`);
@@ -378,12 +377,11 @@ showEntriesBtn.onclick = () => {
   showSubtree(currentSubtree, false, true);
 };
 
-// ---- 点击行为：放射模式开启 → 任意节点放射；域名节点恒走放射 ----
+// ---- 点击行为：放射模式开启 → 任意节点放射 ----
 chart.on("click", p => {
   const d = p.data;
   if (!d) return;
   const radial = document.getElementById("radial").checked;
-  if (d.kind === "domain" && String(d.id).startsWith("d:")) { showRadiate(String(d.id)); return; }
   if (radial && (d.kind === "category" || d.kind === "entry")) { showRadiate(String(d.id)); return; }
   if (d.kind === "category" && String(d.id).startsWith("c:")) showSubtree(String(d.id).slice(2));
   else if (d.kind === "entry" && d.locator) window.open(d.locator, "_blank", "noopener");

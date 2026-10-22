@@ -63,7 +63,7 @@ def test_recategorize_manual_overrides_machine(client, dl):
 
 
 def test_graph_data_shape(client, dl):
-    """图数据：分类/条目/域名三类节点；同 host 多条目出域名节点与 same_host 边。"""
+    """图数据：分类/条目节点 + 挂接边；同 host 不再聚合域名节点（用户裁决：域名不作关联项）。"""
     from knowatlas.models import Entry
     entries = [
         Entry.build(source_type="bookmark", source_key=f"edge:{i}", title=f"页{i}",
@@ -78,8 +78,9 @@ def test_graph_data_shape(client, dl):
     data = client.get("/api/graph").json()
     kinds = {n["kind"] for n in data["nodes"]}
     assert {"entry", "category"} <= kinds
-    assert any(n["kind"] == "domain" and n["name"] == "same.example" for n in data["nodes"])
-    assert any(l["kind"] == "same_host" for l in data["links"])
+    assert not any(n["kind"] == "domain" or n["id"].startswith("d:")
+                   for n in data["nodes"])
+    assert not any(l["kind"] == "same_host" for l in data["links"])
     assert any(l["kind"] == "prior" for l in data["links"])
 
 
