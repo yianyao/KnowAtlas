@@ -144,3 +144,38 @@ def test_exclude_dirs_pruning(cfg, folder_tree):
     locs2 = {e.locator for e in out2.entries}
     assert "file://ERP/进销存.xlsx" in locs2
     assert "file://ERP/报表/2026年报.pdf" not in locs2
+
+
+# ---- 入库缓冲（批次 68）：new_entries="pending" → 新条目进待审，不进消费面 ----
+
+def test_new_entries_pending_buffers(cfg, dl, registries, folder_tree):
+    """配置 new_entries=pending：新条目置 pending（不分类），二跑不重置，转正后正常。"""
+    _enable(cfg, folder_tree)
+    cfg._data["sources"]["folders"]["new_entries"] = "pending"
+    locators, semantics = registries
+    stats = run_sync(cfg, dl, locators, semantics, full=True)
+    src = stats["sources"]["folders"]
+    assert src["created"] == 5
+    ids = dl.find_by_locator("file://笔记.txt")
+    e = dl.get_entry(ids[0].id)
+    assert e.status == "pending"           # 缓冲：不进消费面（检索/分类/点抽取全按 active 过滤）
+    assert stats["sources"]["folders"].get("classified", 0) == 0  # 不烧分类费
+    # 二跑：unchanged，不反复重置（pending 条目不再是 new）
+    stats2 = run_sync(cfg, dl, locators, semantics, full=True)
+    assert stats2["sources"]["folders"]["unchanged"] == 5
+    assert dl.get_entry(ids[0].id).status == "pending"
+    # 转正（批量端点同款语义）：→ active 进消费面
+    all_ids = [dl.get_entry(x.id).id for x in
+               [i for loc in ["file://笔记.txt", "file://ERP/进销存.xlsx"]
+                for i in dl.find_by_locator(loc)]]
+    dl.set_status(all_ids, "active")
+    assert dl.get_entry(ids[0].id).status == "active"
+
+
+def test_new_entries_default_active_unchanged(cfg, dl, registries, folder_tree):
+    """默认（无 new_entries 键）：行为零变化——新条目直接 active。"""
+    _enable(cfg, folder_tree)
+    locators, semantics = registries
+    run_sync(cfg, dl, locators, semantics, full=True)
+    e = dl.get_entry(dl.find_by_locator("file://笔记.txt")[0].id)
+    assert e.status == "active"

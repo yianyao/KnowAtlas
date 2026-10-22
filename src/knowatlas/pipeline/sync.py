@@ -97,14 +97,17 @@ def _flag_value(dl: Any, entry: Entry, out: Any) -> bool:
 
 
 def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids: set[str],
-                updated_ids: set[str], run_id: str) -> dict[str, int]:
+                updated_ids: set[str], run_id: str,
+                pending_ids: frozenset[str] | set[str] = frozenset()) -> dict[str, int]:
     """对本次新建/更新条目批量跑 classify_coarse；未命中进暂存区（不挂分类）。
 
     更新条目（书签移动文件夹、标题变化等）先 detach 机器来源（origin != manual）
     的旧挂接再重挂——人工校正（origin=manual）永不覆盖（H3）。
     L3 LLM：cfg 的 [llm] 启用且 key 已设时自动生效，否则静默跳过。
     """
-    targets = [e for e in entries if e.id in new_ids or e.id in updated_ids]
+    targets = [e for e in entries
+               if (e.id in new_ids or e.id in updated_ids)
+               and e.id not in pending_ids]  # pending 缓冲（批次 68）：不烧分类费
     if not targets:
         return {"classified": 0, "staged": 0, "reclassified": 0}
     _, classify = semantics.resolve_task("classify_coarse")
@@ -645,7 +648,20 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
                         {"count": len(revived_ids),
                          "source_type": _SOURCE_TYPE_BY_NAME.get(name, name)})
-        cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id)
+        # 入库缓冲（批次 68，用户裁决「正常入库、人工判断后再参与处理」）：源配置
+        # new_entries="pending" 时新条目置 pending——不分类/不抓正文/不抽点（消费面
+        # 全部按 status='active' 过滤，天然隔离），管理页「🆕 待审」批量转正或舍弃。
+        # 默认 active（零行为变化）；给未来高噪音源（聊天记录/AI 会话/邮件）立闸门。
+        pending_ids: set[str] = set()
+        if str(sec.get("new_entries", "active")).strip() == "pending" and new_ids:
+            pending_ids = set(new_ids)
+            dl.set_status(sorted(pending_ids), "pending")
+            dl.log_task(_now_iso(), "sync", "stage_pending", ",".join(sorted(pending_ids)),
+                        {"count": len(pending_ids),
+                         "source_type": _SOURCE_TYPE_BY_NAME.get(name, name),
+                         "mode": "new_entries=pending"})
+        cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id,
+                          pending_ids=pending_ids)
         # 跨源判重（第三十八批）：新建/更新条目 canonical/hash 命中已有可消费
         # 条目 → 附挂 locator + 打 dedupe_master 标（消费页由主条目代表）
         deduped = dedupe_entries(dl, [e for e in entries
@@ -663,7 +679,9 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
                 seen_ids={e.id for e in entries}, run_id=run_id)
             src_stats["archived"] = len(archived)
         if fetch_limit:
-            fstats = _fetch_missing(cfg, dl, locators, entries, fetch_limit, run_id)
+            fstats = _fetch_missing(cfg, dl, locators,
+                                    [e for e in entries if e.id not in pending_ids],
+                                    fetch_limit, run_id)  # pending 不抓正文（省钱+省时）
             fetched_ids = fstats.pop("fetched_ids")
             src_stats.update(fstats)
             if fetched_ids:

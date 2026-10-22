@@ -2346,3 +2346,41 @@ test_web_api.py +2（points 批量端点含截断与空态/rejudge 参数校验 
 全量 pytest 410 通过（1 skip）。浏览器验收三项 PASS（徽标唯一/点聚合展开
 收起/rejudge 按钮注入与文案）+ 控制台零报错。改动文件 UTF-8 无 BOM + LF。
 
+### 第六十八批：入库缓冲三层 + 批量流转 + 脑图路径面包屑（Phase 7 批次 68，2026-10-22）
+
+**背景**：用户截图三问——①批量操作缺失（「舍弃十个点十次」）；②rejudge 语义
+「工具知道哪些点合为整图么？人也不知道啊，因为啥都看不到」；③脑图碎片再现
+（真库诊断：62 批 LLM 版判 split 入库 207 碎片，66 批改缓存强判后重灌**没带
+purge**——9 整图是新增、旧碎片没删，验收只查正面没查反面，抽检漏洞再犯）。
+用户定调入库闸门：「正常入库，但入库后操作数据前，人工判断删除……否则做好后
+又得删一大堆」。另：知识梳理合成层（原 68）顺延 69——用户「还没有可以合成层
+的知识，或不需要」。
+
+**碎片修复（真库，先于代码）**：`ksync --purge-source emmx` 全清 230 条
+（207 碎片+旧整图）重灌 9 整图（缓存全命中零 LLM 费用）；验收查双向
+（map=9/page=0）；用户 15:33 舍弃的培训积分整图置回 rejected 保持意愿。
+
+**①入库缓冲（pending 状态，三层过滤的事后层）**：models.STATUSES +pending；
+sync 主循环按源配置 `new_entries="pending"` 把新建条目置 pending（默认 active
+**零行为变化**——给未来高噪音源聊天记录/AI 会话/邮件立闸门，现有源已靠
+exclude_globs/include_exts 治理）；pending 条目**不分类不抓正文不抽点**
+（categorize targets/fetch_missing 过滤——垃圾不烧钱）；消费面全部按
+status='active' 查询天然隔离。源级排除（事前配置 exclude）与目录放行（白名单）
+已有机制不重复造。
+
+**②批量流转**：`POST /api/entries/bulk-status`（ids≤500，action=
+activate/reject——reject 带冷却起点，每条 task_log 留痕 bulk_*，missing 列出）；
+bulk-bar 加「✅ 转正」「🗑 舍弃」（多选条复用第五十二批 selection 基础设施）——
+待审/已舍弃/暂存区队列通用。管理页加「🆕 待审」页签（GET /api/pending）。
+
+**③脑图路径面包屑**：/api/entries/linkage 扩展 mind_paths（emmx 条目
+meta.mind_path）；前端条目行紫色「🗂 主题 › 路径」——同图上下文可见，
+一键合并/拆开的决策依据（「啥都看不到」批注的正面回答）。
+
+**测试**：test_folders.py +2（pending 缓冲全链：置位/分类跳过/二跑不重置/
+转正；默认 active 零变化）；test_web_api.py +2（bulk-status 全路径含 403/
+missing；linkage mind_paths 含空态）。全量 pytest 414 通过（1 skip）。
+浏览器验收三项 PASS（待审页签空态/批量按钮常驻/面包屑「🗂 编码规则」）；
+首轮 FAIL 为浏览器缓存假阴性（serve 端直查确认新代码）。改动文件 UTF-8 无
+BOM + LF。
+

@@ -107,6 +107,10 @@
               border: 1px dashed #4a9eff66; border-radius: 4px; padding: 0 6px;
               margin-left: 6px; cursor: pointer; }
   .cat-chip:hover { background: #4a9eff22; }
+  /* 脑图内路径面包屑（批次 68）：emmx 节点条目的同图上下文 */
+  .mind-path { display: inline-block; font-size: 11px; color: #c58aff;
+               border: 1px dotted #c58aff55; border-radius: 4px;
+               padding: 0 6px; margin-left: 6px; }
   /* ③默认聚合呈现（批次 67）：条目=方案级，点级收进可展开区（两层形态共存） */
   .pt-block { margin-top: 3px; font-size: 12px; }
   .pt-toggle { color: #35c28f; cursor: pointer; user-select: none; }
@@ -250,6 +254,7 @@
   <section id="view-mgmt" class="view" hidden>
     <nav id="mgmt-tabs">
       <button class="mtab" data-sub="staged">📥 暂存区</button>
+      <button class="mtab" data-sub="pending">🆕 待审</button>
       <button class="mtab" data-sub="nonk">🔬 待清理</button>
       <button class="mtab" data-sub="dead">☠️ 失效链接</button>
       <button class="mtab" data-sub="fresh">⏳ 时效候选</button>
@@ -266,6 +271,8 @@
   <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
   <span id="ms-count">已选 0</span>
   <button id="ms-move" class="primary">移到…</button>
+  <button id="ms-activate" title="批量转正：待审→入库消费面（批次 68）">✅ 转正</button>
+  <button id="ms-reject" title="批量舍弃：→ 已舍弃，30 天冷却可反悔">🗑 舍弃</button>
   <button id="ms-cancel">取消</button>
 </div>
 <!-- bookmarklet 左缘小书签坞（第五十九批）：默认收缩到左缘，悬停展开显示用途；
@@ -506,9 +513,14 @@ async function attachCatChips() {
   if (my !== _catChipsToken || !data.linkage) return;  // 已有更新一轮渲染 → 本轮作废
   for (const div of divs) {
     if (div.dataset.catsDone) continue;  // 幂等：同一 div 不重复挂徽标（DOM 重建后标记随节点消失，天然允许重挂）
+    div.dataset.catsDone = "1";
+    // 脑图内路径面包屑（批次 68，用户批注「人也不知道哪些条目同图，因为啥都看不到」）：
+    // emmx 节点条目显示 mind_path——同图上下文可见，一键合并/拆开的决策依据。
+    const mp = data.mind_paths && data.mind_paths[div.dataset.id];
+    if (mp) div.insertAdjacentHTML("beforeend",
+      `<span class="mind-path" title="该条目在脑图中的主题路径（同图条目可一键合并为整图）">🗂 ${mp.split("/").join(" › ")}</span>`);
     const cats = data.linkage[div.dataset.id];
     if (!cats || !cats.length) continue;
-    div.dataset.catsDone = "1";
     div.insertAdjacentHTML("beforeend", cats.map(c =>
       `<span class="cat-chip" data-cid="${c.category_id}" title="点击在左侧树中定位该分类">📁${c.path}</span>`).join(""));
     // 确认归类（第五十一批回归集）：有挂接的条目注入 ✓ 按钮——把当前主分类
@@ -645,6 +657,21 @@ document.getElementById("ms-move").onclick = () => {
   if (!selection.size) { alert("先勾选条目（勾上「多选」后条目前会出现复选框）"); return; }
   opRecategorize(currentSelection(), "");
 };
+// 批量转正/舍弃（批次 68，截图痛点「舍弃十个点十次」）：待审/已舍弃/暂存区
+// 队列通用——多选后一键流转，每条服务端留痕（bulk_activate/bulk_reject）。
+async function bulkStatus(action) {
+  if (!selection.size) { alert("先勾选条目（勾上「多选」后条目前会出现复选框）"); return; }
+  const ids = [...selection];
+  const verb = action === "activate" ? "转正（进消费面）" : "舍弃（30 天冷却，可反悔）";
+  if (!confirm(`确认${verb} ${ids.length} 条？`)) return;
+  const res = await writeJSON("/api/entries/bulk-status", { ids, action });
+  if (res.__aborted) return;
+  if (res.error) { alert("失败：" + res.error.message); return; }
+  clearSelection();
+  refreshCurrent();
+}
+document.getElementById("ms-activate").onclick = () => bulkStatus("activate");
+document.getElementById("ms-reject").onclick = () => bulkStatus("reject");
 // 改类对话框（第五十二批重做）：单条（条目行「移」/拖拽 drop）与批量
 // （多选模式浮动条）共用——moveTargets 为条目 id 数组；keep 勾选=多父挂接
 // （只追加不摘旧）；prefill 预填目标路径（拖拽场景=拖到的树节点路径）。
@@ -1175,6 +1202,19 @@ async function mgmtStaged() {
   bindEntryButtons();
 }
 
+async function mgmtPending() {
+  refreshCurrent = () => mgmtShow("pending");
+  _mgmtDesc().textContent =
+    "入库待审（批次 68）：配置 new_entries=\"pending\" 的源，新条目先进这里，"
+    + "不进检索/分类/点抽取。审查：勾「多选」→ 批量「✅转正」/「🗑舍弃」；单条用行上按钮。";
+  const data = await (await fetch("/api/pending?limit=500")).json();
+  const body = _mgmtBody();
+  body.innerHTML = data.entries.length ? data.entries.map(entryHTML).join("")
+    : "<small>待审队列为空。在 config/knowatlas.toml 给高噪音源配 "
+      + "<code>new_entries = \"pending\"</code>（如未来接入的聊天记录/AI 会话/邮件）后，新条目会先进这里等你审。</small>";
+  bindEntryButtons();
+}
+
 async function mgmtNonk() {
   refreshCurrent = () => mgmtShow("nonk");
   _mgmtDesc().textContent = "规则或 LLM 判为「非具体知识」的候选（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
@@ -1367,6 +1407,7 @@ function mgmtShow(sub) {
   document.querySelectorAll("#mgmt-tabs .mtab").forEach(b =>
     b.classList.toggle("on", b.dataset.sub === sub));
   if (sub === "staged") mgmtStaged();
+  else if (sub === "pending") mgmtPending();
   else if (sub === "nonk") mgmtNonk();
   else if (sub === "dead") mgmtDead();
   else if (sub === "fresh") mgmtFresh();

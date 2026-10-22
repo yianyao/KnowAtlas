@@ -205,6 +205,61 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "restore", entry_id, {"old_status": entry.status})
         return {"entry_id": entry_id, "status": "active"}
 
+    @app.post("/api/entries/bulk-status")
+    async def bulk_status(request: Request, body: dict = Body(default={})):
+        """批量状态流转（批次 68，截图痛点「舍弃十个点十次」）。
+
+        body: ids=[entry_id…]（≤500）、action="activate"（转正：pending/rejected/
+        staged → active，清冷却起点）| "reject"（舍弃：→ rejected + 冷却起点）。
+        每条 task_log 留痕（bulk 标记串联）；missing 列出库中不存在的 id。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        ids = [str(x).strip() for x in (body.get("ids") or []) if str(x).strip()]
+        action = str(body.get("action", "")).strip()
+        if action not in ("activate", "reject"):
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "action 必须是 activate（转正）或 reject（舍弃）"}},
+                status_code=400)
+        if not ids:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": "ids 为空"}},
+                                status_code=400)
+        ids = list(dict.fromkeys(ids))[:500]
+        status = "active" if action == "activate" else "rejected"
+        done: list[str] = []
+        missing: list[str] = []
+        for eid in ids:
+            entry = dl.get_entry(eid)
+            if entry is None:
+                missing.append(eid)
+                continue
+            dl.set_status([eid], status)
+            dl.merge_meta(eid, {"rejected_at": _now_iso() if action == "reject" else None})
+            dl.log_task(_now_iso(), "web", f"bulk_{action}", eid,
+                        {"old_status": entry.status, "cooling_days": REJECT_COOLING_DAYS})
+            done.append(eid)
+        return {"done": done, "missing": missing, "status": status,
+                "cooling_days": REJECT_COOLING_DAYS if action == "reject" else None}
+
+    @app.get("/api/pending")
+    def pending_entries(limit: int = 500):
+        """入库待审队列（批次 68）：status=pending 的新条目——未审不进消费面。
+
+        源配置 new_entries="pending" 时该源新条目落这里；审 = 批量转正/舍弃
+        （POST /api/entries/bulk-status）。pending 条目不分类不抓正文不抽点
+        （省 LLM/抓取费用——垃圾可能根本没人看）。
+        """
+        out = []
+        for e in dl.list_entries(status="pending", limit=limit):
+            out.append({"id": e.id, "title": e.title, "locator": e.locator,
+                        "source_type": e.source_type, "native_path": e.native_path,
+                        "meta": {"source_type": e.meta.get("source_type"),
+                                 "mind_path": e.meta.get("mind_path")},
+                        "created_at": e.created_at})
+        return {"count": len(out), "entries": out}
+
     @app.get("/api/rejected")
     def rejected_entries(limit: int = 500):
         """已舍弃条目列表（冷却倒计时/恢复入口）。
@@ -726,15 +781,25 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/entries/linkage")
     def entries_linkage(ids: str = ""):
-        """批量取条目的分类挂接（双向联动②：条目列表点分类路径徽标在树中定位）。
+        """批量取条目的分类挂接 + 脑图内路径（双向联动② + 批次 68 面包屑）。
 
         只读；最多 100 个 id（前端按视图批量取，防 URL 过长）。必须声明在
         /api/entries/{entry_id} 之前——否则 "linkage" 会被路径参数捕获。
+        mind_paths 只对 emmx 节点条目有值（meta.mind_path，④上下文呈现——
+        「人也不知道哪些点会合成整图，因为啥都看不到」的用户批注）。
         """
         id_list = [s.strip() for s in ids.split(",") if s.strip()][:100]
         if not id_list:
-            return {"linkage": {}}
-        return {"linkage": {eid: dl.get_entry_categories(eid) for eid in id_list}}
+            return {"linkage": {}, "mind_paths": {}}
+        mind: dict[str, str] = {}
+        for eid in id_list:
+            e = dl.get_entry(eid)
+            if e is not None and e.source_type == "emmx":
+                mp = str(e.meta.get("mind_path") or "").strip()
+                if mp:
+                    mind[eid] = mp
+        return {"linkage": {eid: dl.get_entry_categories(eid) for eid in id_list},
+                "mind_paths": mind}
 
     @app.get("/api/entries/points")
     def entries_points(ids: str = ""):

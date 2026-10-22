@@ -13,8 +13,10 @@ SOURCE_TYPES = (
 )
 
 # status 枚举：active=在库 / archived=源里消失（可复活） / rejected=用户明确舍弃（永不复活，
-# 重新同步也不会重新加载——2026-10-19 用户需求）/ deleted=物理删除前过渡
-STATUSES = ("active", "archived", "rejected", "deleted")
+# 重新同步也不会重新加载——2026-10-19 用户需求）/ deleted=物理删除前过渡 /
+# pending=入库待审（批次 68：源配置 new_entries="pending" 的新条目——不进消费面
+# （检索/分类/点抽取全按 active 过滤），管理页「🆕 待审」批量转正或舍弃）
+STATUSES = ("active", "archived", "rejected", "deleted", "pending")
 
 # §5 locator scheme 清单（canary 覆盖项）
 SCHEMES = (

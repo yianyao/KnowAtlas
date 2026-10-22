@@ -200,7 +200,7 @@ def test_entries_linkage_batch(client, dl):
     r = client.get(f"/api/entries/linkage?ids={es[0].id},{es[1].id}").json()
     assert r["linkage"][es[0].id][0]["path"] == "联动大类"
     assert r["linkage"][es[1].id] == []  # 未挂接条目返回空列表而非缺键
-    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}}
+    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}, "mind_paths": {}}
     # "linkage" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
     assert client.get("/api/entries/linkage").status_code == 200
 
@@ -219,7 +219,7 @@ def test_entries_linkage_batch(client, dl):
     r = client.get(f"/api/entries/linkage?ids={es[0].id},{es[1].id}").json()
     assert r["linkage"][es[0].id][0]["path"] == "联动大类"
     assert r["linkage"][es[1].id] == []  # 未挂接条目返回空列表而非缺键
-    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}}
+    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}, "mind_paths": {}}
     # "linkage" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
     assert client.get("/api/entries/linkage").status_code == 200
 
@@ -496,3 +496,65 @@ def test_emmx_rejudge_validation(client):
     assert client.post("/api/sources/emmx/rejudge",
                        json={"rel": "x.emmx", "form": "integral"},
                        headers={}).status_code == 403
+
+
+def test_bulk_status_and_pending_queue(client, dl):
+    """批次 68：批量流转（activate/reject）+ 待审队列——审查闭环。"""
+    from knowatlas.models import Entry
+    import uuid
+    batch = uuid.uuid4().hex[:6]
+    es = []
+    for i in range(3):
+        e = Entry.build(source_type="manual", source_key=f"b68:{batch}:{i}",
+                        title=f"待审{i}", locator=f"https://b68.example/{batch}/{i}",
+                        inline_content="待审正文。", meta={"source_type": "manual"})
+        dl.upsert_entries([e])
+        dl.set_status([e.id], "pending")
+        es.append(e)
+    ids = [e.id for e in es]
+    # 待审队列列出
+    r = client.get("/api/pending").json()
+    pend = [x for x in r["entries"] if x["id"] in ids]
+    assert len(pend) == 3
+    # 批量转正 2 条
+    r1 = client.post("/api/entries/bulk-status",
+                     json={"ids": ids[:2], "action": "activate"}, headers=_auth()).json()
+    assert len(r1["done"]) == 2 and r1["status"] == "active"
+    assert dl.get_entry(ids[0]).status == "active"
+    # 批量舍弃 1 条（带冷却起点）
+    r2 = client.post("/api/entries/bulk-status",
+                     json={"ids": [ids[2]], "action": "reject"}, headers=_auth()).json()
+    assert len(r2["done"]) == 1 and r2["cooling_days"] == 30
+    rej = dl.get_entry(ids[2])
+    assert rej.status == "rejected" and rej.meta.get("rejected_at")
+    # 参数校验：非法 action / 空 ids / 无 token
+    assert client.post("/api/entries/bulk-status", json={"ids": ids, "action": "x"},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/bulk-status", json={"ids": [], "action": "activate"},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/bulk-status", json={"ids": ids, "action": "activate"},
+                       headers={}).status_code == 403
+    # missing 列出（含不存在 id）
+    r3 = client.post("/api/entries/bulk-status",
+                     json={"ids": [ids[0], "ghost"], "action": "activate"},
+                     headers=_auth()).json()
+    assert r3["missing"] == ["ghost"]
+
+
+def test_linkage_mind_paths(client, dl):
+    """批次 68：linkage 扩展 mind_paths——emmx 节点条目带脑图内路径，其余无键。"""
+    from knowatlas.models import Entry
+    import uuid
+    batch = uuid.uuid4().hex[:6]
+    m = Entry.build(source_type="emmx", source_key=f"mp:{batch}#page/108",
+                    title="供应商管理", locator=f"emmx://图{batch}.emmx#page/108",
+                    native_path="脑图库",
+                    meta={"source_type": "emmx", "mind_path": "PECOS进度/采购/供应商管理"})
+    o = Entry.build(source_type="manual", source_key=f"mpo:{batch}",
+                    title="普通条目", locator=f"https://mp.example/{batch}",
+                    inline_content="x", meta={"source_type": "manual"})
+    dl.upsert_entries([m, o])
+    r = client.get(f"/api/entries/linkage?ids={m.id},{o.id}").json()
+    assert r["mind_paths"][m.id] == "PECOS进度/采购/供应商管理"
+    assert o.id not in r["mind_paths"]
+    assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}, "mind_paths": {}}
