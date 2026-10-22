@@ -2533,3 +2533,32 @@ group_hits 语义贪心聚类/主分类+同host 结构聚合，分类视图接�
 pytest 429 通过（1 skip）。真库冒烟：/api/graph/subtree compact=1 folded
 生效、/api/sets/group 分类条目聚合正常。
 
+### 第七十三批：bge-m3 本机真机冒烟（Phase 7 批次 73 外部条件探针，2026-10-22）
+
+**结论**：探针 A（bge-m3）通过 10/10，探针 B（PG 真机）因本机无 docker
+BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」口径，批次达成。
+纯外部条件验证批：仓库零生产代码改动（仅新增探针脚本），零 LLM 零真实
+数据触碰，config 真实配置零修改（硬闸门全程未触碰）。
+
+**探针 A bge-m3（全链路通过）**：
+- 环境：sentence-transformers 装入 venv（torch 2.14.1+cpu）。本机缺新版
+  MSVC 运行库（System32 停在 2018 的 14.16 且缺 vcruntime140_threads.dll），
+  torch 导入报 WinError 1114/126——解法：官方运行库全套（14.38，msvcp140
+  系 + vcruntime140/140_1/threads）复制进 .venv 内 torch\lib 与 Scripts，
+  venv 局部修复，零系统目录改动。
+- 模型：bge-m3 全量经 hf-mirror 落 HF 缓存（pytorch_model.bin 2.12GB）。
+  踩坑实录：bge-m3 仓库**没有** model.safetensors，权重是 pytorch_model.bin
+  ——allow_patterns 只写 safetensors 会静默零下载（snapshot_download 照样
+  报成功）。
+- 链路（临时 toml embedding.enabled=false + KNOWATLAS_EMBEDDING_ENABLED=true
+  环境变量启用，验证「不改真实配置」路径）：from_config→LocalEmbedder 惰性
+  加载 13.9s → encode 维度 1024 / L2 范数全 1.0 / 语义区分度（csv~pandas
+  0.499 > csv~红烧肉 0.299）→ 临时库 embed_entries 3 条全成（model
+  st:BAAI/bge-m3）→ hybrid_search RRF 混合模式，top hit 相关且带 sim:0.72
+  可解释 → group_hits 语义模式正常。
+- 探针脚本落库 scripts/smoke_bge_m3.py（含环境复现说明）。首次下载完成后
+  须 HF_HUB_OFFLINE=1 离线跑：Hub 直连不稳时 HEAD 检查重试可拖死加载。
+
+**探针 B PG 真机（BLOCKED 跳过）**：本机无 docker 服务，起 PG 补跑的条件
+不具备；日后 docker 可用时按 TODO Phase 7 探针补跑。
+
