@@ -78,23 +78,20 @@ def _enable(cfg, root: Path) -> None:
 
 
 def test_collect_topics(cfg, emmx_tree):
-    """结构化解析：Shape 主题树 → 条目；mind_path 沿 Super 引用构建；页名进节点 id。"""
+    """llm 未启用 → 整图保全（degraded）：结构化大纲入正文；降级文件条目照旧。"""
     _enable(cfg, emmx_tree)
     out = collect_emmx(cfg)
     by_loc = {e.locator: e for e in out.entries}
-    # 5 个主题节点（101/102/108/104/200，MMConnector 不算）+ 3 个降级文件条目
-    assert len(out.entries) == 8
+    # 整图 1 条（创作脑图#map）+ 3 个解析降级文件条目
+    assert len(out.entries) == 4
     assert out.stats["degraded_files"] == 3
-    node = by_loc["emmx://创作脑图.emmx#page/108"]
-    assert node.title == "供应商管理 准入流程"
-    assert node.native_path == "脑图库"
-    assert node.meta["mind_path"] == "PECOS进度/采购/供应商管理 准入流程"
-    assert node.meta["depth"] == 3
-    assert by_loc["emmx://创作脑图.emmx#page/104"].meta["mind_path"] == "PECOS进度/编码"
-    # Super 指向 Boundary（非主题）→ 断链按顶层分支
-    orphan = by_loc["emmx://创作脑图.emmx#page/200"]
-    assert orphan.meta["mind_path"] == "孤立分支"
-    assert orphan.meta["depth"] == 1
+    whole = by_loc["emmx://创作脑图.emmx#map"]
+    assert whole.title == "PECOS进度"                    # 中心主题为题
+    assert whole.meta["judge"] == "degraded"             # llm 未启用整图保全
+    assert whole.meta["mind_path"] == "PECOS进度"
+    body = whole.inline_content
+    assert "供应商管理" in body and "孤立分支" in body    # 大纲含各分支（断链按顶层）
+    assert body.index("采购") < body.index("编码")        # 分支顺序保持
 
 
 def test_degraded_files(cfg, emmx_tree):
@@ -121,10 +118,10 @@ def test_sync_emmx_end_to_end(cfg, dl, registries, tmp_path, emmx_tree):
     locators, semantics = registries
     stats = run_sync(cfg, dl, locators, semantics, full=True)
     src = stats["sources"]["emmx"]
-    assert src["entries"] == 8 and src["created"] == 8
+    assert src["entries"] == 4 and src["created"] == 4   # 整图 1 + 解析降级 3
     # 二跑幂等
     stats2 = run_sync(cfg, dl, locators, semantics, full=True)
-    assert stats2["sources"]["emmx"]["unchanged"] == 8
+    assert stats2["sources"]["emmx"]["unchanged"] == 4
 
 
 # ---- 形态判定与全删重灌（第六十五批，方案 §7.8）----
@@ -199,32 +196,41 @@ def test_judge_split_nodes_keep_mind_path(cfg, emmx_tree, fake_llm):
     assert node.meta["mind_path"] == "PECOS进度/采购/供应商管理 准入流程"
 
 
-def test_judge_llm_broken_falls_back_to_nodes(cfg, emmx_tree, fake_llm):
-    """LLM 故障 → 回落节点粒度（宁碎勿丢），errors 计数、不计 split。"""
+def test_judge_llm_broken_keeps_whole_map_degraded(cfg, emmx_tree, fake_llm):
+    """LLM 故障 → 整图保全（宁整勿碎，2026-10-22）：degraded 标记，不再碎切。"""
     _enable(cfg, emmx_tree)
     fake_llm(_FakeJudgeLlm(broken=True))
     out = collect_emmx(cfg)
     assert out.stats["judge"]["errors"] == 1
     assert out.stats["judge"]["calls"] == 0
     assert out.stats["judge"]["split"] == 0
-    assert "emmx://创作脑图.emmx#page/108" in _emmx_only(out)
+    assert out.stats["judge"]["degraded"] == 1
+    by_loc = _emmx_only(out)
+    assert "emmx://创作脑图.emmx#page/108" not in by_loc   # 节点碎切不再发生
+    whole = by_loc["emmx://创作脑图.emmx#map"]             # 整图单条目
+    assert whole.meta["judge"] == "degraded"
+    assert "整图保全" in whole.meta["judge_reason"]
+    assert whole.inline_content and len(whole.inline_content) > 50
 
 
-def test_judge_invalid_reply_falls_back(cfg, emmx_tree, fake_llm):
-    """LLM 输出非法判定 → 同样回落节点粒度。"""
+def test_judge_invalid_reply_keeps_whole_map(cfg, emmx_tree, fake_llm):
+    """LLM 输出非法判定 → 同样整图保全 degraded。"""
     _enable(cfg, emmx_tree)
     fake_llm(_FakeJudgeLlm('{"judge":"maybe","reason":"???"}'))
     out = collect_emmx(cfg)
     assert out.stats["judge"]["errors"] == 1
-    assert "emmx://创作脑图.emmx#page/108" in _emmx_only(out)
+    whole = _emmx_only(out)["emmx://创作脑图.emmx#map"]
+    assert whole.meta["judge"] == "degraded"
 
 
-def test_no_llm_no_judge_keys(cfg, emmx_tree):
-    """[llm] 未启用 → 现行节点粒度，meta 不带 judge 键。"""
+def test_no_llm_keeps_whole_map_degraded(cfg, emmx_tree):
+    """[llm] 未启用 → 整图保全（脑图默认方案，永不碎切，2026-10-22）。"""
     _enable(cfg, emmx_tree)
     out = collect_emmx(cfg)
-    node = _emmx_only(out)["emmx://创作脑图.emmx#page/108"]
-    assert "judge" not in node.meta and "judge_reason" not in node.meta
+    whole = _emmx_only(out)["emmx://创作脑图.emmx#map"]
+    assert whole.meta["judge"] == "degraded"
+    assert "LLM 未启用" in whole.meta["judge_reason"]
+    assert "emmx://创作脑图.emmx#page/108" not in _emmx_only(out)
 
 
 def test_judge_cache_survives_rerun(cfg, emmx_tree, fake_llm, tmp_path, monkeypatch):
@@ -287,21 +293,21 @@ def test_sync_purge_then_reingest(cfg, dl, registries, emmx_tree):
     """ksync --purge-source emmx 全链路：先全删（含 rejected）后按判定重灌。"""
     _enable(cfg, emmx_tree)
     locators, semantics = registries
-    run_sync(cfg, dl, locators, semantics, full=True)  # 首灌 8 条
+    run_sync(cfg, dl, locators, semantics, full=True)  # 首灌 4 条（整图 1 + 降级 3）
     dl.set_status([e.id for e in dl.list_entries(limit=100)[:1]], "rejected")
     stats = run_sync(cfg, dl, locators, semantics, full=True,
                      purge_source="emmx", purge_reason="emmx_rebuild")
     # 全删含 rejected（全删存量不分状态）；重灌后 rejected 不复活（行已物理删除，
     # 重新入库即全新 active 条目——与「rejected 永不复活」语义不冲突）
-    assert stats["purge"]["purged"] == 8
+    assert stats["purge"]["purged"] == 4
     assert stats["purge"]["reason"] == "emmx_rebuild"
-    assert stats["sources"]["emmx"]["created"] == 8  # 重灌回来
+    assert stats["sources"]["emmx"]["created"] == 4  # 重灌回来
     n = dl._conn.execute("SELECT COUNT(*) n FROM entries WHERE source_type='emmx'"
                          ).fetchone()["n"]
-    assert n == 8
+    assert n == 4
     # 重灌后二跑幂等
     stats2 = run_sync(cfg, dl, locators, semantics, full=True)
-    assert stats2["sources"]["emmx"]["unchanged"] == 8
+    assert stats2["sources"]["emmx"]["unchanged"] == 4
 
 
 def test_sync_purge_dry_run_keeps_data(cfg, dl, registries, emmx_tree):
@@ -314,7 +320,7 @@ def test_sync_purge_dry_run_keeps_data(cfg, dl, registries, emmx_tree):
     assert stats["purge"] == {"source_type": "emmx", "dry_run": True}
     n = dl._conn.execute("SELECT COUNT(*) n FROM entries WHERE source_type='emmx'"
                          ).fetchone()["n"]
-    assert n == 8
+    assert n == 4
 
 
 def test_integral_long_outline_into_content_store(cfg, dl, registries, tmp_path,
@@ -364,4 +370,4 @@ def test_sync_purge_aborts_when_backup_fails(cfg, dl, registries, emmx_tree,
     assert "purge" not in stats
     n = dl._conn.execute("SELECT COUNT(*) n FROM entries WHERE source_type='emmx'"
                          ).fetchone()["n"]
-    assert n == 8  # 数据未动
+    assert n == 4  # 数据未动

@@ -2262,3 +2262,39 @@ VACUUM 失败重试与快照存在性校验。
 reachable / 9 files / judge cache 命中）；serve 重启后 /api/tree 254ms。
 改动文件 UTF-8 无 BOM + LF。
 
+### 第六十六批：知识点口径规则化 + emmx 宁整勿碎（Phase 7 批次 66，用户口径 2026-10-22）
+
+**背景**：六十五批重灌后用户抽检发现方案型脑图仍被 LLM 误判 split 碎切
+（「供应链流程」被切 23 条碎块，用户痛点：方案被切碎后半点用处无；LLM 误判
+与人判工作量两难）。用户口径定调：「所有脑图，和文学创作相关的肯定都是知识点，
+剩下的，全是方案」——知识点形态判定从 LLM 主导改为**确定性规则**，LLM 退役为
+备用路径；并确认后续落地 ③两层形态共存+默认聚合呈现、④消费时一键合并/拆开
+（批次 67 主体；另收目录信号粗规则：项目内文档≈方案、杂烩目录≈知识点，仅作
+先验信号）。
+
+**知识点抽取规则化**（pipeline/points.py + semantic/tasks/point_extract.py）：
+1. 条目分类祖先链含「文学创作」→ forced split：LLM 只切点不判定
+   （`_SPLIT_ONLY_PROMPT`，judge/reason 由代码固定落口径理由，省判定 token）；
+2. 其余条目 → integral 整条即点，**零 LLM**（`_POINT_BODY_CAP=20000` 全文保真，
+   超长才截断留痕）——错误成本不对称（误切=灾难、漏切=温和）下判定宁整勿碎；
+3. LLM 未启用：integral 照产（原文永在），split 记 error 不产出。
+
+**emmx 宁整勿碎**（adapters/emmx.py）：
+1. LLM 未启用/判定失败/输出非法 → **整图保全 + meta.judge="degraded" 显式
+   标记**，不再回落节点碎切；缓存不写失败结果，下次同步自动重判；
+2. 判定 prompt 偏置反转：「拿不准 → split」→「拿不准 → integral」（原偏置
+   正是误判碎切的 prompt 病根）；
+3. 修 judge 统计 degraded 双计数 bug（分支 +1 后统一计数再 +1）。
+
+**全量重抽（真实库）**：purge 旧 1100 points（只清点层，条目零影响；db.py
+新增 `purge_points()` + kpoints `--purge-points`，task_log 留痕）→ 967 条
+处理 = integral 963（零 LLM）+ split 4（文学创作，LLM 仅 4 次调用 ≈¥0.01，
+比旧口径省 99%）→ 910 点落库，79 个重复观点自动合并，零错误。emmx 判定缓存
+9 文件全改 integral 强判（规则覆盖 LLM，键=sha256，人工可改写）并重灌：
+226 碎块 → 9 整图，「供应链流程」等方案完整性恢复（整图 + 正文命中验证）。
+
+**测试**：test_points.py 按规则口径重写（18 项：规则 integral 零 LLM/祖先链
+命中/no-llm 降级/一点多溯源/幂等/失败不推进游标/dry-run/purge/长文保真）；
+test_emmx.py 适配 degraded 语义（15 项，purge 断言 8→4）。全量 pytest
+404 通过（1 skip）。改动文件 UTF-8 无 BOM + LF。
+

@@ -94,11 +94,15 @@ def build_parser() -> argparse.ArgumentParser:
     kcheck.add_argument("--qps", type=float, default=4.0, help="检测速率（默认 4 条/秒）")
 
     kpoints = sub.add_parser(
-        "kpoints", help="知识点抽取：形态判定 integral/split → 切点 → hash 去重一点多溯源（方案 §7.1）")
+        "kpoints", help="知识点抽取：规则判定（文学创作=split 切点，其余 integral 整条即点，"
+                        "用户口径 2026-10-22）→ hash 去重一点多溯源")
     kpoints.add_argument("--limit", type=int, default=10,
-                         help="本次最多处理条数（默认 10——试跑口径，全量判定须用户裁决模型档位）")
+                         help="本次最多处理条数（默认 10；--limit 0 仅 purge）")
     kpoints.add_argument("--dry-run", action="store_true",
-                         help="只判定与报告，不写库（LLM 费用照常发生）")
+                         help="只判定与报告，不写库（split 切点的 LLM 费用照常发生）")
+    kpoints.add_argument("--purge-points", action="store_true",
+                         help="先清空点层（points/point_sources）再抽取——形态判定口径"
+                              "变更后的推倒重来；条目与原文零影响")
 
     kaging = sub.add_parser(
         "kaging", help="老化三级：L2 LLM 复核 suspect（升级 stale/否决/下沉人裁）；"
@@ -404,6 +408,12 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
     setup_logging(cfg.log_level)
     dl = _open(cfg)
     try:
+        if args.purge_points:  # 口径变更推倒重来（2026-10-22）：只清点层，原文零影响
+            n = dl.purge_points(reason="用户口径变更：文学创作=split，其余 integral"
+                                       "（规则判定取代 LLM 判定）")
+            print(f"OK 点层已清空：{n} points（points/point_sources；条目零影响）")
+            if args.limit == 0:
+                return _EXIT_OK
         stats = run_points_extract(cfg, dl, limit=max(1, args.limit),
                                    dry_run=args.dry_run)
     finally:

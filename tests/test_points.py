@@ -1,9 +1,9 @@
-"""知识点抽取测试（0.2.0 第六十二批，Phase 7 批次 61a，方案 §7.1）。
+"""知识点抽取测试（0.2.0 第六十二批 61a；第六十六批改规则判定——用户口径）。
 
-覆盖：规范化 hash 去重（空白/大小写/零宽不敏感）、迁移 007 两表、
-一点多溯源（同 hash 跨条目合并）、形态判定 integral/split、判定理由落
-meta.judge_reason、流水线幂等重跑、LLM 未启用/故障降级、dry-run 不写库。
-会红的探针对应 CHANGELOG 第六十二批「复检探针」清单。
+用户口径（2026-10-22）：分类路径含「文学创作」= 知识点集合（split，LLM 只切点），
+其余全部 = 方案（integral，整条即点零 LLM）。覆盖：规则判定（祖先链含锚词命中）、
+forced split 切点-only prompt、规范化 hash 去重、一点多溯源、幂等重跑、
+LLM 未启用（integral 照产/split 记 error）、故障不阻塞、dry-run、purge_points。
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ class FakeLlm:
         self.calls: list[str] = []
 
     def chat(self, system: str, user: str) -> str:
-        self.calls.append(user)
+        self.calls.append(system + "\n" + user)
         if self.broken:
             raise LlmError("模拟故障")
         idx = len(self.calls) - 1
@@ -45,9 +45,9 @@ _INTEGRAL_REPLY = (
     '"points":[{"text":"SQLite 慢查询排查：先 EXPLAIN QUERY PLAN 看计划，'
     '再补统计信息 ANALYZE。","summary":"SQLite 慢查询排查两步"}]}\n```'
 )
-_SPLIT_REPLY = (
-    '{"judge":"split","reason":"问答合集，两条独立知识点",'
-    '"summary":"FTS5 与 WAL 两问",'
+# forced split 响应：切点-only（无 judge/reason 字段——形态已规则判定）
+_SPLIT_ONLY_REPLY = (
+    '{"summary":"FTS5 与 WAL 两问",'
     '"points":[{"text":"FTS5 中文检索用 trigram 分词。","summary":"FTS5 分词选型"},'
     '{"text":"WAL 模式提升并发读：PRAGMA journal_mode=WAL。","summary":"WAL 开启方式"}]}'
 )
@@ -65,6 +65,17 @@ def _seed_entries(dl, n: int = 1, *, body: str = "FTS5 中文检索用 trigram �
           for i in range(n)]
     dl.upsert_entries(es)
     return es
+
+
+def _attach_lit(dl, entries: list[Entry], *, child: bool = False) -> None:
+    """挂「文学创作」分类；child=True 时挂其子分类（验证祖先链命中）。"""
+    run_id = "r" + uuid.uuid4().hex[:15]
+    lit = dl.create_category("文学创作", [], "manual")
+    target = lit
+    if child:
+        target = dl.create_category("小说写法", [lit.id], "manual")
+    for e in entries:
+        dl.attach_category(e.id, target.id, 1.0, "manual", run_id)
 
 
 # ---- 规范化与去重键 ----
@@ -130,6 +141,28 @@ def test_point_source_entry_ids_is_cursor(dl):
     assert dl.point_source_entry_ids() == {es[0].id}
 
 
+def test_purge_points_clears_point_layer_only(dl):
+    """purge_points 清空点层；条目/content_store 零影响；task_log 留痕。"""
+    from knowatlas.models import FetchResult
+
+    es = _seed_entries(dl, 1)
+    dl.put_content(FetchResult(text="正文留存", content_hash="pp-keep",
+                               fetcher="test", fetched_at="2026-10-22T00:00:00+08:00"))
+    ph = point_hash("将被清空的点。")
+    dl.put_point({"content_hash": ph, "text": "将被清空的点。", "summary": "",
+                  "source_type": "manual", "judge": "integral", "meta": {}},
+                 {"entry_id": es[0].id, "char_offset": 0, "anchor": ""})
+    assert dl.count_points() == 1
+    n = dl.purge_points(reason="口径变更")
+    assert n == 1
+    assert dl.count_points() == 0 and dl.point_source_entry_ids() == set()
+    assert dl.get_content("pp-keep") == "正文留存"        # 原文无恙
+    assert dl.get_entry(es[0].id).title.startswith("测试条目")  # 条目无恙
+    logs = dl.get_task_log(limit=20)
+    assert any(l["action"] == "purge_points" and l["task_name"] == "kpoints"
+               for l in logs)
+
+
 # ---- 任务级：point_extract ----
 
 def test_point_extract_degrades_without_llm_and_body():
@@ -140,7 +173,7 @@ def test_point_extract_degrades_without_llm_and_body():
 
 
 def test_point_extract_integral_wraps_single_point():
-    """integral 归一为单元素 points；判定理由/摘要透传。"""
+    """integral 归一为单元素 points；判定理由/摘要透传（LLM 判定备用路径）。"""
     llm = FakeLlm([_INTEGRAL_REPLY])
     res = point_extract.run({"source_type": "emmx", "title": "方案", "body": "正文"
                              * 30}, TaskContext(run_id="r1", llm=llm))
@@ -151,10 +184,23 @@ def test_point_extract_integral_wraps_single_point():
     assert "方案" in llm.calls[0]  # 标题进提示词
 
 
+def test_point_extract_forced_split_skips_judgment():
+    """forced split（用户口径）：LLM 只切点——judge 固定 split、理由固定口径、
+    prompt 是切点-only 版（无形态判定指令）。"""
+    llm = FakeLlm([_SPLIT_ONLY_REPLY])
+    res = point_extract.run({"body": "a" * 60, "forced_judge": "split"},
+                            TaskContext(run_id="r1", llm=llm))
+    assert res["llm_used"] is True
+    assert res["judge"] == "split"
+    assert "用户口径" in res["reason"] and "文学创作" in res["reason"]
+    assert len(res["points"]) == 2
+    assert "形态判定" not in llm.calls[0]   # 切点-only prompt
+
+
 def test_point_extract_split_and_garbage_and_broken():
-    llm = FakeLlm([_SPLIT_REPLY])
+    llm = FakeLlm([_INTEGRAL_REPLY.replace('"integral"', '"split"')])
     res = point_extract.run({"body": "a" * 60}, TaskContext(run_id="r1", llm=llm))
-    assert res["judge"] == "split" and len(res["points"]) == 2
+    assert res["judge"] == "split" and len(res["points"]) == 1
 
     bad = point_extract.run({"body": "a" * 60},
                             TaskContext(run_id="r1",
@@ -166,35 +212,60 @@ def test_point_extract_split_and_garbage_and_broken():
     assert res3["llm_used"] is False and res3["error"] == "模拟故障"
 
 
-# ---- 流水线 ----
+# ---- 流水线：规则判定（用户口径）----
 
-def test_pipeline_no_llm_skipped(cfg, dl):
-    """LLM 未启用（cfg 无 [llm]）→ skipped，不写库。"""
-    _seed_entries(dl, 1)
-    stats = run_points_extract(cfg, dl, limit=5)
-    assert "skipped" in stats and dl.count_points() == 0
-
-
-def test_pipeline_integral_and_split_and_reason_meta(cfg, dl):
-    """两条目两种形态：integral 1 点 / split 2 点；判定理由落 meta.judge_reason。"""
-    es = _seed_entries(dl, 1, body="一套完整的 SQLite 慢查询排查方案，" + "细节 " * 60)
-    es2 = _seed_entries(dl, 1, body="问一：FTS5 trigram。问二：WAL 并发。补充说明 " * 8)
-    llm = FakeLlm([_INTEGRAL_REPLY, _SPLIT_REPLY])
+def test_pipeline_rule_integral_zero_llm(cfg, dl):
+    """无分类条目 → integral（用户口径：剩下的全是方案），整条即点零 LLM 调用。"""
+    _seed_entries(dl, 1, body="一套完整的 SQLite 慢查询排查方案，" + "细节 " * 60)
+    llm = FakeLlm([])  # 任何 LLM 调用都会抛「多余调用」→ integral 必须零调用
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
-    assert stats["processed"] == 2 and stats["integral"] == 1 and stats["split"] == 1
-    assert stats["points_created"] == 3 and stats["points_total"] == 3
-    assert stats["skip_counts"]["already_done"] == 0
-    assert dl.count_points() == 3
-    by_judge = {p["judge"]: p for p in dl.list_points()}
-    assert by_judge["integral"]["meta"]["judge_reason"] == "单主题方案文档，整体不可拆"
-    # 溯源指针落对条目（候选按 rowid 序，integral 先跑）
-    assert dl.point_source_entry_ids() == {es[0].id, es2[0].id}
+    assert stats["processed"] == 1 and stats["integral"] == 1 and stats["split"] == 0
+    assert stats["points_created"] == 1 and dl.count_points() == 1
+    assert len(llm.calls) == 0                        # 零 LLM 费用
+    p = dl.list_points()[0]
+    assert p["judge"] == "integral" and p["source_count"] == 1
+    assert "用户口径" in p["meta"]["judge_reason"]    # 口径理由落 meta 可抽检
+    assert "排查方案" in p["text"]                    # 整条正文即点
+
+
+def test_pipeline_rule_split_by_category_path(cfg, dl):
+    """分类路径含「文学创作」→ split（LLM 只切点）；祖先链命中（子分类也生效）。"""
+    es2 = _seed_entries(dl, 1, body="问一：FTS5 trigram。问二：WAL 并发。补充说明 " * 8)
+    es = _seed_entries(dl, 1, body="小说写法讨论：视角与节奏。示例 " * 8)
+    _attach_lit(dl, es)                # 直接挂文学创作
+    _attach_lit(dl, es2, child=True)   # 挂「文学创作 › 小说写法」（祖先命中）
+    novel = ('{"summary":"写作两问",'
+             '"points":[{"text":"小说视角选第三人称有限视角。","summary":"视角"},'
+             '{"text":"节奏靠场景切换控制。","summary":"节奏"}]}')
+    llm = FakeLlm([novel, _SPLIT_ONLY_REPLY])
+    stats = run_points_extract(cfg, dl, limit=5, llm=llm)
+    assert stats["integral"] == 0 and stats["split"] == 2
+    assert stats["points_created"] == 4 and dl.count_points() == 4
+    for call in llm.calls:
+        assert "形态判定" not in call                  # 全部切点-only prompt
+    pts = dl.list_points()
+    assert all(p["judge"] == "split" for p in pts)
+    assert all("用户口径" in p["meta"]["judge_reason"] for p in pts)
+
+
+def test_pipeline_no_llm_integral_runs_split_errors(cfg, dl):
+    """LLM 未启用：integral 照产（零费用不依赖 LLM），split 条目记 error 不阻塞。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    es2 = _seed_entries(dl, 1, body="小说写法讨论：视角与节奏。示例 " * 8)
+    _attach_lit(dl, es2)
+    stats = run_points_extract(cfg, dl, limit=5)      # cfg 无 [llm] → llm=None
+    assert stats["integral"] == 1 and dl.count_points() == 1
+    assert len(stats["errors"]) == 1
+    assert stats["errors"][0]["entry_id"] == es2[0].id
+    assert "llm 未启用" in stats["errors"][0]["error"]
+    assert dl.point_source_entry_ids() == {es[0].id}  # 仅 integral 推进游标
 
 
 def test_pipeline_dedup_across_entries_one_point_multi_source(cfg, dl):
-    """同观点重复文档：两候选返回同文点 → 合并一点、两处溯源（一点多溯源探针）。"""
+    """同观点重复文档：两文学创作条目切出同文点 → 一点两溯源（一点多溯源探针）。"""
     es = _seed_entries(dl, 2, body="FTS5 中文检索用 trigram 分词。" * 3)
-    same = ('{"judge":"split","reason":"单点问答",'
+    _attach_lit(dl, es)
+    same = ('{"summary":"分词选型",'
             '"points":[{"text":"FTS5 中文检索用 trigram 分词。","summary":"分词"}]}')
     stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([same, same]))
     assert stats["points_created"] == 1 and stats["points_linked"] == 1
@@ -203,10 +274,9 @@ def test_pipeline_dedup_across_entries_one_point_multi_source(cfg, dl):
 
 
 def test_pipeline_rerun_is_idempotent(cfg, dl):
-    """重跑：已抽条目跳过（游标），零新调用零新点。"""
+    """重跑：已抽条目跳过（游标），零新调用零新点（integral 零 LLM 也一样跳）。"""
     _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
-    llm1 = FakeLlm([_INTEGRAL_REPLY])
-    run_points_extract(cfg, dl, limit=5, llm=llm1)
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
     llm2 = FakeLlm([])  # 任何多余调用都会抛「多余调用」→ 若不跳过必红
     stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2)
     assert stats2["processed"] == 0 and stats2["points_total"] == 1
@@ -215,26 +285,27 @@ def test_pipeline_rerun_is_idempotent(cfg, dl):
 
 
 def test_pipeline_llm_failure_recorded_not_blocking(cfg, dl):
-    """LLM 故障 → errors 记录、不写点、不中断（下次重跑自然补抽）。"""
-    _seed_entries(dl, 2, body="一套完整的排查方案，" + "细节 " * 60)
+    """split 条目 LLM 故障 → errors 记录、不写点、不中断（重跑补抽）。"""
+    es = _seed_entries(dl, 2, body="小说写法讨论：视角与节奏。示例 " * 8)
+    _attach_lit(dl, es)
     stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm(broken=True))
     assert stats["processed"] == 0
     assert len(stats["errors"]) == 2
     assert dl.count_points() == 0
+    assert dl.point_source_entry_ids() == set()       # 失败不推进游标
 
 
 def test_pipeline_dry_run_writes_nothing(cfg, dl):
     _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
-    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REPLY]),
-                               dry_run=True)
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), dry_run=True)
     assert stats["dry_run"] is True and stats["points_created"] == 1
     assert "points_total" not in stats
     assert dl.count_points() == 0                    # 未写库
     assert dl.point_source_entry_ids() == set()      # 游标未推进（重跑可真写）
 
 
-def test_pipeline_truncates_long_body(cfg, dl):
-    """超长正文（走 content_store，绕开 inline_content 4096 上限）截断送 LLM。"""
+def test_pipeline_truncates_long_body_for_split(cfg, dl):
+    """split 长正文截断送 LLM（_BODY_CAP 6000）；integral 长文不截断（保真优先）。"""
     from knowatlas.models import FetchResult
 
     long_text = "长" * 9000
@@ -244,7 +315,20 @@ def test_pipeline_truncates_long_body(cfg, dl):
                     locator="file:///d/long.md", inline_content=None,
                     content_hash="pt-long-0001", meta={"source_type": "folder"})
     dl.upsert_entries([e])
-    llm = FakeLlm([_INTEGRAL_REPLY])
+    _attach_lit(dl, [e])  # split 路径
+    llm = FakeLlm([_SPLIT_ONLY_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
     assert stats["body_truncated"] == 1
     assert len(llm.calls[0]) < 9000                  # 提示词远小于原文
+
+    # integral 长文：点 text=全文（≤20000 不截断）；正文同样走 content_store
+    dl.put_content(FetchResult(text="方案" * 4500, content_hash="pt-long-0002",
+                               fetcher="test", fetched_at="2026-10-22T00:00:00+08:00"))
+    e2 = Entry.build(source_type="folder", source_key="pt:long2:0", title="长方案",
+                     locator="file:///d/long2.md", inline_content=None,
+                     content_hash="pt-long-0002", meta={"source_type": "folder"})
+    dl.upsert_entries([e2])
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
+    assert stats2["body_truncated"] == 0
+    pt = [p for p in dl.list_points() if p["judge"] == "integral"][0]
+    assert len(pt["text"]) == 9000 and pt["text"].endswith("方案")

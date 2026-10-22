@@ -1929,6 +1929,25 @@ class DataLayer:
             "SELECT DISTINCT entry_id FROM point_sources").fetchall()
         return {r["entry_id"] for r in rows}
 
+    def purge_points(self, *, reason: str, task_name: str = "kpoints") -> int:
+        """清空点层（points + point_sources）——形态判定口径变更后的推倒重来
+        （2026-10-22 用户口径：LLM 判定 → 确定性规则，旧点全部作废）。
+
+        只动点层：entries/content_store/向量等全部不受影响（点 text 是抽取
+        产物，原文永在）。写 task_log 审计。
+        """
+        with self.transaction() as conn:
+            n_points = conn.execute("SELECT COUNT(*) FROM points").fetchone()[0]
+            conn.execute("DELETE FROM point_sources")
+            conn.execute("DELETE FROM points")
+            conn.execute(
+                "INSERT INTO task_log (at, task_name, action, target, detail)"
+                " VALUES (datetime('now'),?,?,?,?)",
+                (task_name, "purge_points", "points",
+                 json.dumps({"reason": reason, "purged_points": n_points},
+                            ensure_ascii=False)))
+        return n_points
+
     def _sim_channel(self, entry_id: str, add_node, add_edge, cut,
                      per_channel: int) -> int:
         """radiate 条目焦点的 sim 通道：库内向量 top 邻域（阈值 0.5，纯标准库余弦）。

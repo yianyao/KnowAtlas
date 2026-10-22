@@ -17,8 +17,9 @@
 - integral（方案型）→ 整图一条目：节点树确定性压缩为结构化大纲入
   inline_content（零发明，只缩进排版原文标题），mind_path 保留中心主题；
 - split（讨论型）→ 节点照旧切条目，meta 附 judge 供区分；
-- LLM 不可用（未启用/无 key/调用失败）→ 回落现行节点粒度（保守：宁碎勿丢），
-  stats.judge.errors 计数，下次同步重判。
+- LLM 不可用（未启用/无 key/调用失败）→ **整图保全 + meta.judge="degraded"
+  显式标记**（2026-10-22 用户批注改：方案被碎切是灾难，宁整勿碎——判定失败
+  不再回落节点碎切；缓存不写失败结果，下次同步自动重判）。
 
 判定缓存：KNOWATLAS_HOME/emmx_judge_cache.json（键=文件字节 sha256）——
 重复 ksync 不重判不重扣费；home 未设（如测试）不缓存。
@@ -58,10 +59,11 @@ _JUDGE_SYSTEM_PROMPT = (
     "流程，分支互相依赖，拆开各自不成立，应整图作为一个知识点；\n"
     "- split（讨论型）：各分支独立成立、可单独复用——讨论记录、问题集、杂项"
     "收集、多主题清单，应按节点切分入库。\n"
-    "规则：\n"
+    "规则（偏置宁整勿碎，2026-10-22：方案被碎切是灾难，漏切只是粒度粗）：\n"
     '1. 只输出 JSON 对象：{"judge":"integral"或"split","reason":"一句话判定理由"}。\n'
-    "2. 只有整图明确是单一方案/整体论证时才判 integral；内容杂、多主题或拿不准"
-    " → split。\n"
+    "2. 默认 integral：方案、设计、计划、流程、有共同主题上下文的图一律 integral；"
+    "只有各分支明确各自独立成立、彼此无共享背景（杂项收集/互不相关的问题集）才判"
+    " split；拿不准 → integral。\n"
     "3. 不要输出 JSON 以外的任何文字。"
 )
 
@@ -145,8 +147,8 @@ def _judge_form(llm: Any, title: str, outline: str, fkey: str,
                 cache: dict[str, Any], stats: dict[str, Any]) -> tuple[str, str] | None:
     """LLM 形态判定；返回 (integral|split, reason)，失败返回 None。
 
-    缓存命中零费用；判定失败/输出非法一律 None（调用方回落节点粒度——保守：
-    宁碎勿丢，stats.judge.errors 留痕，下次同步重判）。
+    缓存命中零费用；判定失败/输出非法一律 None（调用方按 degraded 整图保全
+    ——宁整勿碎，stats.judge.errors 留痕，下次同步重判）。
     """
     hit = cache.get(fkey)
     if isinstance(hit, dict) and hit.get("judge") in ("integral", "split"):
@@ -254,8 +256,9 @@ def _parse_emmx(path: Path, rel: str, native_dir: str,
     """解析单个 .emmx；返回 True=结构化解析成功，False=降级标题级。
 
     native_dir = 根名/文件所在子目录层级（先验信号，与 folder 适配器同构）。
-    llm 非 None 时先做形态判定（方案 §7.8）：integral → 整图一条目（大纲入
-    正文）；split → 节点条目照旧；llm 为 None → 节点条目照旧（无 judge 键）。
+    形态判定（方案 §7.8 + 2026-10-22 用户口径宁整勿碎）：integral → 整图一条目
+    （大纲入正文）；split → 节点条目照旧；判定失败或 llm 为 None → degraded
+    整图保全（meta.judge="degraded"，下次同步重判）——脑图默认方案，永不碎切。
     """
     try:
         with zipfile.ZipFile(path) as zf:
@@ -275,11 +278,6 @@ def _parse_emmx(path: Path, rel: str, native_dir: str,
             if not pages:
                 return False
             node_count = sum(len(order) for _, _, order in pages)
-            if llm is None:  # LLM 未启用：现行节点粒度，无 judge 键
-                for page_name, topics, order in pages:
-                    _emit_nodes(topics, order, page_name, rel, native_dir,
-                                entries, stats)
-                return True
             # 形态判定：判定依据 = 中心主题 + 一级分支大纲（方案 §7.8 口径）
             topics0 = pages[0][1]
             title0 = path.stem
@@ -292,14 +290,19 @@ def _parse_emmx(path: Path, rel: str, native_dir: str,
                          _JUDGE_OUTLINE_CHARS)
                 for name, topics, order in pages)
             fkey = hashlib.sha256(path.read_bytes()).hexdigest()
-            judged = _judge_form(llm, title0, outline_judge, fkey, cache, stats)
-            if judged is None:
-                # 判定失败回落节点粒度（保守宁碎勿丢），不计 split——下次重判
-                for page_name, topics, order in pages:
-                    _emit_nodes(topics, order, page_name, rel, native_dir,
-                                entries, stats)
-                return True
-            form, reason = judged
+            if llm is None:  # LLM 未启用：同样整图保全（脑图默认方案，永不碎切）
+                form, reason = "degraded", "LLM 未启用：整图保全（启用后重判）"
+            else:
+                judged = _judge_form(llm, title0, outline_judge, fkey, cache, stats)
+                if judged is None:
+                    # 判定失败不再碎切（2026-10-22 用户批注：方案被碎切是灾难，
+                    # 宁整勿碎）——整图保全 + meta.judge="degraded" 显式标记
+                    # （管理页可查）；判定缓存不写失败结果 → 下次同步自动重判，
+                    # 判定成功后按新形态重建（upsert 按 source_key 换血）。
+                    form = "degraded"
+                    reason = "判定失败降级：整图保全（下次同步重判）"
+                else:
+                    form, reason = judged
             stats["judge"]["form"] = form
             stats["judge"]["reason"] = reason
             stats["judge"][form] += 1
@@ -366,7 +369,7 @@ def collect_emmx(config: Any) -> AdapterOutput:
     stats: dict[str, Any] = {"files": 0, "degraded_files": 0, "nodes": 0,
                              "truncated": 0, "roots_ok": [], "_full_bodies": {},
                              "judge": {"calls": 0, "errors": 0, "cache_hits": 0,
-                                       "integral": 0, "split": 0,
+                                       "integral": 0, "split": 0, "degraded": 0,
                                        "form": "", "reason": "",
                                        "llm_used": llm is not None}}
     for root_str in roots:

@@ -58,6 +58,22 @@ _SYSTEM_PROMPT = (
     "5. 不要输出 JSON 以外的任何文字。"
 )
 
+# forced split 模式（2026-10-22 用户口径）：形态已由确定性规则判定（文学创作类
+# =知识点集合），LLM 只做切点不做判定——省判定 token，且判定不再可能误切。
+_SPLIT_ONLY_PROMPT = (
+    "你是个人知识库的知识点抽取助手。给定一个知识条目（标题+正文），它已确定为"
+    "多知识点集合型文档（用户裁决），直接切分知识点。\n"
+    "规则：\n"
+    '1. 只输出 JSON 对象：{"summary":"整条一句话摘要",'
+    '"points":[{"text":"点正文","summary":"一句话摘要"}]}。\n'
+    "2. 切 2-8 个点：每个点自包含（脱离原文可独立阅读，补齐必要主语与背景），"
+    "text≤500 字；保留原文的命令/代码/数字/版本号等硬信息；寒暄、导航句、"
+    "跨点重复内容丢弃。\n"
+    "3. 不要输出 JSON 以外的任何文字。"
+)
+
+_FORCED_SPLIT_REASON = "用户口径 2026-10-22：文学创作类=知识点集合（规则判定，非 LLM）"
+
 
 def _user_prompt(item: dict[str, Any], body: str) -> str:
     parts = [f"来源类型:{item.get('source_type', '')}",
@@ -70,19 +86,27 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
     """返回 {"judge","reason","summary","points","llm_used"}（失败带 error）。
 
     points 恒为 list[{text, summary}]：integral 归一为单元素列表，调用方无需分支。
+    forced_judge="split"（item 键，2026-10-22 用户口径）：跳过 LLM 判定直接切点，
+    judge 固定 split、reason 固定口径理由——形态已由规则判定，LLM 只切点。
     """
     empty = {"judge": "", "reason": "", "summary": "", "points": [], "llm_used": False}
     body = str(item.get("body") or "").strip()
     if ctx.llm is None or not body:
         return empty
+    forced = item.get("forced_judge") == "split"
+    prompt = _SPLIT_ONLY_PROMPT if forced else _SYSTEM_PROMPT
     try:
-        obj = extract_json_object(ctx.llm.chat(_SYSTEM_PROMPT,
+        obj = extract_json_object(ctx.llm.chat(prompt,
                                                _user_prompt(item, body)))
     except LlmError as exc:
         return {**empty, "error": str(exc)}
-    judge = str(obj.get("judge", "")).strip()
-    if judge not in ("integral", "split"):
-        return {**empty, "error": f"LLM 形态判定非法：{judge!r}"}
+    if forced:
+        judge, reason = "split", _FORCED_SPLIT_REASON
+    else:
+        judge = str(obj.get("judge", "")).strip()
+        if judge not in ("integral", "split"):
+            return {**empty, "error": f"LLM 形态判定非法：{judge!r}"}
+        reason = str(obj.get("reason", "")).strip()
     raw_points = obj.get("points")
     if not isinstance(raw_points, list) or not raw_points:
         return {**empty, "error": "LLM 未返回任何点"}
@@ -98,7 +122,7 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
     if not points:
         return {**empty, "error": "LLM 返回的点全部为空"}
     return {"judge": judge,
-            "reason": str(obj.get("reason", "")).strip(),
+            "reason": reason,
             "summary": str(obj.get("summary", "")).strip(),
             "points": points,
             "llm_used": True}
