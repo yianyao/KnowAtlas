@@ -204,3 +204,94 @@ def test_api_write_still_guarded(client, seeded):
                      headers=auth)
     assert r2.status_code == 200
     assert len(r2.json()["added"]) == 2
+
+
+# ---- 批次 72：子树稀疏折叠（compact）+ 分类深度（前端分层铺开原料） ----
+
+@pytest.fixture
+def dense_seeded(dl):
+    """根 A：子 B（稀疏支，直挂 1 条）、子 C（稠密支，直挂 3 条）；根 A 直挂 1 条。"""
+    es = [Entry.build(source_type="bookmark", source_key=f"d{i}",
+                      title=f"条目{i}", locator=f"https://x.example.org/{i}",
+                      locator_canonical=f"https://x.example.org/{i}")
+          for i in range(5)]
+    dl.upsert_entries(es)
+    a = dl.create_category("根类", [], "manual")
+    b = dl.create_category("稀疏支", [a.id], "manual")
+    c = dl.create_category("稠密支", [a.id], "manual")
+    dl.attach_category(es[0].id, b.id, 1.0, "manual", "t72")     # B 直挂 1 条
+    for e in es[1:4]:
+        dl.attach_category(e.id, c.id, 1.0, "manual", "t72")     # C 直挂 3 条
+    dl.attach_category(es[4].id, a.id, 1.0, "manual", "t72")     # 根直挂 1 条
+    return {"a": a, "b": b, "c": c, "es": es}
+
+
+def test_subtree_classic_depth_fields(dl, dense_seeded):
+    """经典视图分类节点带 depth（root=0，子类=1），供前端分层铺开。"""
+    d = dl.get_graph_subtree(dense_seeded["a"].id)
+    nodes = {n["id"]: n for n in d["nodes"]}
+    assert nodes[f"c:{dense_seeded['a'].id}"]["depth"] == 0
+    assert nodes[f"c:{dense_seeded['b'].id}"]["depth"] == 1
+    assert nodes[f"c:{dense_seeded['c'].id}"]["depth"] == 1
+    assert len([n for n in d["nodes"] if n["kind"] == "entry"]) == 5
+
+
+def test_subtree_depth_multi_parent_takes_shortest(dl, dense_seeded):
+    """多父 DAG 深度取最短链：B 经 A 直连=1，经深层链=3，取 1。"""
+    a, b = dense_seeded["a"], dense_seeded["b"]
+    deep = dl.create_category("深层", [a.id], "manual")
+    deeper = dl.create_category("更深", [deep.id], "manual")
+    dl.attach_parent(b.id, deeper.id)
+    d = dl.get_graph_subtree(a.id)
+    nodes = {n["id"]: n for n in d["nodes"]}
+    assert nodes[f"c:{b.id}"]["depth"] == 1
+
+
+def test_subtree_compact_folds_sparse_branches(dl, dense_seeded):
+    """compact：直挂 ≤2 条的子分类藏条目（folded 计数），稠密支与根直挂不受影响。"""
+    d = dl.get_graph_subtree(dense_seeded["a"].id, compact=True)
+    nodes = {n["id"]: n for n in d["nodes"]}
+    assert nodes[f"c:{dense_seeded['b'].id}"]["folded"] == 1
+    assert "folded" not in nodes[f"c:{dense_seeded['c'].id}"]
+    e_ids = {n["id"] for n in d["nodes"] if n["kind"] == "entry"}
+    assert f"e:{dense_seeded['es'][0].id}" not in e_ids          # 稀疏支条目隐去
+    assert {f"e:{dense_seeded['es'][i].id}" for i in (1, 2, 3, 4)} <= e_ids
+    assert not any(l["target"] == f"c:{dense_seeded['b'].id}" for l in d["links"])
+    assert d["compact"] is True
+
+
+def test_subtree_compact_default_off(dl, dense_seeded):
+    """默认（compact=False）行为不变：无 folded、全条目可见。"""
+    d = dl.get_graph_subtree(dense_seeded["a"].id)
+    assert all("folded" not in n for n in d["nodes"])
+    assert len([n for n in d["nodes"] if n["kind"] == "entry"]) == 5
+
+
+def test_subtree_compact_keeps_shared_entries(dl, dense_seeded):
+    """条目同时挂稀疏支与稠密支：折叠只藏稀疏支的边，条目经稠密支仍可见。"""
+    shared = dense_seeded["es"][0]
+    dl.attach_category(shared.id, dense_seeded["c"].id, 1.0, "manual", "t72")
+    d = dl.get_graph_subtree(dense_seeded["a"].id, compact=True)
+    e_ids = {n["id"] for n in d["nodes"] if n["kind"] == "entry"}
+    assert f"e:{shared.id}" in e_ids
+    assert any(l["source"] == f"e:{shared.id}" and l["target"] == f"c:{dense_seeded['c'].id}"
+               for l in d["links"])
+    assert not any(l["target"] == f"c:{dense_seeded['b'].id}" for l in d["links"])
+
+
+def test_subtree_hierarchy_ignores_compact(dl, dense_seeded):
+    """层级模式不受 compact 影响：仍只出子分类、无 depth/folded/compact。"""
+    d = dl.get_graph_subtree(dense_seeded["a"].id, hierarchy=True, compact=True)
+    assert all(n["kind"] == "category" for n in d["nodes"])
+    assert all("depth" not in n and "folded" not in n for n in d["nodes"])
+    assert "compact" not in d
+
+
+def test_api_graph_subtree_compact_param(client, dense_seeded):
+    """API 层 compact=1 透传；默认不带 folded（前端按需开启）。"""
+    r = client.get(f"/api/graph/subtree?category_id={dense_seeded['a'].id}&compact=1")
+    assert r.status_code == 200
+    assert any(n.get("folded") for n in r.json()["nodes"])
+    r2 = client.get(f"/api/graph/subtree?category_id={dense_seeded['a'].id}")
+    assert r2.status_code == 200
+    assert all("folded" not in n for n in r2.json()["nodes"])

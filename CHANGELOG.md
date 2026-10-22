@@ -2500,4 +2500,36 @@ extra_locators；auto-name 含跳过/降级剪尾/400/403）。全量 pytest 421
 purge 挂账，并入本批收尾）。UTF-8 无 BOM + LF（naming.py Write 落盘 CRLF
 转 LF——Write 工具在 Windows 的默认行为，收尾扫描必查）。
 
+### 第七十二批：分类浏览集分组 + 关系图层级密度（Phase 7 批次 72，2026-10-22）
+
+**背景**：用户四问裁决（批次 71 后做 72）——①点左树分类右侧条目列表按知识集
+聚合呈现；②关系图节点多的子树分层铺开/稀疏分支折叠，看图看清结构。纯查询/UI
+批次，零 LLM 零数据风险。
+
+**①分类浏览集分组**：showCategory 接入批次 60 GET /api/sets/group（复用
+group_hits 语义贪心聚类/主分类+同host 结构聚合，分类视图接入而非新造）——
+>5 条自动聚合渲染（组头信号徽标 + 组内条目卡保留预览/改名/改分类/舍弃全功能，
+「未成组」归组尾），filter 下拉变化对过滤后条目重聚合（查询期零写库）；
+「📐 按集分组 / 📄 平铺」双态切换，localStorage 记忆（knowatlas.catGrouped，
+58 批折叠纪律同款）；聚合失败/不成组平铺兜底；视图令牌防迟到响应覆盖
+（attachCatChips 同款教训）。
+
+**②关系图层级密度**：
+- 稀疏折叠（后端）：get_graph_subtree 增 compact 参数（API ?compact=1 透传）
+  ——直挂 ≤2 条的子分类（非根）藏其条目与挂接边，分类节点带 folded=N 徽标
+  （label「名 · N条」）；只藏边不藏类，点分类下钻信息零丢失；条目另挂稠密
+  分类时边保留、仅孤立时节点隐；直挂数独立于 limit 全量 SQL 统计（截断样本
+  计数会失真）；根分类直挂不折叠（当前层主体信息）。hierarchy 层级模式不受
+  影响（本来不出条目）。
+- 分层铺开（前端）：经典视图分类节点带 depth（root=0，多父 DAG 取最短链，
+  不动点松弛；祖先 ctx=-1），前端节点 ≥25 时 layeredCoords 按 depth 分行、
+  条目挂其最深挂接分类下一行（layout none），自上而下看清结构；放射/搜索/
+  总览/层级模式无 depth 字段自动回退 force。
+- 图页 header 增「🗜 稀疏折叠」开关（默认开，localStorage knowatlas.graphFold），
+  切换就地重放当前视图；tip 提示折叠生效。
+
+**测试**：test_graph_radial +8（depth 字段/多父取最短/折叠藏边与 folded 计数/
+共享条目经稠密支保留/默认关闭回归/层级模式隔离/API 透传与默认）。全量
+pytest 429 通过（1 skip）。真库冒烟：/api/graph/subtree compact=1 folded
+生效、/api/sets/group 分类条目聚合正常。
 

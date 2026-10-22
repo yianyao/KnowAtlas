@@ -55,6 +55,8 @@
     <input type="checkbox" id="radial"> 放射模式</label>
   <label title="点分类只出下一级子分类（逐层下钻）；条目在叶子层出现，或点「显示条目」展开当前层">
     <input type="checkbox" id="hier"> 层级模式</label>
+  <label title="经典视图下，直挂条目 ≤2 的子分类折叠不展开（节点标 N条）；点分类下钻即可见——图大时结构更清晰">
+    <input type="checkbox" id="fold"> 🗜 稀疏折叠</label>
   <button id="showEntries" style="display:none"
           title="当前为纯层级视图——展开本分类子树内条目（经典视图）">📋 显示条目</button>
   <label title="在边上常驻显示关联理由（tooltip 恒显）">
@@ -93,6 +95,9 @@ const hierBox = document.getElementById("hier");
 const showEntriesBtn = document.getElementById("showEntries");
 // 层级模式（批次 63）：默认开（用户 4.1-4.3 逐层钻取预期），localStorage 记忆（58 批折叠纪律同款）
 hierBox.checked = localStorage.getItem("knowatlas.graphHier") !== "0";
+// 稀疏折叠（批次 72）：经典子树视图默认开——直挂 ≤2 条的子分类藏条目（folded 徽标）
+const foldBox = document.getElementById("fold");
+foldBox.checked = localStorage.getItem("knowatlas.graphFold") !== "0";
 
 // ---- 节点弹窗卡（第三十五批）：悬浮固定弹窗显示概要；移入保持/移开即隐/点按钮进原文 ----
 const nodecard = document.getElementById("nodecard");
@@ -196,6 +201,42 @@ function renderBread() {
   });
 }
 
+// ---- 分层铺开（批次 72 ②）：经典子树视图节点多时按树深分层（layout none），
+// 替代 force 一锅粥——分类按 depth（root=0，多父取最短）分行，条目挂其最深
+// 挂接分类的下一行；坐标原点居中，fit 后自上而下看清结构。放射/搜索/总览/层级
+// （无 depth 字段）不受影响，仍走 force。
+function layeredCoords(data) {
+  const cats = data.nodes.filter(n => n.kind === "category");
+  if (!cats.length || !cats.every(n => typeof n.depth === "number")) return null;
+  const catDepthById = Object.fromEntries(cats.map(n => [n.id, n.depth]));
+  const maxCatDepth = Math.max(...cats.map(n => n.depth));
+  const eDepth = {};                       // 条目 → 最深挂接分类 depth
+  for (const l of data.links) {
+    const d = catDepthById[l.target];
+    if (d === undefined) continue;
+    if (eDepth[l.source] === undefined || d > eDepth[l.source]) eDepth[l.source] = d;
+  }
+  const rowOf = n => n.kind === "category" ? n.depth
+    : (eDepth[n.id] !== undefined ? eDepth[n.id] + 1 : maxCatDepth + 1);
+  const rows = new Map();
+  for (const n of data.nodes) {
+    const r = rowOf(n);
+    if (!rows.has(r)) rows.set(r, []);
+    rows.get(r).push(n);
+  }
+  const GAP_X = 170, GAP_Y = 130;
+  const coords = {};
+  for (const list of rows.values()) {
+    const span = (list.length - 1) * GAP_X;
+    list.forEach((n, i) => {
+      coords[n.id] = { x: Math.round(i * GAP_X - span / 2), y: 0 };
+    });
+  }
+  for (const [r, list] of rows)            // 行 y（root 行为 0，祖先行为负）
+    for (const n of list) coords[n.id].y = r * GAP_Y;
+  return coords;
+}
+
 // node.id 约定：c:<分类id> / e:<条目id> / d:<域名>；分类节点可下钻，条目可打开
 function render(data, crumbText, opts = {}) {
   lastData = data;
@@ -208,6 +249,9 @@ function render(data, crumbText, opts = {}) {
   // 条目整团挤在视口左上被裁剪（第四十八批截图实锤）；环形布种让包围盒
   // 以焦点为中心，fit 后焦点居中、邻域向外放射。
   const RING_R = { category: 260, entry: 170 };
+  const coords = (!radiateView && data.root && data.nodes.length >= 25)
+    ? layeredCoords(data) : null;
+  const anyFolded = data.nodes.some(n => n.folded);
   const nodes = data.nodes.map((n, i) => {
     const isFocus = radiateView && n.id === data.focus.id;
     const size = isFocus ? 34
@@ -216,6 +260,7 @@ function render(data, crumbText, opts = {}) {
         : 7;
     let x, y;
     if (isFocus) { x = 0; y = 0; }
+    else if (coords) { x = coords[n.id].x; y = coords[n.id].y; }
     else if (radiateView) {
       const r = (RING_R[n.kind] || 170) * (0.85 + (i % 6) * 0.06);
       const ang = i * 2.399963;               // 黄金角≈137.5°，散而不叠
@@ -224,6 +269,7 @@ function render(data, crumbText, opts = {}) {
     return {
       id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
       reasons: n.reasons || [], path: n.path || "", _ovText: n._ovText || null,
+      folded: n.folded,
       symbolSize: size,
       x, y,
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
@@ -238,7 +284,8 @@ function render(data, crumbText, opts = {}) {
                fontSize: n.kind === "category" ? 13 : 10,
                fontWeight: isFocus ? "bold" : "normal",
                color: n.ctx ? "#6b7f94" : undefined,
-               formatter: p => p.data._ovText || p.data.name },
+               formatter: p => p.data._ovText
+                 || (p.data.folded ? `${p.data.name} · ${p.data.folded}条` : p.data.name) },
     };
   });
   const nameOf = Object.fromEntries(nodes.map(n => [n.id, n.name]));
@@ -258,6 +305,7 @@ function render(data, crumbText, opts = {}) {
   tip.textContent =
     `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length}` +
     ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}），边 ${links.length}` +
+    (anyFolded ? "。🗜 稀疏分支已折叠（节点标 N条，点分类下钻可见）" : "") +
     (radiateView
       ? `。每条关联都带解释（悬停可看）${truncParts.length ? "；" + truncParts.join("，") : ""}。点邻域节点继续放射，焦点为黄。`
       : `。点分类下钻 / 点条目打开原文 / 回车搜索。`);
@@ -269,7 +317,7 @@ function render(data, crumbText, opts = {}) {
       return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
     } },
     series: [{
-      type: "graph", layout: "force", roam: true, draggable: true,
+      type: "graph", layout: coords ? "none" : "force", roam: true, draggable: true,
       force: { repulsion: radiateView ? 160 : 90, edgeLength: [30, 120], gravity: 0.08 },
       data: nodes, links: links,
       emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
@@ -299,7 +347,9 @@ async function showOverview(push = true) {
 
 async function showSubtree(categoryId, push = true, forceClassic = false) {
   const useHier = !forceClassic && hierBox.checked;   // 层级模式（批次 63）：点分类只出下一级子分类
-  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}${useHier ? "&hierarchy=1" : ""}`);
+  // 稀疏折叠（批次 72）：仅经典视图生效（层级模式本来就不出条目）
+  const fold = !useHier && foldBox.checked ? "&compact=1" : "";
+  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}${useHier ? "&hierarchy=1" : ""}${fold}`);
   if (r.status === 404) { tip.textContent = "分类不存在（可能已删）。"; return; }
   const data = await r.json();
   const rootName = (data.nodes.find(n => n.id === "c:" + categoryId) || {}).name || categoryId;
@@ -441,6 +491,14 @@ document.getElementById("showReason").addEventListener("change", () => {
 // 状态落 localStorage（58 批折叠纪律同款）
 hierBox.addEventListener("change", () => {
   localStorage.setItem("knowatlas.graphHier", hierBox.checked ? "1" : "0");
+  const last = nav[nav.length - 1];
+  if (last) last.load(false);
+});
+
+// 稀疏折叠开关（批次 72）：就地重放当前视图（经典子树重读开关即时切换）；
+// 状态落 localStorage。层级/放射/搜索/总览不受影响（后端对 hierarchy 忽略 compact）
+foldBox.addEventListener("change", () => {
+  localStorage.setItem("knowatlas.graphFold", foldBox.checked ? "1" : "0");
   const last = nav[nav.length - 1];
   if (last) last.load(false);
 });

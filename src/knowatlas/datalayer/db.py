@@ -902,14 +902,21 @@ class DataLayer:
                           "kind": "category", "value": count})
         return {"nodes": nodes, "links": []}
 
+    _SPARSE_FOLD = 2    # 稀疏分支折叠阈值（批次 72）：直挂 ≤2 条的子分类藏条目
+
     def get_graph_subtree(self, category_id: str, limit: int = 120,
-                          hierarchy: bool = False) -> dict[str, Any] | None:
+                          hierarchy: bool = False, compact: bool = False
+                          ) -> dict[str, Any] | None:
         """子树下钻图：该分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文。
 
         条目节点带 locator（前端点击可打开原链接）；分类不存在返回 None。
         hierarchy=True（纯层级模式，批次 63）：只出下一级子分类（child 边，
         value=子树可消费数），不出条目/祖先链——叶子层（无未剪空子类）
         自动出本子树条目；非叶子层条目由前端「显示条目」显式拉经典视图。
+        compact=True（稀疏折叠，批次 72）：直挂条目 ≤2 的子分类藏其条目与
+        挂接边（分类节点带 folded=N，前端点击下钻可见），图密度下降、结构
+        可读——只藏边不藏类，点击下钻信息零丢失。经典视图分类节点带 depth
+        （root=0，多父取最短；祖先 ctx=-1），供前端分层铺开。
         """
         cat = self._conn.execute(
             "SELECT id, name FROM categories WHERE id=?", (category_id,)).fetchone()
@@ -947,14 +954,54 @@ class DataLayer:
             f" WHERE ec.category_id IN ({ph}) AND e.status='active'" + _consumable("e") +
             " ORDER BY e.created_at DESC LIMIT ?", (*sub_ids, limit)).fetchall()
         entry_ids = [e["id"] for e in entries]
+        # 分类深度（批次 72，分层铺开原料）：root=0，多父取最短路径；不动点
+        # 松弛（子树规模小，几十-几百节点，O(V·E) 可忽略）
+        depth: dict[str, int] = {}
+        if not hierarchy:
+            depth = {category_id: 0}
+            sub_set = set(sub_ids)
+            parents_of: dict[str, list[str]] = {}
+            for r in self._conn.execute(
+                    f"SELECT category_id, parent_id FROM category_parents"
+                    f" WHERE category_id IN ({ph})", sub_ids):
+                if r["parent_id"] in sub_set:
+                    parents_of.setdefault(r["category_id"], []).append(r["parent_id"])
+            changed = True
+            while changed:
+                changed = False
+                for cid in sub_ids:
+                    cand = [depth[p] + 1 for p in parents_of.get(cid, []) if p in depth]
+                    if cand and (cid not in depth or min(cand) < depth[cid]):
+                        depth[cid] = min(cand)
+                        changed = True
+        # 稀疏折叠（批次 72）：直挂 ≤_SPARSE_FOLD 条的子分类（非根）藏条目——
+        # 直挂数独立于 limit 全量统计（截断样本计数会失真）；只藏边，条目若
+        # 另挂非折叠分类仍可见（边保留），孤立时节点才隐
+        fold_cats: set[str] = set()
+        if compact and not hierarchy:
+            counts = self._conn.execute(
+                "SELECT ec.category_id, COUNT(DISTINCT ec.entry_id) AS n"
+                " FROM entry_categories ec"
+                " JOIN entries e ON e.id=ec.entry_id AND e.status='active'" + _consumable("e") +
+                f" WHERE ec.category_id IN ({ph}) AND ec.category_id != ?"
+                " GROUP BY ec.category_id", (*sub_ids, category_id)).fetchall()
+            fold_cats = {r["category_id"] for r in counts
+                         if r["n"] <= self._SPARSE_FOLD}
         nodes: list[dict[str, Any]] = [
-            {"id": f"c:{a}", "name": cats.get(a, "?"), "kind": "category", "ctx": True}
+            {"id": f"c:{a}", "name": cats.get(a, "?"), "kind": "category",
+             "ctx": True, "depth": -1}
             for a in anc_ids]
         for cid in sub_ids:
             # 空类剪枝（第三十六批）：子树内无可消费条目的子类不进下钻图；焦点根保留
             if cid != category_id and self._consumable_count(self._cat_descendants(cid)) == 0:
                 continue
-            nodes.append({"id": f"c:{cid}", "name": cats.get(cid, "?"), "kind": "category"})
+            node = {"id": f"c:{cid}", "name": cats.get(cid, "?"), "kind": "category"}
+            if not hierarchy:
+                node["depth"] = depth.get(cid, 0)
+            if cid in fold_cats:
+                folded = next(r["n"] for r in counts if r["category_id"] == cid)
+                node["folded"] = folded    # 被藏直挂条目数（前端徽标提示）
+            nodes.append(node)
         entry_nodes: list[dict[str, Any]] = []
         for e in entries:
             entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
@@ -967,9 +1014,19 @@ class DataLayer:
                     f"SELECT entry_id, category_id, origin FROM entry_categories"
                     f" WHERE entry_id IN ({eph}) AND category_id IN ({ph})",
                     (*entry_ids, *sub_ids)):
+                if fold_cats and r["category_id"] in fold_cats:
+                    continue    # 折叠分支的挂接边不进图
                 links.append({"source": f"e:{r['entry_id']}", "target": f"c:{r['category_id']}",
                               "kind": r["origin"]})
-        return {"root": category_id, "nodes": nodes, "links": links}
+        if fold_cats:
+            # 折叠后孤立的条目（挂接边全被藏）节点也隐——留着是漂空噪音
+            linked = {l["source"] for l in links}
+            nodes = [n for n in nodes
+                     if n["kind"] != "entry" or n["id"] in linked]
+        out = {"root": category_id, "nodes": nodes, "links": links}
+        if not hierarchy:
+            out["compact"] = bool(fold_cats) or compact
+        return out
 
     def search_graph(self, q: str, limit: int = 80) -> dict[str, Any]:
         """搜索驱动子图：条目标题 / 分类名命中 + 各自分类链与挂接边（按需加载）。

@@ -666,10 +666,14 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         return dl.get_graph_overview()
 
     @app.get("/api/graph/subtree")
-    def graph_subtree(category_id: str, limit: int = 120, hierarchy: bool = False):
+    def graph_subtree(category_id: str, limit: int = 120, hierarchy: bool = False,
+                      compact: bool = False):
         """下钻图：某分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文；
-        hierarchy=true 纯层级模式（批次 63）：只出下一级子分类，条目在叶子层出现。"""
-        data = dl.get_graph_subtree(category_id, limit=limit, hierarchy=hierarchy)
+        hierarchy=true 纯层级模式（批次 63）：只出下一级子分类，条目在叶子层出现；
+        compact=true 稀疏折叠（批次 72）：直挂 ≤2 条的子分类藏条目（folded 徽标），
+        分类节点带 depth 供前端分层铺开。"""
+        data = dl.get_graph_subtree(category_id, limit=limit, hierarchy=hierarchy,
+                                    compact=compact)
         if data is None:
             return JSONResponse({"error": {"code": "NOT_FOUND", "message": "分类不存在"}},
                                 status_code=404)
