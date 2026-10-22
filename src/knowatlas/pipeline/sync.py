@@ -489,13 +489,18 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              limit: int | None = None, fetch_limit: int | None = None,
              reclassify: bool = False, value_scan: bool = False,
              dedupe_scan: bool = False,
-             freshness_scan: bool = False, errata_scan: bool = False) -> dict[str, Any]:
+             freshness_scan: bool = False, errata_scan: bool = False,
+             purge_source: str | None = None,
+             purge_reason: str = "reingest") -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
     value_scan=True 时跳过源收集，只跑 L0 价值守卫打标（零费用，见 _value_scan）。
     dedupe_scan=True 时跳过源收集，只跑跨源去重存量扫描（第三十八批，见
     pipeline/dedupe.scan_and_merge；dry_run 只出报告）。
+    purge_source 非空时先物理删除该源全部条目再同步（emmx 全删重灌，方案 §7.8）——
+    顺序保证：前快照后清除（backup_on_sync 快照失败即中止，没快照不动手）；
+    dry_run 只探测不删除。
     """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
@@ -536,6 +541,17 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             stats["backup"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
             dl.finish_run(run_id, stats)
             return {"run_id": run_id, "aborted": "backup_failed", **stats}
+
+    # 全删重灌（第六十五批，方案 §7.8）：先快照（上方，失败即中止）后清除——
+    # purge 走 DataLayer.purge_source（FK 级联 + content_store 引用计数回收
+    # + task_log 批次留痕「<purge_reason>」）；dry_run 只报告不动数据。
+    if purge_source:
+        stype = _SOURCE_TYPE_BY_NAME.get(purge_source, purge_source)
+        if dry_run:
+            stats["purge"] = {"source_type": stype, "dry_run": True}
+        else:
+            stats["purge"] = dl.purge_source(stype, reason=purge_reason,
+                                             task_name="ksync")
 
     for name, collector in _BATCH_COLLECTORS.items():
         if source is not None and source != name:
@@ -610,6 +626,20 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             mail_stats = {"contents_stored": stored_count}
             mail_stats.update(
                 rebuild_session_threads(dl, convs, run_id))
+        # emmx 源附加处理（第六十五批，方案 §7.8）：integral 整图大纲超 4096 的
+        # 全文入 content_store（适配器 inline 留截断摘要 + content_hash 指向）
+        if name == "emmx":
+            full_bodies = out.stats.pop("_full_bodies", {})
+            stored_count = 0
+            for eid, text in full_bodies.items():
+                e = dl.get_entry(eid)
+                if e is not None and e.content_hash \
+                        and dl.get_content(e.content_hash) is None:
+                    dl.put_content(FetchResult(
+                        text=text, content_hash=e.content_hash,
+                        fetcher="emmx_outline", fetched_at=_now_iso()))
+                    stored_count += 1
+            mail_stats = {"contents_stored": stored_count}
         if revived_ids:
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),

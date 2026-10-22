@@ -2214,6 +2214,51 @@ javascript），现有 showSubtree 子孙分类+挂接条目混显+祖先链，�
 - [x] 改正以附注并显、原文 diff 为零
       （test_errata_add_appends_note_original_untouched：inline_content 一字
       不动 + meta.errata 追加 + 详情端点并显返回）；
-- [ ] L2 全量核查（~600 条技术类）——**等用户裁决**（模型档位 + 是否执行，
-      65b；试跑 ≤10 条预算 ≤¥1）。
+- [ ] L2 全量核查（~600 条技术类）——2026-10-22 用户裁决：开跑（模型=配置默认
+      V4.1-Flash）；执行批次号 65b，见下批记录。
+
+## [0.2.0] - 2026-10-22
+
+### 第六十五批：emmx 全删重灌 + 形态判定适配器（Phase 7 批次 62，方案 §7.8）
+
+**背景**：用户裁决（2026-10-22 四项裁决之三）「动手」——此前 emmx 脑图按节点
+碎切入库（802 条），方案型脑图被拆得支离破碎（用户痛点：设计方案的图被切碎后
+半点用处无）。执行前 kbackup --snap 快照（备注：当日快照首次执行遇库 I/O 故障
+失败一次，库修复后重灌链路跑通，见下方「当日事故」）。
+
+**数据事实**：源目录现存 .emmx 文件 9 个 / 226 节点（用户已自行清理过源）；
+purge 旧 802 条 → 重灌 226 条 = 库与源一致。判定分布：integral 5 / split 4
+（LLM=配置默认 V4.1-Flash，判定理由落 meta.judge_reason 可抽检，缓存键=文件
+sha256）。抽检例：「考勤工时计算与验厂日报」图判 integral（整图围绕同一处理
+方案，各分支相互依赖拆开不完整）；「泛型/类型参数化」问答式节点属 split 切分。
+
+**适配器改造**（adapters/emmx.py，+269 行）：
+1. 结构化解析成功且 [llm] 可用时，每文件先 LLM 形态判定（integral/split +
+   一句话理由；判定依据=主题+一级分支大纲，`_JUDGE_OUTLINE_DEPTH=2`、输入
+   截断 1800 字——判定不需要全文，省 token）；
+2. integral（方案型）→ **整图一条目**：节点树确定性压缩为结构化大纲入正文
+   （`_BODY_CHARS=20000` 上限超长截断留痕），locator=`emmx://<相对路径>#<map>`，
+   source_key=文件相对路径（重同步幂等）；
+3. split（讨论型）→ 节点照旧切条目（source_key=文件相对路径#页名/节点id），
+   meta 附 judge 供区分；
+4. 判定缓存 `KNOWATLAS_HOME/emmx_judge_cache.json`（键=文件字节 sha256）：
+   文件未变不重判（二次 dry-run 实测 calls=0 / cache_hits=9，零重复费用）；
+5. 降级纪律：LLM 不可用/解析失败 → 旧式节点切分 + stats.judge.errors 计数，
+   不阻塞同步。
+
+**配套**：datalayer/db.py `purge_source()`（按 source_type 物理删除全部条目，
+FK 级联 + content_store 引用计数回收，调用方须先有快照）；pipeline/sync.py
+judge 统计接入 sync stats；cli.py 参数透传。测试 +244 行（integral/split/
+缓存/降级/契约）。
+
+**当日事故（非本批代码问题）**：库文件 WAL/SHM 状态损坏 → serve 全部 API
+disk I/O error（界面「聚合中…」挂死）+ 独立进程开库同炸 + 首次快照失败。
+按 SOP §2.2 流程修复：停 serve → 三件备份至临时目录 → 删 -wal/-shm → 重启
+→ 全链路恢复。根因未实锤（疑似 VACUUM INTO 中断留下坏 WAL 状态），挂账观察；
+大库（656MB，conv_messages 全量正文）+ 多进程并发场景建议后续给 kbackup 加
+VACUUM 失败重试与快照存在性校验。
+
+**验证**：pytest 355 全绿（1 skip）；ksync --dry-run 真实库全源跑通（emmx
+reachable / 9 files / judge cache 命中）；serve 重启后 /api/tree 254ms。
+改动文件 UTF-8 无 BOM + LF。
 

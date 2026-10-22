@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="时效体检：纯规则标记过期/疑似过旧的知识（废弃关键词/正文日期过旧/同主题新旧并存），只标不删、可否决；配合 --dry-run 只出报告")
     ksync.add_argument("--errata-scan", action="store_true",
                        help="勘误 L1 体检：纯规则确定性错误扫描（完整 Python 代码块语法验证/已移除 API 对照表），只标不删、可否决；配合 --dry-run 只出报告")
+    ksync.add_argument("--purge-source", metavar="SOURCE", default=None,
+                       help="全删重灌第一步：物理删除指定源全部条目（含 archived/rejected，FK 级联"
+                            "+ content_store 引用计数回收 + task_log 留痕）后接着同步该源；"
+                            "先快照后删除（快照失败自动中止）；配合 --dry-run 只探测不删除")
+    ksync.add_argument("--purge-reason", metavar="REASON", default="reingest",
+                       help="purge 留痕原因标记（默认 reingest；emmx 重灌用 emmx_rebuild）")
     ksync.add_argument("--expand", metavar="ENTRY_ID", default=None,
                        help="书签扩散抓取（显式触发）：对指定书签/http 条目抓取其同目录系列页（同一目录页同一主题）")
     ksync.add_argument("--expand-limit", type=int, default=20,
@@ -215,7 +221,9 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                          reclassify=args.reclassify, value_scan=args.value_scan,
                          dedupe_scan=args.dedupe_scan,
                          freshness_scan=args.freshness_scan,
-                         errata_scan=args.errata_scan)
+                         errata_scan=args.errata_scan,
+                         purge_source=args.purge_source,
+                         purge_reason=args.purge_reason)
     finally:
         dl.close()
     print(f"OK 同步完成：{stats}")

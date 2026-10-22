@@ -437,6 +437,46 @@ class DataLayer:
                 stats["swept"].append({"id": r["id"], **detail})
         return stats
 
+    def purge_source(self, source_type: str, *, reason: str,
+                     task_name: str = "ksync") -> dict[str, Any]:
+        """按 source_type 物理删除**全部**条目（含 archived/rejected）——推倒重来
+        场景（emmx 全删重灌，方案 §7.8；调用方须先有快照，本方法不做快照）。
+
+        - 删除走 FK 级联（entry_locators/entry_categories/entry_vectors/
+          point_sources/thread_items/conv_messages/regress_cases 指针全清，
+          points 本体保留），entries_fts 由触发器同步；
+        - content_store 引用计数回收：共享内容块只减计数，删到零才清正文
+          （与 sweep_expired_rejections 同口径）；
+        - task_log 批次留痕（单条 action=purge_source，detail 含数量与原因）；
+        - 调用方持返回 dict 记入 stats。
+        """
+        hashes = [r["content_hash"] for r in self._conn.execute(
+            "SELECT DISTINCT content_hash FROM entries"
+            " WHERE source_type=? AND content_hash IS NOT NULL", (source_type,),
+        ).fetchall()]
+        with self.transaction() as conn:
+            n = conn.execute("SELECT COUNT(*) FROM entries WHERE source_type=?",
+                             (source_type,)).fetchone()[0]
+            conn.execute("DELETE FROM entries WHERE source_type=?", (source_type,))
+            conn.execute(
+                "INSERT INTO task_log (at, task_name, action, target, detail)"
+                " VALUES (?,?,?,?,?)",
+                (_now(), task_name, "purge_source", source_type,
+                 json.dumps({"deleted": n, "reason": reason}, ensure_ascii=False)),
+            )
+        recycled = 0
+        for h in hashes:
+            with self.transaction() as conn:
+                remain = conn.execute(
+                    "SELECT COUNT(*) FROM entries WHERE content_hash=?", (h,),
+                ).fetchone()[0]
+                if remain == 0:
+                    conn.execute("DELETE FROM content_fts WHERE content_hash=?", (h,))
+                    conn.execute("DELETE FROM content_store WHERE content_hash=?", (h,))
+                    recycled += 1
+        return {"purged": n, "source_type": source_type, "reason": reason,
+                "content_recycled": recycled}
+
 
     # ---- 内容 ----
 
