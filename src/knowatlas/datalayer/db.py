@@ -1929,6 +1929,31 @@ class DataLayer:
             "SELECT DISTINCT entry_id FROM point_sources").fetchall()
         return {r["entry_id"] for r in rows}
 
+    def points_of_entries(self, entry_ids: list[str],
+                          text_cap: int = 500) -> dict[str, list[dict[str, Any]]]:
+        """批量取条目挂的点（③默认聚合呈现，批次 67）：entry_id → 点列表。
+
+        两层形态共存的消费面：条目（方案级）照常检索，点级收进可展开区。
+        text 截 text_cap 字符（点全文走条目原文/后续点详情，检索页不背 20K
+        整图大纲）；返回键恒存在（无点条目 → 空列表）。
+        """
+        out: dict[str, list[dict[str, Any]]] = {eid: [] for eid in entry_ids}
+        if not entry_ids:
+            return out
+        marks = ",".join("?" * len(entry_ids))
+        rows = self._conn.execute(
+            "SELECT ps.entry_id, p.id, p.summary, p.text, p.judge, p.content_hash,"
+            " p.created_at FROM point_sources ps JOIN points p ON p.id = ps.point_id"
+            f" WHERE ps.entry_id IN ({marks}) ORDER BY ps.entry_id, p.created_at, p.id",
+            entry_ids).fetchall()
+        for r in rows:
+            d = dict(r)
+            text = d.pop("text") or ""
+            d["text_len"] = len(text)
+            d["text"] = text if len(text) <= text_cap else text[:text_cap] + "…[截断]"
+            out[d["entry_id"]].append(d)
+        return out
+
     def purge_points(self, *, reason: str, task_name: str = "kpoints") -> int:
         """清空点层（points + point_sources）——形态判定口径变更后的推倒重来
         （2026-10-22 用户口径：LLM 判定 → 确定性规则，旧点全部作废）。

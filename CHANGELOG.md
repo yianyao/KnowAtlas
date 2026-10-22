@@ -2298,3 +2298,51 @@ reachable / 9 files / judge cache 命中）；serve 重启后 /api/tree 254ms。
 test_emmx.py 适配 degraded 语义（15 项，purge 断言 8→4）。全量 pytest
 404 通过（1 skip）。改动文件 UTF-8 无 BOM + LF。
 
+### 第六十七批：两层形态聚合呈现 + 一键合并/拆开 + 目录信号三路（Phase 7 批次 67，2026-10-22）
+
+**背景**：用户确认落 ③两层形态共存+默认聚合呈现（可逆架构）④一键合并/拆开
+（消费时人纠）；目录信号粗规则（用户原话：「在某个项目内的文档，多半就是方案，
+其他的多数是知识点——同一目录底下有若干内容相差颇大的文件……这个判断很粗疏」）。
+另收截图 bug：检索条目分类徽标重复叠层（「几个意思？」）。
+
+**A 徽标竞态修复**（web/static/index.html）：attachCatChips 加调用令牌（连续
+渲染只认最新一轮，迟到响应丢弃）+ div 级幂等守卫（data-cats-done，DOM 重建
+标记随节点消失天然允许重挂）——数据层已验证零重复（纯前端竞态）。
+
+**D 目录信号三路**（pipeline/points.py）：形态判定从两路扩三路——
+1. 文学创作祖先链 → forced split（不变）；
+2. **杂烩目录（新）**：folder 源 + 目录末段含暗示词（其他/杂项/临时/归档/
+   misc/archive…）或代码/文本类后缀 ≥3 种 → 走 LLM 全判定（宁整勿碎偏置，
+   judge 可 integral 可 split——只取消零 LLM 豁免，不 forced split，误伤成本
+   =一次调用）；**办公后缀不计数**（真实库教训：「Data/百卓/PECOS」79 条
+   docx/xlsx/pdf 混杂是同一项目工作流，机械按后缀多样性会误伤）；
+   .emmx 条目排除（走 emmx 自有判定缓存口径）；
+3. 其余 integral 零 LLM（不变）。
+
+**③默认聚合呈现**（db.py + api.py + index.html）：条目=方案级照常检索，点级
+收进条目卡「◆ N 点 ▸」可展开区（聚合默认、下钻可选，检索零改动）。数据层
+`points_of_entries()`（text 服务端截 500 字防检索页背 20K 整图大纲）+ 端点
+`GET /api/entries/points?ids=`（声明在 /api/entries/{id} 之前防路径参数吞掉）；
+前端令牌+幂等双守卫（同 A）。两层共存可逆：点数据本就独立成层（迁移 007），
+呈现只加不改。
+
+**④一键合并/拆开**（api.py + index.html）：emmx 形态人工裁决——判定缓存即
+裁决入口。端点 `POST /api/sources/emmx/rejudge`（rel+form）：改
+emmx_judge_cache 强判（fkey=sha256 人工可改写既定设计）→ run_sync 单源
+purge 重灌（同步 def 纪律：重 I/O 不占事件循环）；前端条目卡 hover 注入
+黄色按钮（#map→「⧉切分」/ #page/→「◫整图」/ #file 降级不给），点按即
+裁决+重灌+刷新，点层下次 kpoints 自动重抽（溯源已随 purge 级联删除）。
+
+**真实库落地**：杂烩条目重抽——24 条全处理零错误：**LLM 判 integral 14 /
+split 10**，产 86 点（split 理由抽检：「电话联络表各部门可独立复用」「29 条
+评审提示词清单」「仓库级操作手册按场景组织」——LLM 判定命中用户「杂烩目录
+多数是知识点」直觉）；点层 910 → 978（split 点 4 → 93），清孤儿 18（杂烩
+旧 integral 残留，无溯源指向）。rejudge 全流程未真库演练（防误重灌，按钮由
+浏览器验收注入正确性）。
+
+**测试**：test_points.py +4（暗示词路由 LLM/代码后缀路由/办公混杂不误伤/
+emmx-manual 免疫——顺带修 .emmx folder 条目被目录规则二次判定的漏网）；
+test_web_api.py +2（points 批量端点含截断与空态/rejudge 参数校验 400/404/403）。
+全量 pytest 410 通过（1 skip）。浏览器验收三项 PASS（徽标唯一/点聚合展开
+收起/rejudge 按钮注入与文案）+ 控制台零报错。改动文件 UTF-8 无 BOM + LF。
+

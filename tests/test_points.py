@@ -51,6 +51,13 @@ _SPLIT_ONLY_REPLY = (
     '"points":[{"text":"FTS5 中文检索用 trigram 分词。","summary":"FTS5 分词选型"},'
     '{"text":"WAL 模式提升并发读：PRAGMA journal_mode=WAL。","summary":"WAL 开启方式"}]}'
 )
+# 全判定路径响应（杂烩目录用——形态未预判，LLM 先判 split 再切点）
+_SPLIT_JUDGE_REPLY = (
+    '{"judge":"split","reason":"杂烩目录，各文件主题独立",'
+    '"summary":"两问各答",'
+    '"points":[{"text":"FTS5 中文检索用 trigram 分词。","summary":"FTS5 分词选型"},'
+    '{"text":"WAL 模式提升并发读：PRAGMA journal_mode=WAL。","summary":"WAL 开启方式"}]}'
+)
 
 
 def _seed_entries(dl, n: int = 1, *, body: str = "FTS5 中文检索用 trigram 分词。" * 3,
@@ -76,6 +83,17 @@ def _attach_lit(dl, entries: list[Entry], *, child: bool = False) -> None:
         target = dl.create_category("小说写法", [lit.id], "manual")
     for e in entries:
         dl.attach_category(e.id, target.id, 1.0, "manual", run_id)
+
+
+def _folder(dl, np: str, name: str, suffix: str) -> Entry:
+    """建 folder 条目（native_path 目录信号 + locator 带文件后缀）。"""
+    e = Entry.build(source_type="folder", source_key=f"dir:{np}/{name}{suffix}",
+                    title=name, locator=f"file:///{np}/{name}{suffix}",
+                    native_path=np,
+                    inline_content="方案正文：先 EXPLAIN QUERY PLAN 看计划，再补统计信息。" * 6,
+                    meta={"source_type": "folder"})
+    dl.upsert_entries([e])
+    return e
 
 
 # ---- 规范化与去重键 ----
@@ -332,3 +350,53 @@ def test_pipeline_truncates_long_body_for_split(cfg, dl):
     assert stats2["body_truncated"] == 0
     pt = [p for p in dl.list_points() if p["judge"] == "integral"][0]
     assert len(pt["text"]) == 9000 and pt["text"].endswith("方案")
+
+
+# ---- 流水线：目录信号三路（批次 67，用户粗规则）----
+
+def test_mixed_dir_hint_word_routes_to_llm_judge(cfg, dl):
+    """目录名含暗示词（其他/归档/…）→ 杂烩：走 LLM 形态判定（不 forced split）。"""
+    es = [_folder(dl, "Data/测试/其他", f"文件{i}", sfx)
+          for i, sfx in enumerate([".pdf", ".docx", ".xls"])]
+    llm = FakeLlm([_INTEGRAL_REPLY] * 3)
+    stats = run_points_extract(cfg, dl, limit=10, llm=llm)
+    assert stats["mixed_dir"] == 3          # 三条全走 LLM 判定
+    assert stats["integral"] == 3           # LLM 判回 integral（宁整勿碎偏置）
+    assert len(llm.calls) == 3
+    assert "先做形态判定" in llm.calls[0]    # 判定+切点合一 prompt（非 forced 切点）
+
+
+def test_mixed_dir_code_suffixes_route_to_llm(cfg, dl):
+    """代码/文本类后缀 ≥3 种 → 杂烩（用户原话「后端目录有 python 和 java」）。"""
+    [_folder(dl, "Data/git/杂项目录", f"f{i}", sfx)
+     for i, sfx in enumerate([".py", ".java", ".md"])]
+    llm = FakeLlm([_SPLIT_JUDGE_REPLY] * 3)
+    stats = run_points_extract(cfg, dl, limit=10, llm=llm)
+    assert stats["mixed_dir"] == 3
+    assert stats["split"] == 3              # LLM 判回 split → 切点
+
+
+def test_office_suffix_mix_not_mixed(cfg, dl):
+    """办公后缀混杂（docx/xlsx/pdf）≠ 杂烩：同项目工作流，仍零 LLM integral。"""
+    [_folder(dl, "Data/百卓/PECOS", f"方案{i}", sfx)
+     for i, sfx in enumerate([".docx", ".xlsx", ".pdf"])]
+    llm = FakeLlm([])
+    stats = run_points_extract(cfg, dl, limit=10, llm=llm)
+    assert stats["mixed_dir"] == 0
+    assert stats["integral"] == 3
+    assert llm.calls == []                  # 零 LLM（真实库教训：PECOS 79 条方案防误伤）
+
+
+def test_emmx_and_manual_immune_to_dir_rule(cfg, dl):
+    """目录规则只作用于 folder 源：emmx（自有判定缓存）/manual（无目录信号）免疫。"""
+    _folder(dl, "Data/测试/其他", "脑图", ".emmx")   # emmx 在杂烩目录 → 不参与
+    batch = uuid.uuid4().hex[:6]
+    m = Entry.build(source_type="manual", source_key=f"pt:mm:{batch}",
+                    title="手动条目", locator=f"https://example.com/{batch}",
+                    inline_content="手动正文内容足够长，超过最短门槛要求。" * 4,
+                    meta={"source_type": "manual"})
+    dl.upsert_entries([m])
+    llm = FakeLlm([])
+    stats = run_points_extract(cfg, dl, limit=10, llm=llm)
+    assert stats["mixed_dir"] == 0
+    assert llm.calls == []

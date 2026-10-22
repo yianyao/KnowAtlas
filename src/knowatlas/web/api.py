@@ -11,6 +11,7 @@ import hashlib
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Request, Response
@@ -734,6 +735,74 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         if not id_list:
             return {"linkage": {}}
         return {"linkage": {eid: dl.get_entry_categories(eid) for eid in id_list}}
+
+    @app.get("/api/entries/points")
+    def entries_points(ids: str = ""):
+        """批量取条目挂的点（③默认聚合呈现，批次 67，两层形态共存的消费面）。
+
+        条目（方案级）照常检索展示，点级收进前端可展开区——聚合默认、下钻可选。
+        text 已服务端截断（点全文走条目原文）。必须声明在 /api/entries/{entry_id}
+        之前——否则 "points" 会被路径参数捕获。
+        """
+        id_list = [s.strip() for s in ids.split(",") if s.strip()][:100]
+        return {"points": dl.points_of_entries(id_list)}
+
+    @app.post("/api/sources/emmx/rejudge")
+    def emmx_rejudge(request: Request, body: dict = Body(default={})):
+        """脑图形态人工裁决（④一键合并/拆开，批次 67）：改判定缓存强判 → emmx
+        单源 purge 重灌。
+
+        body: rel=文件相对路径（locator emmx://<rel>#… 的中段）、
+        form="integral"（并=整图一条）| "split"（拆=按节点切条）。
+        缓存键=文件字节 sha256（与适配器同口径，人工可改写强判——判定缓存即
+        人工裁决入口）；重灌走 run_sync 单源（收集零 LLM——缓存命中；分类只对
+        新/更新条目）。同步 def：run_sync 含快照/抓取等重 I/O，禁止占事件循环
+        （同 add_entry 第五十八批）。点层影响：purge 级联删该源溯源，重灌后
+        下次 kpoints 自动重抽（幂等游标缺失即补）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        rel = str(body.get("rel", "")).strip().strip("/")
+        form = str(body.get("form", "")).strip()
+        if form not in ("integral", "split"):
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "form 必须是 integral（整图）或 split（切分）"}},
+                status_code=400)
+        if not rel:
+            return JSONResponse({"error": {"code": "BAD_REQUEST", "message": "缺少 rel"}},
+                                status_code=400)
+        fpath: Any = None
+        for r in (cfg.get("sources.emmx.roots") or []):
+            cand = Path(str(r)) / rel
+            if cand.is_file():
+                fpath = cand
+                break
+        if fpath is None:
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND",
+                           "message": f"文件不存在：{rel}（roots 下找不到）"}},
+                status_code=404)
+        from ..adapters.emmx import (_judge_cache_path, _load_judge_cache,
+                                     _save_judge_cache)
+        if _judge_cache_path(cfg) is None:
+            return JSONResponse(
+                {"error": {"code": "NO_HOME",
+                           "message": "KNOWATLAS_HOME 未设置，判定缓存不可用"}},
+                status_code=409)
+        fkey = hashlib.sha256(fpath.read_bytes()).hexdigest()
+        cache = _load_judge_cache(cfg)
+        cache[fkey] = {"judge": form,
+                       "reason": f"人工裁决（Web 一键{'整图' if form == 'integral' else '切分'}，批次 67）"}
+        _save_judge_cache(cfg, cache)
+        from ..pipeline.sync import run_sync
+        stats = run_sync(cfg, dl, locators, semantics, full=True,
+                         source="emmx", purge_source="emmx",
+                         purge_reason="web_rejudge")
+        return {"rel": rel, "form": form,
+                "purge": stats.get("purge"),
+                "emmx": stats.get("sources", {}).get("emmx", {})}
 
     @app.get("/api/entries/{entry_id}")
     def entry_detail(entry_id: str):

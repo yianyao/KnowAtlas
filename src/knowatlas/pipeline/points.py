@@ -1,21 +1,25 @@
 """知识点抽取流水线（方案 §7.1，0.2.0 第六十二批，Phase 7 批次 61a；
-2026-10-22 用户口径改规则判定——批次 66）。
+2026-10-22 用户口径改规则判定——批次 66；目录信号三路规则——批次 67）。
 
-链路：候选条目（active、有正文、未抽过）→ **形态判定=确定性规则**（用户口径
-2026-10-22：分类路径含「文学创作」= 知识点集合 split，LLM 只切点不判定；
-其余全部 = 方案 integral，整条即点**零 LLM 费用**）→ split 走 point_extract
-（forced split 切点-only prompt）→ 规范化 hash 去重（点正文 去零宽/压空白/
-casefold 后 sha1）→ put_point 落库（content_hash 命中即合并为一点多溯源——
-溯源数=可信度信号）。
+链路：候选条目（active、有正文、未抽过）→ **形态判定=三路确定性规则**：
+- 文学创作类（分类祖先链含锚词）→ forced split：LLM 只切点不判定；
+- 杂烩目录（目录信号粗规则，批次 67 用户口径：项目内文档≈方案、杂烩≈知识点）
+  → 走 LLM 形态判定（宁整勿碎偏置，judge 可 integral 可 split）；
+- 其余 = 方案 integral，整条即点**零 LLM 费用**。
+→ split 走 point_extract（forced split 切点-only prompt）→ 规范化 hash 去重
+（点正文 去零宽/压空白/casefold 后 sha1）→ put_point 落库（content_hash 命中
+即合并为一点多溯源——溯源数=可信度信号）。
 
 口径依据（用户裁决原话）：「基本可以肯定：所有脑图，和文学创作相关的肯定都是
-知识点，剩下的，全是方案」——LLM 形态判定退役为备用路径（emmx 文件级判定
-仍走 LLM+缓存，口径由判定缓存人工覆盖）。
+知识点，剩下的，全是方案」；目录规则（批次 67 输入）：「在某个项目内的文档，
+多半就是方案，其他的多数是知识点（同一目录底下有若干内容相差颇大的文件……
+这个判断很粗疏）」——杂烩信号必须保守（错误成本不对称：误切=灾难），见
+_mixed_dir_entry_ids。
 
 纪律：
 - 幂等：已产出过溯源指针的条目自动跳过（point_source_entry_ids 游标），
   LLM 失败条目下次重跑自然补抽；
-- 降级：LLM 未启用 → integral 照产（零费用），split 条目记 error 跳过；
+- 降级：LLM 未启用 → integral 照产（零费用），split/杂烩条目记 error 跳过；
   单条失败记 error 继续下一条，绝不阻塞；
 - 原文永不动：点 text 是抽取产物，条目与 content_store 零写入。
 """
@@ -25,7 +29,9 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
@@ -37,6 +43,18 @@ _BODY_CAP = 6000      # 送 LLM 的正文字符上限（控成本；截断计数
 _MIN_BODY_CHARS = 50  # 短于此的正文跳过（无点可抽）
 _POINT_BODY_CAP = 20000  # integral 点 text 上限（零 LLM 不心疼 token，保真优先）
 _SPLIT_CATEGORY_HINT = "文学创作"  # 用户口径：此分类子树 = 知识点（切），其余 = 方案
+# 目录信号杂烩（批次 67）：目录末段名含暗示词（用户自己起的名即信号）——
+# 只认粗颗粒暗示词，宁整勿碎；不搞语义猜测。
+_MIXED_DIR_HINT = re.compile(r"其他|杂项|临时|收集|整理|归档|misc|archive|backup", re.I)
+# 杂烩第二信号：代码/文本类后缀 ≥3 种（用户原话「后端目录中可能有 python 和
+# java」）。办公后缀（docx/xlsx/pdf…）**不计数**——同一项目工作流的形态差异
+# ≠ 内容杂烩（真实库教训：「Data/百卓/PECOS」docx+xlsx+pdf 是项目目录，机械
+# 按后缀多样性判杂烩会误伤 79 条方案）。
+_CODE_SUFFIXES = frozenset({
+    ".py", ".java", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".c", ".cpp",
+    ".h", ".hpp", ".cs", ".md", ".ipynb", ".sh", ".ps1", ".bat", ".sql",
+    ".rb", ".php", ".lua", ".kt", ".swift", ".scala", ".vue"})
+_MIXED_DIR_MIN_CODE_TYPES = 3
 
 JUDGES = ("integral", "split")
 
@@ -115,6 +133,40 @@ def _split_entry_ids(dl: Any) -> set[str]:
     return out
 
 
+def _locator_suffix(locator: str) -> str:
+    """条目文件后缀（folder 条目文件名在 locator 路径里；title 已去后缀）。"""
+    p = urlparse(locator) if "://" in locator else None
+    return Path((p.path if p else locator).rstrip("/")).suffix.lower()
+
+
+def _mixed_dir_entry_ids(dl: Any) -> set[str]:
+    """目录信号杂烩集（批次 67 用户粗规则）：这些条目走 LLM 形态判定。
+
+    仅 folder 源（emmx 有自有判定缓存口径；bookmark 是 URL 集）。
+    双信号命中其一即杂烩，但信号本身保守（宁整勿碎）：
+    - 目录末段名含暗示词（其他/杂项/临时/归档/misc/archive…）；
+    - 目录内代码/文本类后缀 ≥3 种；办公后缀不计数（同项目工作流 ≠ 杂烩）。
+    杂烩 ≠ forced split：只取消「零 LLM integral」豁免，交给 LLM 按宁整勿碎
+    偏置判（真方案大概率仍 integral，误伤成本=一次调用）。
+    """
+    by_dir: dict[str, list[Any]] = {}
+    for e in dl.list_entries(status="active", limit=10000):
+        if e.source_type != "folder":
+            continue
+        if _locator_suffix(e.locator) == ".emmx":
+            continue  # 脑图走 emmx 适配器判定缓存口径（文学创作规则之外，用户口径）
+        np = (e.native_path or "").strip().rstrip("/")
+        if np:
+            by_dir.setdefault(np, []).append(e)
+    out: set[str] = set()
+    for np, entries in by_dir.items():
+        leaf = np.rsplit("/", 1)[-1]
+        code_types = {_locator_suffix(e.locator) for e in entries} & _CODE_SUFFIXES
+        if _MIXED_DIR_HINT.search(leaf) or len(code_types) >= _MIXED_DIR_MIN_CODE_TYPES:
+            out.update(e.id for e in entries)
+    return out
+
+
 def _integral_result(e: Any, body: str) -> dict[str, Any]:
     """integral（零 LLM）：整条即点，text=正文截断保真，summary=标题。"""
     text = body if len(body) <= _POINT_BODY_CAP else body[:_POINT_BODY_CAP] + "…[截断]"
@@ -138,6 +190,7 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     dl.start_run(run_id, "kpoints")
     stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
                              "processed": 0, "integral": 0, "split": 0,
+                             "mixed_dir": 0,
                              "points_created": 0, "points_linked": 0,
                              "body_truncated": 0, "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
@@ -147,10 +200,10 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
         stats["pool_remaining"] = max(0, dl.count_entries("active")
                                       - len(cand) - sum(skipped.values()))
         split_ids = _split_entry_ids(dl)
+        mixed_ids = _mixed_dir_entry_ids(dl)
         for e in cand:
             body = _entry_body(dl, e)
-            is_split = e.id in split_ids
-            if is_split:
+            if e.id in split_ids:
                 if llm is None:
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": "split 需 LLM 切点但 llm 未启用"})
@@ -162,6 +215,25 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     {"entry_id": e.id, "title": e.title,
                      "source_type": e.source_type, "body": body,
                      "forced_judge": "split"},
+                    TaskContext(run_id=run_id, llm=llm))
+                if not res.get("llm_used"):
+                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
+                                            "error": res.get("error", "llm 未产出")})
+                    continue
+            elif e.id in mixed_ids:
+                # 杂烩目录（批次 67 目录信号）：走 LLM 形态判定（宁整勿碎偏置，
+                # judge 可 integral 可 split）——只取消零 LLM 豁免，不 forced split
+                stats["mixed_dir"] += 1
+                if llm is None:
+                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
+                                            "error": "杂烩目录需 LLM 判定但 llm 未启用"})
+                    continue
+                if len(body) > _BODY_CAP:
+                    body = body[:_BODY_CAP]
+                    stats["body_truncated"] += 1
+                res = point_extract.run(
+                    {"entry_id": e.id, "title": e.title,
+                     "source_type": e.source_type, "body": body},
                     TaskContext(run_id=run_id, llm=llm))
                 if not res.get("llm_used"):
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],

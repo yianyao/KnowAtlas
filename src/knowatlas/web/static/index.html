@@ -107,6 +107,19 @@
               border: 1px dashed #4a9eff66; border-radius: 4px; padding: 0 6px;
               margin-left: 6px; cursor: pointer; }
   .cat-chip:hover { background: #4a9eff22; }
+  /* ③默认聚合呈现（批次 67）：条目=方案级，点级收进可展开区（两层形态共存） */
+  .pt-block { margin-top: 3px; font-size: 12px; }
+  .pt-toggle { color: #35c28f; cursor: pointer; user-select: none; }
+  .pt-toggle:hover { text-decoration: underline; }
+  .pt-item { border-left: 2px solid #35c28f66; margin: 5px 0; padding: 2px 0 2px 8px; }
+  .pt-item .badge { margin-left: 4px; }
+  .pt-text { color: #aaa; white-space: pre-wrap; word-break: break-word;
+             max-height: 180px; overflow-y: auto; margin-top: 2px; }
+  /* ④一键合并/拆开（批次 67）：emmx 形态人工裁决按钮（hover 显现，同 move-btn） */
+  .rejudge-btn { cursor: pointer; border: 1px solid #d5a02199; border-radius: 4px;
+              background: transparent; color: #d5a021; font-size: 11px;
+              padding: 0 6px; margin-left: 6px; display: none; }
+  .entry:hover .rejudge-btn { display: inline-block; }
   .tree-node > .row > .name.flash { animation: catflash 1.1s ease 2; }
   @keyframes catflash { 0%, 100% { background: transparent; }
                         45% { background: #4a9eff55; } }
@@ -468,6 +481,8 @@ function bindEntryButtons() {
       .catch(() => { prompt("复制失败，请手动复制条目 ID：", b.dataset.id); });
   });
   attachCatChips();  // 双向联动②：条目 → 分类定位徽标（所有条目视图统一挂）
+  attachPointChips();  // ③默认聚合呈现（批次 67）：点级收进可展开区
+  attachRejudgeBtns(); // ④一键合并/拆开（批次 67）：emmx 形态人工裁决按钮
 }
 // 双向联动②：条目列表点「📁分类路径」徽标 → 左树滚动定位 + 闪烁高亮。
 // （双向联动①：点树节点 → 右侧条目列表，showCategory 已有）
@@ -480,15 +495,20 @@ function highlightInTree(catId) {
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 2400);
 }
+let _catChipsToken = 0;  // 令牌：连续渲染时只认最新一次调用（迟到响应丢弃，
+                         // 防徽标叠层——2026-10-22 用户截图批注「几个意思」）
 async function attachCatChips() {
   const divs = [...document.querySelectorAll(".entry-host .entry[data-id]")];
   if (!divs.length) return;
+  const my = ++_catChipsToken;
   const ids = [...new Set(divs.map(d => d.dataset.id))].slice(0, 100);
   const data = await (await fetch("/api/entries/linkage?ids=" + ids.join(","))).json();
-  if (!data.linkage) return;
+  if (my !== _catChipsToken || !data.linkage) return;  // 已有更新一轮渲染 → 本轮作废
   for (const div of divs) {
+    if (div.dataset.catsDone) continue;  // 幂等：同一 div 不重复挂徽标（DOM 重建后标记随节点消失，天然允许重挂）
     const cats = data.linkage[div.dataset.id];
     if (!cats || !cats.length) continue;
+    div.dataset.catsDone = "1";
     div.insertAdjacentHTML("beforeend", cats.map(c =>
       `<span class="cat-chip" data-cid="${c.category_id}" title="点击在左侧树中定位该分类">📁${c.path}</span>`).join(""));
     // 确认归类（第五十一批回归集）：有挂接的条目注入 ✓ 按钮——把当前主分类
@@ -522,6 +542,81 @@ async function attachCatChips() {
     const cb = d.querySelector(".sel-cb");
     cb.checked = selection.has(d.dataset.id);
     cb.onchange = () => { cb.checked ? selection.add(d.dataset.id) : selection.delete(d.dataset.id); updateBulkBar(); };
+  });
+}
+// ---- ③默认聚合呈现（批次 67，两层形态共存）：条目=方案级照常展示，点级
+// （知识点）收进「◆ N 点 ▸」可展开区——聚合默认、下钻可选，检索零改动。 ----
+function _escHtml(s) {
+  return String(s).replace(/[&<>"]/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+let _ptChipsToken = 0;  // 令牌+幂等守卫（同 attachCatChips 徽标竞态教训）
+async function attachPointChips() {
+  const divs = [...document.querySelectorAll(
+    ".entry-host .entry[data-id]:not([data-points-done])")];
+  if (!divs.length) return;
+  const my = ++_ptChipsToken;
+  const ids = [...new Set(divs.map(d => d.dataset.id))].slice(0, 100);
+  let data;
+  try {
+    data = await (await fetch("/api/entries/points?ids=" + ids.join(","))).json();
+  } catch { return; }
+  if (my !== _ptChipsToken || !data.points) return;
+  for (const div of divs) {
+    div.dataset.pointsDone = "1";  // 先标记后挂载：无点条目也不重试（防抖动重叠）
+    const pts = data.points[div.dataset.id];
+    if (!pts || !pts.length) continue;
+    div.insertAdjacentHTML("beforeend",
+      `<div class="pt-block"><span class="pt-toggle" data-open="0"`
+      + ` title="两层形态：条目=方案级，点=知识点级（展开下钻）">◆ ${pts.length} 点 ▸</span>`
+      + `<div class="pt-list" hidden>${pts.map(p =>
+          `<div class="pt-item"><b>${_escHtml(p.summary || "(无摘要)")}</b>`
+          + `<span class="badge">${p.judge || ""}</span>`
+          + `<div class="pt-text">${_escHtml(p.text || "")}`
+          + (p.text_len > (p.text || "").length ? `<small>…全文 ${p.text_len} 字见条目原文</small>` : "")
+          + `</div></div>`).join("")}</div></div>`);
+  }
+  document.querySelectorAll(".pt-toggle:not([data-bound])").forEach(t => {
+    t.dataset.bound = "1";
+    t.onclick = () => {
+      const list = t.parentElement.querySelector(".pt-list");
+      if (!list) return;
+      list.hidden = !list.hidden;
+      t.textContent = `◆ ${t.textContent.match(/\d+/)?.[0] || ""} 点 ${list.hidden ? "▸" : "▾"}`;
+    };
+  });
+}
+// ---- ④一键合并/拆开（批次 67）：emmx 形态人工裁决——判定缓存即裁决入口。
+// 整图条目（#map）给「⧉切分」；节点条目（#page/N）给「◫整图」；降级条目
+// （#file）不给（解析失败，切分无意义）。POST 后单源 purge 重灌。 ----
+function attachRejudgeBtns() {
+  document.querySelectorAll(".entry-host .entry[data-id]").forEach(d => {
+    const a = d.querySelector("a[href^='emmx://']");
+    if (!a || d.querySelector(".rejudge-btn")) return;
+    const loc = a.getAttribute("href") || "";
+    const m = loc.match(/^emmx:\/\/(.+?)#[^#]*$/);
+    if (!m) return;
+    const rel = m[1];
+    let form, label;
+    if (loc.endsWith("#map")) { form = "split"; label = "⧉切分"; }
+    else if (/#page\//.test(loc)) { form = "integral"; label = "◫整图"; }
+    else return;  // #file 等降级条目：解析失败，重灌也不变形态
+    const btn = document.createElement("button");
+    btn.className = "rejudge-btn";
+    btn.textContent = label;
+    btn.title = `人工裁决（④一键合并/拆开）：把「${rel}」重灌为${form === "integral" ? "整图一条（并）" : "按节点切条（拆）"}——改判定缓存+emmx 单源重灌，点层下次 kpoints 自动重抽`;
+    btn.onclick = async () => {
+      if (!confirm(`人工裁决：把「${rel}」重灌为${form === "integral" ? "整图一条" : "按节点切条"}？\n（emmx 单源重灌，数秒；点层下次 kpoints 自动重抽）`)) return;
+      btn.disabled = true; btn.textContent = "重灌中…";
+      const res = await writeJSON("/api/sources/emmx/rejudge", { rel, form });
+      btn.disabled = false; btn.textContent = label;
+      if (res.__aborted) return;
+      if (res.error) { alert("失败：" + res.error.message); return; }
+      const n = res.emmx && res.emmx.created;
+      alert(`重灌完成：emmx 新建 ${n ?? "?"} 条（purge ${res.purge?.purged ?? "?"} 条旧条目）。\n点层将在下次 kpoints 自动重抽。`);
+      if (typeof refreshCurrent === "function" && refreshCurrent) refreshCurrent();
+    };
+    d.appendChild(btn);
   });
 }
 // 多选模式（第五十二批）：selection 跨视图保留（Set 全局）；勾「多选」开

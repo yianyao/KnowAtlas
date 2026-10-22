@@ -447,3 +447,52 @@ def test_mcp_handlers_ast_readonly():
                         and not sub.args[0].value.lstrip().upper().startswith("SELECT")
                         and "PRAGMA" not in sub.args[0].value.upper()):
                     raise AssertionError(f"{name} 执行了非 SELECT SQL")
+
+
+# ---- ③默认聚合呈现 + ④一键合并/拆开（批次 67）----
+
+def test_entries_points_batch(client, dl):
+    """③批量取条目挂的点：无点条目空列表、text 服务端截断、judge 透传。"""
+    from knowatlas.models import Entry
+    e = Entry.build(source_type="manual", source_key=f"pt67:{id(dl)}",
+                    title="聚合样本", locator=f"https://pt67.example/{id(dl)}",
+                    inline_content="FTS5 用 trigram。" * 10,
+                    meta={"source_type": "manual"})
+    dl.upsert_entries([e])
+    import uuid
+    dl.put_point({"content_hash": "h67" + uuid.uuid4().hex[:12],
+                  "text": "点" * 600, "summary": "一点",
+                  "source_type": "manual", "judge": "integral",
+                  "meta": {"judge_reason": "方案整条即点"}},
+                 {"entry_id": e.id, "char_offset": 0, "anchor": "点"})
+    r = client.get(f"/api/entries/points?ids={e.id}").json()
+    pts = r["points"][e.id]
+    assert len(pts) == 1
+    assert pts[0]["summary"] == "一点" and pts[0]["judge"] == "integral"
+    assert pts[0]["text_len"] == 600 and pts[0]["text"].endswith("…[截断]")  # 500 cap
+    # 无点条目 → 空列表；空 ids → 空对象
+    e2 = Entry.build(source_type="manual", source_key=f"pt67b:{id(dl)}",
+                     title="无点样本", locator=f"https://pt67b.example/{id(dl)}",
+                     inline_content="无点正文。", meta={"source_type": "manual"})
+    dl.upsert_entries([e2])
+    r2 = client.get(f"/api/entries/points?ids={e2.id}").json()
+    assert r2["points"][e2.id] == []
+    assert client.get("/api/entries/points?ids=").json() == {"points": {}}
+    # "points" 不被 /api/entries/{entry_id} 路径参数吞掉（声明顺序保证）
+    assert client.get("/api/entries/points").status_code == 200
+
+
+def test_emmx_rejudge_validation(client):
+    """④人工裁决参数校验：form 非法 400、缺 rel 400、文件不存在 404（不写库）。"""
+    h = _auth()
+    assert client.post("/api/sources/emmx/rejudge", json={"rel": "x.emmx", "form": "maybe"},
+                       headers=h).status_code == 400
+    assert client.post("/api/sources/emmx/rejudge", json={"rel": "", "form": "integral"},
+                       headers=h).status_code == 400
+    r = client.post("/api/sources/emmx/rejudge",
+                    json={"rel": "不存在.emmx", "form": "integral"}, headers=h)
+    assert r.status_code == 404
+    # 无 token → 写守卫拦截（403）
+    assert client.post("/api/sources/emmx/rejudge",
+                       json={"rel": "x.emmx", "form": "integral"},
+                       headers={}).status_code == 403
