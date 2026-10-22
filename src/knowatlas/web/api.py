@@ -869,6 +869,56 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "purge": stats.get("purge"),
                 "emmx": stats.get("sources", {}).get("emmx", {})}
 
+    @app.post("/api/entries/{entry_id}/form")
+    def entry_form(request: Request, entry_id: str, body: dict = Body(default={})):
+        """条目级形态覆盖（批次 70，非 emmx 文档的「拆/合」）：
+        写 meta.force_form → 清该条目点溯源 → 即时重抽。
+
+        body: form="integral"（合=整条一点，零 LLM）| "split"（拆=LLM 切点，需
+        llm.enabled）| "auto"（清覆盖，回归目录/分类规则）。覆盖永久生效
+        （全量重抽也尊重标记）；emmx 不走此端点（源级 rejudge 已有，两套不打架）。
+        同步 def：重抽含 LLM 网络调用，禁止占事件循环（同 emmx_rejudge）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        form = str(body.get("form", "")).strip().lower()
+        if form not in ("integral", "split", "auto"):
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "form 必须是 integral（合）/ split（拆）/ auto（回归规则）"}},
+                status_code=400)
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                                status_code=404)
+        if entry.source_type == "emmx":
+            return JSONResponse(
+                {"error": {"code": "BAD_REQUEST",
+                           "message": "emmx 条目用源级 rejudge（/api/sources/emmx/rejudge），条目级覆盖不适用"}},
+                status_code=400)
+        from ..pipeline.points import run_points_extract
+        # 1) 覆盖标记（auto=删键回归规则；merge_meta None=删键）
+        dl.merge_meta(entry_id, {"force_form": None if form == "auto" else form})
+        # 2) 清该条目点溯源（孤儿点级联删，共享点保留；游标随之清）
+        purged = dl.purge_entry_points(entry_id, reason=f"web_form_{form}")
+        # 3) 即时重抽（split 需 LLM——未启用记 error 返回，不静默）
+        stats = run_points_extract(cfg, dl, limit=1, entry_ids=[entry_id])
+        judge = ("integral" if stats.get("integral")
+                 else "split" if stats.get("split") else None)
+        dl.log_task(_now_iso(), "web", "entry_form", entry_id,
+                    {"form": form, "purged_sources": purged,
+                     "judge": judge,
+                     "points_created": stats.get("points_created", 0),
+                     "errors": stats.get("errors", [])})
+        resp: dict[str, Any] = {"entry_id": entry_id, "form": form,
+                                "purged_sources": purged,
+                                "points_created": stats.get("points_created", 0),
+                                "errors": stats.get("errors", [])}
+        pts = dl.points_of_entries([entry_id])
+        resp["points"] = pts.get(entry_id, []) if isinstance(pts, dict) else pts
+        return resp
+
     @app.get("/api/entries/{entry_id}")
     def entry_detail(entry_id: str):
         detail = dl.get_entry_detail(entry_id)

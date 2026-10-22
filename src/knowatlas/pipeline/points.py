@@ -82,13 +82,22 @@ def _entry_body(dl: Any, entry: Any) -> str:
     return body
 
 
-def _candidates(dl: Any, limit: int) -> tuple[list[Any], dict[str, int]]:
-    """候选条目：active + 有正文 + 非待清理 + 未抽过。返回 (列表, 跳过统计)。"""
+def _candidates(dl: Any, limit: int,
+                only_ids: list[str] | None = None) -> tuple[list[Any], dict[str, int]]:
+    """候选条目：active + 有正文 + 非待清理 + 未抽过。返回 (列表, 跳过统计)。
+
+    only_ids（批次 70 条目级形态覆盖）：指定条目直取——跳过游标检查（调用方
+    已 purge_entry_points 清溯源，重抽即视为新候选）；仍要求 active + 有正文。
+    """
     done = dl.point_source_entry_ids()
     skipped = {"no_body": 0, "not_knowledge": 0, "already_done": 0, "too_short": 0}
     out: list[Any] = []
-    for e in dl.list_entries(status="active", limit=10000):
-        if e.id in done:
+    pool = ([dl.get_entry(eid) for eid in only_ids] if only_ids
+            else dl.list_entries(status="active", limit=10000))
+    for e in pool:
+        if e is None:
+            continue
+        if only_ids is None and e.id in done:
             skipped["already_done"] += 1
             continue
         if str(e.meta.get("value_flag", "")) == "not_knowledge":
@@ -167,22 +176,25 @@ def _mixed_dir_entry_ids(dl: Any) -> set[str]:
     return out
 
 
-def _integral_result(e: Any, body: str) -> dict[str, Any]:
+def _integral_result(e: Any, body: str, reason: str | None = None) -> dict[str, Any]:
     """integral（零 LLM）：整条即点，text=正文截断保真，summary=标题。"""
     text = body if len(body) <= _POINT_BODY_CAP else body[:_POINT_BODY_CAP] + "…[截断]"
     return {"judge": "integral",
-            "reason": f"用户口径 2026-10-22：非文学创作=方案整条即点（规则判定，零 LLM）",
+            "reason": reason or "用户口径 2026-10-22：非文学创作=方案整条即点（规则判定，零 LLM）",
             "summary": str(e.title or "")[:120],
             "points": [{"text": text, "summary": str(e.title or "")[:120]}],
             "llm_used": False}
 
 
 def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False,
-                       llm: Any = None) -> dict[str, Any]:
+                       llm: Any = None,
+                       entry_ids: list[str] | None = None) -> dict[str, Any]:
     """跑一批知识点抽取；返回统计（CLI 打印 / 测试断言）。
 
     llm 参数为测试注入口；缺省从 cfg 构建（未启用 → split 条目记 error，
     integral 照产——零费用不依赖 LLM）。
+    entry_ids（批次 70 条目级形态覆盖）：只抽指定条目——配套调用方先
+    purge_entry_points 清溯源；覆盖判定见主循环 force_form。
     """
     if llm is None:
         llm = LlmClient.from_config(cfg)
@@ -190,12 +202,12 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     dl.start_run(run_id, "kpoints")
     stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
                              "processed": 0, "integral": 0, "split": 0,
-                             "mixed_dir": 0,
+                             "mixed_dir": 0, "force_overrides": 0,
                              "points_created": 0, "points_linked": 0,
                              "body_truncated": 0, "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
     try:
-        cand, skipped = _candidates(dl, limit)
+        cand, skipped = _candidates(dl, limit, only_ids=entry_ids)
         stats["skip_counts"] = skipped
         stats["pool_remaining"] = max(0, dl.count_entries("active")
                                       - len(cand) - sum(skipped.values()))
@@ -203,7 +215,18 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
         mixed_ids = _mixed_dir_entry_ids(dl)
         for e in cand:
             body = _entry_body(dl, e)
-            if e.id in split_ids:
+            # 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则——
+            # "integral" 强制合（文学创作/杂烩也整条即点，零 LLM）；
+            # "split" 强制拆（非文学创作也走 LLM 切点）；无/auto → 回归规则。
+            force = str(e.meta.get("force_form", "")).strip().lower()
+            if force == "integral":
+                stats["force_overrides"] += 1
+                if len(body) > _POINT_BODY_CAP:
+                    stats["body_truncated"] += 1
+                res = _integral_result(
+                    e, body, reason="用户强制覆盖 meta.force_form=integral（整条即点）")
+            elif force == "split" or e.id in split_ids:
+                stats["force_overrides"] += 1 if force == "split" else 0
                 if llm is None:
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": "split 需 LLM 切点但 llm 未启用"})

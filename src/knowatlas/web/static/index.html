@@ -466,7 +466,7 @@ async function opMerge(n) {
 const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散", opml: "OPML" };
 function srcLabel(t) { return SRC_LABEL[t] || t; }
 function entryHTML(e) {
-  return `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
        + `<span class="badge">${srcLabel(e.source_type)}</span>`
        + `<button class="move-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
        + `<button class="reject-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
@@ -490,6 +490,7 @@ function bindEntryButtons() {
   attachCatChips();  // 双向联动②：条目 → 分类定位徽标（所有条目视图统一挂）
   attachPointChips();  // ③默认聚合呈现（批次 67）：点级收进可展开区
   attachRejudgeBtns(); // ④一键合并/拆开（批次 67）：emmx 形态人工裁决按钮
+  attachFormBtns();  // 条目级拆/合覆盖（批次 70）：非 emmx 文档形态强制
 }
 // 双向联动②：条目列表点「📁分类路径」徽标 → 左树滚动定位 + 闪烁高亮。
 // （双向联动①：点树节点 → 右侧条目列表，showCategory 已有）
@@ -630,6 +631,61 @@ function attachRejudgeBtns() {
     };
     d.appendChild(btn);
   });
+}
+// ---- 条目级拆/合覆盖（批次 70）：非 emmx 文档的形态强制——写 meta.force_form
+// → 清该条目点 → 即时重抽（拆=LLM 切点需 llm.enabled；合=整条一点零费用；
+// 已覆盖条目给「↺回归」清标记回归规则）。emmx 走源级 rejudge 不在此列；
+// bookmark（http 网页无本地正文）不给按钮。 ----
+function attachFormBtns() {
+  document.querySelectorAll(".entry-host .entry[data-id]").forEach(d => {
+    if (d.querySelector(".form-btn")) return;
+    const a = d.querySelector("a[href]");
+    const href = a ? (a.getAttribute("href") || "") : "";
+    if (href.startsWith("emmx://") || href.startsWith("http://") || href.startsWith("https://")) return;
+    const cur = d.dataset.force || "";
+    if (cur === "split" || cur === "integral") {
+      const btn = document.createElement("button");
+      btn.className = "form-btn rejudge-btn";
+      btn.textContent = "↺回归";
+      btn.title = `当前形态覆盖：${cur === "split" ? "强制拆分" : "强制整条"}。点击清除覆盖，回归目录/分类规则判定（点层即时重抽）`;
+      btn.onclick = () => entryFormOp(d.dataset.id, "auto", btn, "↺回归");
+      d.appendChild(btn);
+      return;
+    }
+    const split = document.createElement("button");
+    split.className = "form-btn rejudge-btn";
+    split.textContent = "⧉拆";
+    split.title = "条目级拆分（批次 70）：本文档强制按知识点切分（meta.force_form=split，LLM 切点，覆盖永久生效——全量重抽也尊重）";
+    split.onclick = () => {
+      if (!confirm("强制拆分本文档为多个知识点？\n（LLM 切点，需 llm.enabled；覆盖永久生效，点层即时重抽）")) return;
+      entryFormOp(d.dataset.id, "split", split, "⧉拆");
+    };
+    const merge = document.createElement("button");
+    merge.className = "form-btn rejudge-btn";
+    merge.textContent = "◫合";
+    merge.title = "条目级合并（批次 70）：本文档强制整条即一点（meta.force_form=integral，零 LLM 费用，覆盖永久生效）";
+    merge.onclick = () => {
+      if (!confirm("强制本文档整条作为一个知识点？\n（零 LLM 费用；覆盖永久生效，点层即时重抽）")) return;
+      entryFormOp(d.dataset.id, "integral", merge, "◫合");
+    };
+    d.appendChild(split);
+    d.appendChild(merge);
+  });
+}
+async function entryFormOp(entryId, form, btn, label) {
+  btn.disabled = true;
+  const res = await writeJSON(`/api/entries/${entryId}/form`, { form });
+  btn.disabled = false;
+  if (res.__aborted) return;
+  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.errors && res.errors.length) {
+    alert("覆盖已写但重抽未产出：" + res.errors.map(e => e.error).join("；") + "\n（下次 kpoints 会自动补抽）");
+  } else {
+    const n = res.points_created ?? 0;
+    alert(form === "auto" ? "已清除覆盖，回归规则判定（重抽完成）。"
+      : `完成：${form === "split" ? "拆分" : "整条"}，产 ${n} 个知识点（覆盖已永久生效）。`);
+  }
+  if (typeof refreshCurrent === "function" && refreshCurrent) refreshCurrent();
 }
 // 多选模式（第五十二批）：selection 跨视图保留（Set 全局）；勾「多选」开
 // 模式（body.multiselect → 条目行显示 checkbox），「移到…」批量改挂，

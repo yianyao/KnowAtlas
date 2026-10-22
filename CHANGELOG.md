@@ -2407,4 +2407,43 @@ radiate 放射视图的 `same_host:<host>` 通道（条目↔条目，悬停见�
 same_host 边 0；graph.html 部署面无 domain 渲染分支。全量 pytest 414 通过
 （1 skip）。UTF-8 无 BOM + LF。
 
+### 第七十批：条目级形态覆盖——非 emmx 文档的拆/合（Phase 7 批次 70，2026-10-22）
+
+**背景**：用户问「脑图有个切分整合命令，其他类型文档是否也要有？」——emmx 的
+⧉/◫ 是源级重灌（判定缓存按文件粒度，rejudge=改缓存→整源 purge→重灌），其他
+文档形态判定发生在点抽取时（批次 66/67 规则），改单个文档只需条目级操作。
+需求不对称：拆（integral→split）是真缺口（口径「剩下的全是方案」下，某份方案
+文档想要它的知识点，无手段）；合（split→integral）需求弱但顺手补齐。
+用户选项裁决：「落批次 70，拆+合都做」。
+
+**机制**（meta.force_form 优先于目录/分类规则）：
+- form="integral"（合）：强制整条即点，零 LLM，理由标注「用户强制覆盖」；
+- form="split"（拆）：强制走 LLM 切点（forced_judge=split 切点-only prompt），
+  拆一次几分钱；llm 未启用 → 覆盖已写但重抽记 error 不静默（下次跑批补）；
+- form="auto"（回归）：merge_meta 删键（None=删键语义），回归目录/分类规则；
+- 覆盖**永久生效**：全量重抽也尊重标记（用户修正不返工，可逆架构同思路）；
+- emmx 条目拒绝此端点（400）——源级 rejudge 已有，两套不打架。
+
+**改动**：
+- db.py：`purge_entry_points`——单条目清 point_sources，孤儿点级联删（一点多
+  溯源口径下共享点保留），游标 point_source_entry_ids 派生自溯源随清，task_log
+  审计
+- points.py：`_candidates` 加 only_ids（指定条目直取跳过游标——调用方已清溯源）；
+  run_points_extract 加 entry_ids 参数与 force_form 判定（integral 强制在
+  mixed/规则分支之前）；_integral_result 加 reason 覆盖参数；stats 加
+  force_overrides 计数
+- api.py：`POST /api/entries/{entry_id}/form`（guard→校验 form→404/400→写覆盖
+  →purge_entry_points→run_points_extract(limit=1, entry_ids=[id]) 即时重抽
+  →task_log 留痕→返回 points_created/errors/points）；同步 def（LLM 网络调用
+  禁占事件循环，同 emmx_rejudge）
+- index.html：attachFormBtns——非 emmx/http 条目 hover「⧉拆」「◫合」；已覆盖
+  条目（entryHTML data-force）显示「↺回归」单按钮；bookmark（网页无本地正文）
+  不给按钮
+
+**测试** +5：test_points 4（integral 覆盖 split 规则零 LLM/split 覆盖 integral
+规则走切点/entry_ids 跳游标重抽且幂等归并/purge_entry_points 共享留孤儿删游标清）+
+test_web_api 1（form 全路径：合成功/拆无 LLM 记 error/auto 清覆盖/400/404/403/
+emmx 拒绝）。全量 pytest 419 通过（1 skip）。方案文档 §9 批次表 +70 行、
+§10 裁决记录 +10/11 条。UTF-8 无 BOM + LF。
+
 

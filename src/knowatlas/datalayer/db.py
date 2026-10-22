@@ -1931,6 +1931,30 @@ class DataLayer:
                             ensure_ascii=False)))
         return n_points
 
+    def purge_entry_points(self, entry_id: str, *, reason: str,
+                           task_name: str = "kpoints") -> int:
+        """清单条目的点溯源（批次 70 条目级形态覆盖的配套）。
+
+        删该条目全部 point_sources 行；失去全部溯源的点（孤儿）一并删——
+        一点多溯源口径下仍被其他条目引用的共享点保留。游标 point_source_entry_ids
+        派生自 point_sources → 溯源清即游标清，重抽自动视为新候选。写 task_log 审计。
+        """
+        with self.transaction() as conn:
+            n = conn.execute(
+                "SELECT COUNT(*) FROM point_sources WHERE entry_id=?",
+                (entry_id,)).fetchone()[0]
+            conn.execute("DELETE FROM point_sources WHERE entry_id=?", (entry_id,))
+            conn.execute(
+                "DELETE FROM points WHERE id NOT IN"
+                " (SELECT DISTINCT point_id FROM point_sources)")
+            conn.execute(
+                "INSERT INTO task_log (at, task_name, action, target, detail)"
+                " VALUES (datetime('now'),?,?,?,?)",
+                (task_name, "purge_entry_points", entry_id,
+                 json.dumps({"reason": reason, "purged_sources": n},
+                            ensure_ascii=False)))
+        return n
+
     def _sim_channel(self, entry_id: str, add_node, add_edge, cut,
                      per_channel: int) -> int:
         """radiate 条目焦点的 sim 通道：库内向量 top 邻域（阈值 0.5，纯标准库余弦）。

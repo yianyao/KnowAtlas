@@ -400,3 +400,66 @@ def test_emmx_and_manual_immune_to_dir_rule(cfg, dl):
     stats = run_points_extract(cfg, dl, limit=10, llm=llm)
     assert stats["mixed_dir"] == 0
     assert llm.calls == []
+
+
+# ---- 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则 ----
+
+def test_force_form_integral_overrides_split_rule(cfg, dl):
+    """文学创作条目 force_form=integral → 强制整条一点（零 LLM），理由带覆盖标注。"""
+    es = _seed_entries(dl, 1, body="小说写法讨论：视角与节奏。示例 " * 8)
+    _attach_lit(dl, es)
+    dl.merge_meta(es[0].id, {"force_form": "integral"})
+    llm = FakeLlm([])  # 任何 LLM 调用都抛「多余调用」→ 覆盖必须零调用
+    stats = run_points_extract(cfg, dl, limit=5, llm=llm)
+    assert stats["integral"] == 1 and stats["split"] == 0
+    assert stats["force_overrides"] == 1
+    assert llm.calls == []
+    p = dl.list_points()[0]
+    assert p["judge"] == "integral"
+    assert "强制覆盖" in p["meta"]["judge_reason"]
+
+
+def test_force_form_split_overrides_integral_rule(cfg, dl):
+    """普通方案条目 force_form=split → 强制走 LLM 切点（覆盖优先于「剩下的全是方案」）。"""
+    es = _seed_entries(dl, 1, body="问一：FTS5 trigram。问二：WAL 并发。补充说明 " * 8)
+    dl.merge_meta(es[0].id, {"force_form": "split"})
+    llm = FakeLlm([_SPLIT_ONLY_REPLY])
+    stats = run_points_extract(cfg, dl, limit=5, llm=llm)
+    assert stats["integral"] == 0 and stats["split"] == 1
+    assert stats["force_overrides"] == 1 and stats["points_created"] == 2
+    assert len(llm.calls) == 1 and "形态判定" not in llm.calls[0]  # 切点-only
+    assert all(p["judge"] == "split" for p in dl.list_points())
+
+
+def test_entry_ids_rerun_bypasses_cursor(cfg, dl):
+    """entry_ids 指定重抽（批次 70 端点配套）：跳过游标重处理；全量跑仍幂等。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
+    # 指定重抽：游标已记该条目，但仍处理（调用方配套 purge_entry_points）
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), entry_ids=[es[0].id])
+    assert stats["processed"] == 1
+    assert stats["points_created"] == 0 and dl.count_points() == 1
+    # 同文点 hash 相同 → 幂等归并（created=0，不重复建点）
+    # 全量跑不受影响：游标仍在，跳过
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
+    assert stats2["processed"] == 0 and stats2["skip_counts"]["already_done"] == 1
+
+
+def test_purge_entry_points_keeps_shared_drops_orphan(cfg, dl):
+    """单条目清溯源（批次 70 配套）：共享点保留（溯源降为 1）、孤儿点级联删、游标随之清。"""
+    es = _seed_entries(dl, 2, body="FTS5 中文检索用 trigram 分词。" * 3)
+    _attach_lit(dl, es)
+    same = ('{"summary":"分词选型",'
+            '"points":[{"text":"FTS5 中文检索用 trigram 分词。","summary":"分词"}]}')
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([same, same]))
+    pid = dl.list_points()[0]["id"]
+    assert dl.list_points()[0]["source_count"] == 2  # 一点两溯源
+    # 清第一条溯源：共享点保留
+    assert dl.purge_entry_points(es[0].id, reason="test") == 1
+    assert dl.count_points() == 1 and dl.list_points()[0]["source_count"] == 1
+    # 清第二条：孤儿点级联删，游标清空
+    assert dl.purge_entry_points(es[1].id, reason="test") == 1
+    assert dl.count_points() == 0
+    assert dl.point_source_entry_ids() == set()
+    # 不存在的条目：0，不报错
+    assert dl.purge_entry_points("nonexistent0000", reason="test") == 0

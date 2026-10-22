@@ -542,6 +542,49 @@ def test_bulk_status_and_pending_queue(client, dl):
     assert r3["missing"] == ["ghost"]
 
 
+def test_entry_form_override(client, dl):
+    """批次 70：条目级形态覆盖——写 meta.force_form + 清点溯源 + 即时重抽。"""
+    from knowatlas.models import Entry
+    import uuid
+    batch = uuid.uuid4().hex[:6]
+    e = Entry.build(source_type="folder", source_key=f"f70:{batch}",
+                    title="覆盖测试文档", locator=f"file:///{batch}/doc.txt",
+                    inline_content="一套完整的排查方案，" + "细节 " * 60,
+                    meta={"source_type": "folder"})
+    dl.upsert_entries([e])
+    em = Entry.build(source_type="emmx", source_key=f"e70:{batch}#map",
+                     title="脑图", locator=f"emmx://图{batch}.emmx#map",
+                     meta={"source_type": "emmx"})
+    dl.upsert_entries([em])
+    # 合（integral）：整条一点，零 LLM（测试 cfg 无 [llm] 也必须成功）
+    r1 = client.post(f"/api/entries/{e.id}/form", json={"form": "integral"},
+                     headers=_auth()).json()
+    assert r1["points_created"] == 1 and r1["errors"] == []
+    assert dl.get_entry(e.id).meta.get("force_form") == "integral"
+    assert dl.count_points() == 1
+    # 拆（split）：无 LLM → 覆盖已写但重抽记 error（不静默）
+    r2 = client.post(f"/api/entries/{e.id}/form", json={"form": "split"},
+                     headers=_auth()).json()
+    assert r2["purged_sources"] == 1
+    assert dl.get_entry(e.id).meta.get("force_form") == "split"
+    assert len(r2["errors"]) == 1 and "llm 未启用" in r2["errors"][0]["error"]
+    assert dl.count_points() == 0
+    # 回归（auto）：清覆盖
+    r3 = client.post(f"/api/entries/{e.id}/form", json={"form": "auto"},
+                     headers=_auth()).json()
+    assert "force_form" not in dl.get_entry(e.id).meta
+    assert r3["points_created"] == 1 and dl.count_points() == 1   # 回归 integral 规则
+    # 边界：非法 form 400 / emmx 拒绝 400 / 不存在 404 / 无 token 403
+    assert client.post(f"/api/entries/{e.id}/form", json={"form": "x"},
+                       headers=_auth()).status_code == 400
+    assert client.post(f"/api/entries/{em.id}/form", json={"form": "split"},
+                       headers=_auth()).status_code == 400
+    assert client.post("/api/entries/ghost0000000/form", json={"form": "split"},
+                       headers=_auth()).status_code == 404
+    assert client.post(f"/api/entries/{e.id}/form", json={"form": "integral"},
+                       headers={}).status_code == 403
+
+
 def test_linkage_mind_paths(client, dl):
     """批次 68：linkage 扩展 mind_paths——emmx 节点条目带脑图内路径，其余无键。"""
     from knowatlas.models import Entry
