@@ -49,9 +49,12 @@ python desktop/main.py --width 1280 --height 800
 - **体积纪律**：本地向量模型链（torch/sentence_transformers/transformers）
   显式排除——embed.py 为函数内延迟可选导入，缺失时优雅降级。打包版不含
   模型（约省 2GB），需要检索 sim 通道时用源码方式运行。
-- 数据规则与 serve 完全一致：config 按 CWD 的 `config/knowatlas.toml` 或
-  `KNOWATLAS_CONFIG` 解析；数据目录 `KNOWATLAS_HOME` → `~/.knowatlas`。
-  把 exe 放仓库根目录双击即用本仓库 config（推荐），放别处则走默认库。
+- 数据规则与 serve 完全一致：数据目录 `KNOWATLAS_HOME` → `~/.knowatlas`。
+  config 定位（第八十批壳层修补）：`KNOWATLAS_CONFIG` 环境变量 → 当前目录 →
+  **exe/脚本位置向上 6 层自动查找** `config/knowatlas.toml`——仓库内任意位置
+  （含 `dist/KnowAtlas/`）双击 exe 都会命中仓库根配置并 chdir 过去（相对路径
+  数据/日志与 serve 完全同环境）；仓库外双击则弹系统错误框说明查找范围与
+  `KNOWATLAS_CONFIG` 用法（不再无声崩溃）。
 - `--port/--host` 覆盖已写回 cfg（第七十九批冒烟实测修补）：安全中间件的
   Host 白名单按 cfg 端口生成，壳层在 create_app 前同步覆盖值，换端口探活
   与浏览器访问不会被 FORBIDDEN_HOST 拒掉（业务文件零改动）。

@@ -2763,3 +2763,20 @@ build.py 一键构建（纯 stdlib，缺依赖给精确安装命令）；icon.ic
 - 测试：pytest 429 passed + 1 skipped，EXIT=0（与 HEAD 同数）；
   desktop/main.py 过 py_compile；spec/build.py/README UTF-8 无 BOM
   + LF。挂账：真机 GUI 验收清单 12 项（desktop/README.md）。
+
+### 第八十批：双击 exe 配置定位修补（真机验收首坑）
+
+用户真机双击 `dist/KnowAtlas/KnowAtlas.exe` 即崩：`配置文件不存在:
+config/knowatlas.toml`。根因：load_config 按 CWD 解析配置（业务规则，
+不改），双击时 Windows 把 CWD 设为 exe 所在目录 dist/KnowAtlas/，向上
+找不到仓库根配置 → ConfigError；console=False 无 stderr，只余 PyInstaller
+崩溃框。desktop/main.py（壳入口，可动范围）修补：
+
+- `_find_config_root()`：KNOWATLAS_CONFIG → 当前 CWD → 从 exe（冻结）/
+  本脚本（源码）位置向上 6 层逐层找 config/knowatlas.toml；命中即
+  chdir 过去（相对路径数据/日志与仓库根 serve 完全同环境）。仓库内任意
+  位置双击 exe 均可启动。
+- 找不到时 `_fatal_dialog()` 弹系统错误框（ctypes MessageBoxW，含查找
+  范围与 KNOWATLAS_CONFIG 用法说明），不再无声崩溃。
+- README 打包节同步改写；源码态验证定位函数（CWD=dist/KnowAtlas 命中
+  仓库根）+ py_compile 过。挂账：重建后 exe 双击冒烟与 12 项验收。

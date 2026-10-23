@@ -78,6 +78,50 @@ class _DesktopApi:
             w.destroy()
 
 
+def _fatal_dialog(title: str, text: str) -> None:
+    """console=False 的打包版没有 stderr 可看——致命错误弹系统消息框，别无声崩。"""
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, text, title, 0x10)  # MB_ICONERROR
+    except Exception:
+        print(text, file=sys.stderr)
+
+
+def _find_config_root() -> str | None:
+    """定位含 config/knowatlas.toml 的工作目录（第八十批壳层修补）。
+
+    load_config 按 CWD 解析 config/knowatlas.toml（业务规则，不改）；双击 exe
+    时 Windows 把 CWD 设为 exe 所在目录，打包产物在 dist/KnowAtlas/ 下，向上
+    找不到仓库根的配置就会 ConfigError 崩溃（真机验收实测踩坑）。查找顺序：
+      1. KNOWATLAS_CONFIG 环境变量 → 用其所在目录；
+      2. 当前 CWD 已有 config/knowatlas.toml → 原样（显式 cd 过去的用法不扰）；
+      3. 从 exe（冻结）或本脚本（源码运行）位置向上最多 6 层逐层找。
+    找到即返回该目录（main() 会 chdir 过去，相对路径数据/日志与仓库根 serve
+    完全同环境）；都找不到返回 None，由 main() 弹框说明。
+    """
+    marker = os.path.join("config", "knowatlas.toml")
+    env_cfg = os.environ.get("KNOWATLAS_CONFIG")
+    if env_cfg:
+        return os.path.dirname(os.path.abspath(env_cfg))
+    if os.path.isfile(marker):
+        return os.getcwd()
+    starts = []
+    if getattr(sys, "frozen", False):
+        starts.append(os.path.dirname(os.path.abspath(sys.executable)))
+    starts.append(os.path.dirname(os.path.abspath(__file__)))
+    for start in starts:
+        cur = os.path.abspath(start)
+        for _ in range(6):
+            if os.path.isfile(os.path.join(cur, marker)):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+    return None
+
+
 def main() -> int:
     args = _parse_args()
     try:
@@ -88,13 +132,26 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    from knowatlas.config import load_config
+    from knowatlas.config import ConfigError, load_config
     from knowatlas.datalayer.db import DataLayer
     from knowatlas.logging_setup import setup_logging
     from knowatlas.registry.builtins import build_registries
     from knowatlas.web.app import create_app
 
-    cfg = load_config()
+    root = _find_config_root()
+    if root and os.path.abspath(root) != os.getcwd():
+        os.chdir(root)
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        hint = getattr(exc, "hint", "") or ""
+        _fatal_dialog(
+            "知道 KnowAtlas —— 配置缺失",
+            f"{exc}\n\n{hint}"
+            "\n\n桌面壳已自动查找：当前目录与 exe（或脚本）位置向上 6 层内的"
+            " config/knowatlas.toml，均未命中。也可用 KNOWATLAS_CONFIG 环境变量"
+            "直接指定配置文件路径。")
+        return 2
     # --port/--host 覆盖写回 cfg（第七十九批壳层修补，业务文件零改动）：
     # 安全中间件的 Host 白名单按 cfg 端口生成（web/api.py _port_of），若只把
     # 覆盖端口传给 uvicorn，浏览器/探活请求会被 FORBIDDEN_HOST 全拒（打包
