@@ -188,10 +188,14 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
 .cmdk-box { width: 560px; max-width: 92vw; background: var(--bg-2);
             border: 1px solid var(--border-2); border-radius: var(--radius-win);
             box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6); overflow: hidden; }
-#cmdk-input { width: 100%; box-sizing: border-box; height: 44px; padding: 0 16px;
-              font-size: var(--fs-14); color: var(--text-1); background: transparent;
-              border: 0; border-bottom: 1px solid var(--border-1); }
-#cmdk-input:focus { outline: none; }
+/* 第八十四批：输入框原 transparent 底与面板同色，看不出是可输入区（真机
+   验收反馈）——给独立深一档底色 + 全边框，聚焦时 accent 描边 */
+#cmdk-input { width: calc(100% - 16px); box-sizing: border-box; height: 42px;
+              padding: 0 12px; margin: 8px 8px 6px;
+              font-size: var(--fs-14); color: var(--text-1); background: var(--bg-1);
+              border: 1px solid var(--border-2); border-radius: var(--radius-ctrl); }
+#cmdk-input:focus { outline: none; border-color: var(--accent);
+                    box-shadow: 0 0 0 1px var(--accent-soft); }
 #cmdk-input::placeholder { color: var(--text-3); }
 #cmdk-list { max-height: 46vh; overflow: auto; padding: 6px; }
 .cmdk-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px;

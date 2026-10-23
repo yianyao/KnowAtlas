@@ -1878,18 +1878,18 @@ function pvApply(hide) {
   const sideHidden = () => document.body.classList.contains("side-hide");
   const pvHidden = () => document.getElementById("preview-panel").hidden;
   const CMDS = [
-    { label: "检索", hint: "视图", run: () => showView("search") },
-    { label: "关系图", hint: "视图", run: () => showView("graph") },
-    { label: "线索库", hint: "视图", run: () => showView("thread") },
-    { label: "词云", hint: "视图", run: () => showView("cloud") },
-    { label: "时间线", hint: "视图", run: () => showView("timeline") },
-    { label: "管理", hint: "视图 · 暂存/待审/清理/舍弃/数据", run: () => showView("mgmt") },
+    { label: "检索", hint: "切换视图", run: () => showView("search") },
+    { label: "关系图", hint: "切换视图", run: () => showView("graph") },
+    { label: "线索库", hint: "切换视图", run: () => showView("thread") },
+    { label: "词云", hint: "切换视图", run: () => showView("cloud") },
+    { label: "时间线", hint: "切换视图", run: () => showView("timeline") },
+    { label: "管理", hint: "切换视图 · 暂存/待审/清理/舍弃/数据", run: () => showView("mgmt") },
     { label: () => (sideHidden() ? "展开" : "收起") + "分类树", hint: "快捷键 [", run: () => sideToggle() },
     { label: () => (pvHidden() ? "展开" : "收起") + "预览面板", hint: "右侧常驻栏", run: () => pvApply(!pvHidden()) },
     { label: "收录新条目…", hint: "同 kadd：抓正文 → 归类 → 索引", run: () => openIngest() },
     { label: "聚焦搜索框", hint: "输入主题词回车检索", run: () => { const s = document.getElementById("search"); s.focus(); s.select(); } },
-    { label: "刷新状态栏统计", hint: "GET /api/stats", run: () => refreshStatus() },
-    { label: () => (showEmptyCats ? "隐藏" : "显示") + "空分类", hint: "左树过滤", run: () => applyShowEmpty(!showEmptyCats) },
+    { label: "刷新状态栏统计", hint: "更新底部状态栏数字", run: () => refreshStatus() },
+    { label: () => (showEmptyCats ? "隐藏" : "显示") + "空分类", hint: "分类树过滤", run: () => applyShowEmpty(!showEmptyCats) },
   ];
   const labelOf = (c) => typeof c.label === "function" ? c.label() : c.label;
   function render(filter) {

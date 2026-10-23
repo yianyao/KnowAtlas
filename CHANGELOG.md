@@ -2827,3 +2827,18 @@ win-ctrls 初始化同步查 window.pywebview，而 pywebview 桥是页面加载
 - 测试：pytest 429 passed + 1 skipped EXIT=0；内联脚本 node 语法过。
   挂账：重建 exe 后用户重验。教训：拖宽类交互写元素级 style.width 的，
   与折叠/收起态共存时必须在状态切换时显式清理内联值。
+
+### 第八十四批：命令面板输入框可见性 + hint 大白话（真机验收反馈二则）
+
+用户验收 Ctrl+K 命令面板反馈：①输入框 transparent 底与面板同色，
+看不出是可输入区；②右侧 hint「视图」这类词摸不着头脑。
+
+- 输入框（components.css）：transparent → --bg-1 独立底色 + --border-2
+  全边框 + 圆角内嵌（margin 8px）；聚焦态 accent 描边 + accent-soft
+  外圈，输入区一眼可辨。
+- hint 文案（index.html 12 条）：视图切换六条统一「切换视图」（管理
+  附页签说明）；「GET /api/stats」→「更新底部状态栏数字」；「左树过滤」
+  →「分类树过滤」。
+- 验证：playwright 模拟 Ctrl+K 截图核对（输入框聚焦描边清晰、hint
+  全部大白话）；pytest 429 passed + 1 skipped EXIT=0；node 语法过。
+  挂账：重建 exe 后用户重验。
