@@ -2810,3 +2810,20 @@ win-ctrls 初始化同步查 window.pywebview，而 pywebview 桥是页面加载
   初始化，否则监听事件（浏览器通道无此事件，三钮保持 hidden）。
 - 测试：探针 +2 断言；pytest 429 passed + 1 skipped EXIT=0；内联脚本
   node 语法检查过。挂账：重建 exe 后用户重验。
+
+### 第八十三批：折叠窄条宽度失效追修（真机验收第五坑，playwright 实测定位）
+
+窄条规则上批已写但真机仍 240px（用户截图红框「30PX?」）。playwright
+实测 computed style：同一声明块 min-width:30px 生效而 width 却 240px
+——违反单文件层叠规律，最终定位批次 75 三栏拖宽把用户拖出的宽度写进
+`aside.style.width`（元素级内联样式，优先级高于一切样式表规则），
+窄条 width:30px 永远被压；display:flex/min-width 不冲突故正常。
+
+- 修补：sideApply 折叠时清内联宽度（窄条 30px 生效）、展开时按
+  knowatlas-side-w 偏好恢复；初始 IIFE 仅在未折叠时设宽（否则执行
+  顺序在 sideApply 之后会把折叠态宽度再顶回去）。
+- 验证（playwright 真实浏览器量取）：折叠态 aside 30px（含边框 37）、
+  展开恢复 240px；词云视图窄条右侧无空白带，视觉满宽；截图存档核对。
+- 测试：pytest 429 passed + 1 skipped EXIT=0；内联脚本 node 语法过。
+  挂账：重建 exe 后用户重验。教训：拖宽类交互写元素级 style.width 的，
+  与折叠/收起态共存时必须在状态切换时显式清理内联值。

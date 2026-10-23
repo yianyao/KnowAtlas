@@ -1735,11 +1735,21 @@ if (_addOk) {
 // 默认展开——1440 宽屏分类树常驻，用户 2026-10-23 明确「分类窗口应可折叠」）：
 // 偏好记 localStorage「knowatlas-side」；[ 快捷键切换（输入框聚焦时不触发）。
 const _sideBtn = document.getElementById("side-collapse");
+const _asideEl = document.querySelector("#layout aside");
+function _asideRestoreWidth() {
+  // 拖宽偏好（knowatlas-side-w，180-420；批次 75 引入）——写的是元素级内联
+  // width，优先级高于一切样式表规则：折叠窄条的 width:30px 会被它压住
+  // （真机实测 aside 残留 240px）。展开时按偏好恢复，折叠时清掉（第八十二批追修）。
+  const v = parseInt(localStorage.getItem("knowatlas-side-w") || "240", 10) || 240;
+  _asideEl.style.width = Math.min(420, Math.max(180, v)) + "px";
+}
 function sideApply(hide) {
   document.body.classList.toggle("side-hide", hide);
   document.getElementById("side-split").hidden = hide;   // 树栏收起时间隔条一并隐藏
   _sideBtn.textContent = hide ? "▶" : "◀";
   _sideBtn.title = hide ? "展开左栏（快捷键 [ ）" : "收起左栏（快捷键 [ ）";
+  if (hide) _asideEl.style.width = "";
+  else _asideRestoreWidth();
   localStorage.setItem("knowatlas-side", hide ? "hide" : "show");
 }
 function sideToggle() {
@@ -1816,7 +1826,10 @@ function pvApply(hide) {
   const pvW = clamp(parseInt(localStorage.getItem("knowatlas-pv-w") || "292", 10) || 292, 240, 560);
   document.getElementById("preview-panel").style.width = pvW + "px";
   const sideW = clamp(parseInt(localStorage.getItem("knowatlas-side-w") || "240", 10) || 240, 180, 420);
-  document.querySelector("#layout aside").style.width = sideW + "px";
+  // 仅未折叠时设宽——sideApply(true) 已清掉内联宽度让窄条 30px 生效，
+  // 这里若无条件写回会把它再顶成 240px（执行顺序在本文件 sideApply 调用之后）
+  if (!document.body.classList.contains("side-hide"))
+    document.querySelector("#layout aside").style.width = sideW + "px";
   document.getElementById("pv-close").onclick = () => pvApply(true);
   document.getElementById("pv-restore").onclick = () => pvApply(false);
   pvApply(localStorage.getItem("knowatlas-preview") === "hide");
