@@ -288,6 +288,12 @@ def test_static_pages_consumption_defaults():
     assert 'knowatlas-side") === "hide"' in index  # 桌面壳默认展开，显式收起才折叠
     thread = (_STATIC_DIR / "thread.html").read_text(encoding="utf-8")
     assert "color-scheme: dark" in graph and "color-scheme: dark" in thread
+    # 关系图令牌化（第七十六批）：tokens 外链 + 画布调色板走运行时取色，旧硬编码清零
+    assert '<link rel="stylesheet" href="/tokens.css">' in graph
+    assert 'tok("--accent"' in graph and "PAL.focus" in graph   # 画布色从令牌变量读真值
+    assert "backgroundColor: PAL.tipBg" in graph                # 边 tooltip 深色化
+    for legacy in ("#4a9eff", "#ffd04b", "#33506b", "#7ba7d7", "#8886"):
+        assert legacy not in graph, legacy                      # 旧硬编码色零残留
     # 检索视图三栏 + 预览常驻 + 命令面板 + 拖拽调宽（第七十五批）
     assert 'id="search-col"' in index and 'id="side-split"' in index
     assert 'id="pv-split"' in index and 'id="preview-panel"' in index

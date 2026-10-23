@@ -2661,3 +2661,26 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
   新文件 UTF-8 无 BOM + LF。
 - 挂账：桌面壳真机验收（拖拽/最大化/三栏/树折叠/命令面板/浮层一致性，
   双通道：pywebview 壳 + 浏览器）；下一批 76 关系图（ECharts 令牌化）。
+
+### 第七十六批：关系图令牌化 + ECharts 深色调色板（界面/显示层，业务零改动）
+
+6 批改造路线第 3 批。graph.html 全量对齐设计令牌：页面 CSS 走 tokens.css
+变量，ECharts 画布色改运行时调色板（canvas 吃不了 CSS var，从 :root 变量
+读真值，令牌改一处图色随动），边 tooltip 深色化。数据端点、布局算法、
+交互逻辑零改动。
+
+- graph.html 引 `/tokens.css`；内联样式块重写：body 深色底（--bg-0）+
+  主文本色、header 面板化（--bg-1 + 下边线）、#q/revpanel/nodecard/
+  crumbit/tip 等全部令牌化（原 #4a9eff/#888/#8886 硬编码清零）；
+  revpanel/nodecard 补投影与明确底色（原 `background: inherit` 依赖
+  UA 深色默认，不保证）。
+- ECharts 调色板 `PAL`：焦点节点 --warning（描边用原焦点色 #FFD04B
+  降为亮环，保「焦点为黄」语义）、分类 --accent、条目 --accent-text、
+  上下文半透明 accent、边灰色用 --text-2 半透明；运行时
+  `getComputedStyle` 取值 + 同名十六进制兜底；tooltip 深色
+  （--bg-2 底/--border-2 边/--text-1 字）。
+- 测试：静态探针扩 6 条断言（tokens 外链/tok() 调色板/tipBg/五组旧
+  硬编码色零残留）；pytest 429 passed + 1 skipped，EXIT=0（与 HEAD
+  同数）；内联脚本过 node 语法检查；改动文件 UTF-8 无 BOM + LF。
+- 挂账：同前批（真机验收待装 pywebview）；下一批 77 其余视图
+  （thread.html 主体 + cloud/timeline 令牌化）。

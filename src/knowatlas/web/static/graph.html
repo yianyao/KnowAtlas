@@ -4,44 +4,60 @@
 <meta charset="utf-8">
 <title>关系图 · 知道 KnowAtlas</title>
 <script src="/vendor/echarts.min.js"></script>
+<link rel="stylesheet" href="/tokens.css">
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
-         display: flex; flex-direction: column; height: 100vh; }
-  header { padding: 8px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  header a, header button { color: #4a9eff; text-decoration: none; background: none;
-         border: 1px solid #4a9eff55; border-radius: 4px; padding: 2px 8px; cursor: pointer;
-         font-size: 13px; }
-  header label { font-size: 13px; display: flex; gap: 3px; align-items: center; cursor: pointer; }
-  #q { padding: 3px 8px; border: 1px solid #8886; border-radius: 4px; font-size: 13px; }
-  #crumb { font-size: 13px; }
-  .crumbit { cursor: pointer; color: #4a9eff; }
-  .crumbit:last-child { color: inherit; font-weight: 600; cursor: default; }
-  #tip { color: #888; font-size: 12px; }
+         display: flex; flex-direction: column; height: 100vh;
+         background: var(--bg-0); color: var(--text-1); }
+  header { padding: 8px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+           background: var(--bg-1); border-bottom: 1px solid var(--border-1); }
+  header a, header button { color: var(--accent-text); text-decoration: none; background: none;
+         border: 1px solid var(--border-2); border-radius: var(--radius-ctrl);
+         padding: 2px 8px; cursor: pointer; font-size: var(--fs-13); }
+  header a:hover, header button:hover { border-color: var(--accent); color: var(--text-1); }
+  header label { font-size: var(--fs-13); display: flex; gap: 3px; align-items: center;
+                 cursor: pointer; color: var(--text-2); }
+  #q { padding: 3px 8px; background: var(--bg-2); color: var(--text-1);
+       border: 1px solid var(--border-2); border-radius: var(--radius-ctrl);
+       font-size: var(--fs-13); }
+  #q:focus { border-color: var(--accent); outline: none; }
+  #crumb { font-size: var(--fs-13); }
+  .crumbit { cursor: pointer; color: var(--accent-text); }
+  .crumbit:last-child { color: var(--text-1); font-weight: 500; cursor: default; }
+  #tip { color: var(--text-3); font-size: var(--fs-12); }
   #expand { display: none; }
   #chart { flex: 1; }
   #revpanel { position: absolute; top: 92px; right: 16px; width: 320px; max-height: 60vh;
-              overflow: auto; border: 1px solid #8886; border-radius: 6px; padding: 8px 12px;
-              background: inherit; font-size: 13px; z-index: 5; }
-  #revpanel h3 { margin: 2px 0 8px; font-size: 13px; }
+              overflow: auto; border: 1px solid var(--border-2);
+              border-radius: var(--radius-card); padding: 8px 12px;
+              background: var(--bg-1); color: var(--text-1);
+              font-size: var(--fs-13); z-index: 5;
+              box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+  #revpanel h3 { margin: 2px 0 8px; font-size: var(--fs-13); font-weight: 500; }
   #revpanel .ritem { margin: 4px 0; line-height: 1.5; }
-  #revpanel .rpath { color: #888; font-size: 12px; }
-  #revpanel .rkind { display: inline-block; border: 1px solid #8886; border-radius: 3px;
-                     padding: 0 4px; margin-right: 4px; font-size: 11px; color: #888; }
-  #revpanel a { color: #4a9eff; }
+  #revpanel .rpath { color: var(--text-3); font-size: var(--fs-12); }
+  #revpanel .rkind { display: inline-block; border: 1px solid var(--border-2);
+                     border-radius: 3px; padding: 0 4px; margin-right: 4px;
+                     font-size: var(--fs-11); color: var(--text-3); }
+  #revpanel a { color: var(--accent-text); }
   /* 节点弹窗卡（第三十五批）：固定弹窗不跟鼠标，可移入保持，点按钮进原文 */
   #nodecard { position: fixed; width: 300px; max-width: 90vw; z-index: 9;
-              border: 1px solid #8886; border-radius: 6px; padding: 8px 10px;
-              background: inherit; font-size: 13px; box-shadow: 0 2px 12px #0007; }
-  #nodecard .ct { font-weight: 600; margin-bottom: 4px; }
-  #nodecard .cp { color: #888; font-size: 12px; margin: 2px 0; }
-  #nodecard .cs { margin: 6px 0; font-size: 12px; line-height: 1.5;
-                  max-height: 130px; overflow: auto; white-space: pre-wrap; }
-  #nodecard .copen { display: inline-block; margin-top: 2px; color: #4a9eff; }
-  #nodecard .cpath { color: #888; font-size: 11px; word-break: break-all; }
-  #nodecard .ccopy { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
-                     background: transparent; color: inherit; font-size: 11px;
-                     padding: 0 6px; margin-left: 6px; }
+              border: 1px solid var(--border-2); border-radius: var(--radius-card);
+              padding: 8px 10px; background: var(--bg-1); color: var(--text-1);
+              font-size: var(--fs-13); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+  #nodecard .ct { font-weight: 500; margin-bottom: 4px; }
+  #nodecard .cp { color: var(--text-2); font-size: var(--fs-12); margin: 2px 0; }
+  #nodecard .cs { margin: 6px 0; font-size: var(--fs-12); line-height: 1.5;
+                  max-height: 130px; overflow: auto; white-space: pre-wrap;
+                  color: var(--text-2); }
+  #nodecard .copen { display: inline-block; margin-top: 2px; color: var(--accent-text); }
+  #nodecard .cpath { color: var(--text-3); font-size: var(--fs-11); word-break: break-all; }
+  #nodecard .ccopy { cursor: pointer; border: 1px solid var(--border-2);
+                     border-radius: var(--radius-ctrl);
+                     background: transparent; color: var(--text-2);
+                     font-size: var(--fs-11); padding: 0 6px; margin-left: 6px; }
+  #nodecard .ccopy:hover { color: var(--text-1); border-color: var(--accent); }
 </style>
 <link rel="stylesheet" href="/ui.css">
 </head>
@@ -87,6 +103,24 @@ function fmtReason(r) {
 const KIND_NAME = { category: "分类", entry: "条目" };
 const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
                         same_host: "同域名", thread: "同线索", host_member: "域内条目" };
+// 画布调色板（第七十六批）：canvas 取色不吃 CSS var，运行时从 tokens.css
+// 变量读真值——令牌改一处图色随动；tokens 未载时回退同名十六进制。
+const _rootStyle = getComputedStyle(document.documentElement);
+const tok = (name, fallback) => _rootStyle.getPropertyValue(name).trim() || fallback;
+const PAL = {
+  focus: tok("--warning", "#DFA43E"),       // 焦点节点（放射中心）
+  focusRing: "#FFD04B",                     // 焦点描边（原焦点色降为亮环）
+  cat: tok("--accent", "#5B8DEF"),          // 分类节点
+  catCtx: "rgba(91, 141, 239, 0.38)",       // 祖先链上下文（accent 半透明）
+  entry: tok("--accent-text", "#9CC0F7"),   // 条目节点
+  labelCtx: tok("--text-3", "#7C8798"),     // 上下文节点标签
+  edgeGray: "rgba(166, 176, 192, 0.35)",    // 同域名/带理由边（text-2 半透明）
+  edgeAccent: "rgba(91, 141, 239, 0.45)",   // 主关联边（accent 半透明）
+  edgeLabel: tok("--text-3", "#7C8798"),    // 边上关联解释文字
+  tipBg: tok("--bg-2", "#171B24"),          // 边 tooltip 深色化
+  tipBorder: tok("--border-2", "#2E3648"),
+  tipText: tok("--text-1", "#E9EDF4"),
+};
 const chart = echarts.init(document.getElementById("chart"), null, { renderer: "canvas" });
 const qBox = document.getElementById("q");
 const crumb = document.getElementById("crumb");
@@ -155,7 +189,7 @@ function showCard(d, cx, cy) {
   nodecard.innerHTML =
     `<div class="ct">${d.name}（${KIND_NAME[d.kind] || d.kind}）</div>` + info.join("")
     + (d.kind === "entry" ? `<div class="cp">ID：<span class="ccid" data-cid="${eid}"
-        style="cursor:pointer;color:#4a9eff" title="点击复制条目 ID（ksync --expand 等命令用）">${eid} ⧉</span></div>` : "")
+        style="cursor:pointer;color:var(--accent-text)" title="点击复制条目 ID（ksync --expand 等命令用）">${eid} ⧉</span></div>` : "")
     + (d.kind === "entry" ? `<div class="cs">概要加载中…</div>` : "")
     + openPart;
   // 视口内夹紧：不跟鼠标跑，出了屏幕边缘往回拉
@@ -275,17 +309,17 @@ function render(data, crumbText, opts = {}) {
       symbolSize: size,
       x, y,
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
-      itemStyle: { color: isFocus ? "#ffd04b"
-                     : n.kind === "category" ? (n.ctx ? "#33506b" : "#4a9eff")
-                     : "#7ba7d7",
+      itemStyle: { color: isFocus ? PAL.focus
+                     : n.kind === "category" ? (n.ctx ? PAL.catCtx : PAL.cat)
+                     : PAL.entry,
                    opacity: n.ctx ? 0.55 : 1,
-                   borderColor: isFocus ? "#c8871a" : undefined,
+                   borderColor: isFocus ? PAL.focusRing : undefined,
                    borderWidth: isFocus ? 2 : 0 },
       label: { show: isFocus || n.kind === "category"
                     || (n.kind === "entry" && data.nodes.length <= 50),
                fontSize: n.kind === "category" ? 13 : 10,
                fontWeight: isFocus ? "bold" : "normal",
-               color: n.ctx ? "#6b7f94" : undefined,
+               color: n.ctx ? PAL.labelCtx : undefined,
                formatter: p => p.data._ovText
                  || (p.data.folded ? `${p.data.name} · ${p.data.folded}条` : p.data.name) },
     };
@@ -295,10 +329,10 @@ function render(data, crumbText, opts = {}) {
   const links = data.links.map(l => ({
     source: l.source, target: l.target, kind: l.kind, reason: l.reason || "",
     lineStyle: { color: l.reason || l.kind === "same_host"
-                     ? "rgba(160,160,160,.4)" : "rgba(74,158,255,.45)",
+                     ? PAL.edgeGray : PAL.edgeAccent,
                  width: (l.kind === "same_host" || l.reason) ? 1 : 1.6, curveness: 0.1 },
     label: { show: reasonOn && !!l.reason, formatter: l.reason ? fmtReason(l.reason) : "",
-             fontSize: 9, color: "#999" },
+             fontSize: 9, color: PAL.edgeLabel },
   }));
   crumb.innerHTML = `<span class="crumbit" style="cursor:default;font-weight:600">${crumbText}</span>`;
   renderBread();
@@ -313,7 +347,9 @@ function render(data, crumbText, opts = {}) {
       : `。点分类下钻 / 点条目打开原文 / 回车搜索。`);
   expandBtn.style.display = truncParts.length ? "" : "none";
   chart.setOption({
-    tooltip: { formatter: p => {
+    tooltip: { backgroundColor: PAL.tipBg, borderColor: PAL.tipBorder,
+               textStyle: { color: PAL.tipText, fontSize: 12 },
+               formatter: p => {
       if (p.dataType !== "edge") return "";   // 节点走 #nodecard 弹窗卡（tooltip 移不上去点链接，用户批注）
       const why = p.data.reason ? `<br>关联理由：${fmtReason(p.data.reason)}` : "";
       return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
@@ -453,7 +489,7 @@ document.getElementById("reverseBtn").onclick = async () => {
       const inner = it.kind === "thread"
         ? `<a href="${it.url}" target="_blank" rel="noopener">${it.name} ↗</a>`
         : (it.kind === "category"
-            ? `<span class="crumbit" data-cat="${it.id.slice(2)}" style="cursor:pointer;color:#4a9eff">${it.name}</span>`
+            ? `<span class="crumbit" data-cat="${it.id.slice(2)}" style="cursor:pointer;color:var(--accent-text)">${it.name}</span>`
             : it.name);
       return `<div class="ritem"><span class="rkind">${KC[it.kind] || it.kind}</span>${inner}`
            + (it.path ? `<br><span class="rpath">路径：${it.path}</span>` : "")
