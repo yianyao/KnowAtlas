@@ -274,6 +274,7 @@
         <button class="pv-close" id="pv-close" title="收起预览面板（命令面板里可重新打开）">✕</button>
       </div>
       <div id="pv-meta"></div>
+      <div id="pv-mtree" hidden></div>
       <div id="pv-empty">点击左侧任意条目标题——在这里预览正文，不跳走。<br><br>Ctrl/⌘ + 点击标题：在新标签打开原文。<br><br>快捷键：Ctrl+K 命令面板 · [ 折叠分类树 · 三栏分隔条可拖宽。</div>
       <pre id="pv-body" hidden></pre>
     </aside>
@@ -556,7 +557,32 @@ async function openPreview(id) {
   document.getElementById("pv-empty").hidden = true;
   const open = document.getElementById("pv-open");
   open.href = d.locator || "#";
-  open.hidden = !d.locator;
+  open.hidden = !d.locator || (d.locator || "").startsWith("emmx://");  // emmx:// 浏览器打不开（批次 37 纪律：不渲染假链接）
+  // 脑图大纲树（批次 91）：emmx 整图条目站内树形浏览——读 .emmx 重建树，
+  // 不再依赖外部 MindMaster；拉取失败（文件缺失/降级条目）静默回落正文预览。
+  const mtree = document.getElementById("pv-mtree");
+  if (d.source_type === "emmx" && (d.locator || "").includes("#map")) {
+    const r2 = await fetch(`/api/entries/${id}/emmx_tree`);
+    if (r2.ok) {
+      const t = await r2.json();
+      mtree.innerHTML = (t.pages || []).map(p =>
+        `<details open><summary>📄 ${_escHtml(p.name)}（${countTree(p.tree)} 节点）</summary>${treeHtml(p.tree)}</details>`).join("")
+        + `<div class="pv-mtree-note">大纲树重建自 .emmx（共 ${t.node_count} 节点）——原始结构以源文件为准。</div>`;
+      mtree.hidden = false;
+      document.getElementById("pv-body").hidden = true;
+      return;
+    }
+  }
+  mtree.hidden = true;
+}
+// 大纲树递归渲染（批次 91）：li + 嵌套 ul；空标题节点显示占位（导入图常见）
+function treeHtml(n) {
+  if (!n) return "";
+  const kids = (n.children || []).map(treeHtml).join("");
+  return `<li>${_escHtml(n.title) || "（无标题）"}${kids ? `<ul>${kids}</ul>` : ""}</li>`;
+}
+function countTree(n) {
+  return n ? 1 + (n.children || []).reduce((s, c) => s + countTree(c), 0) : 0;
 }
 // 改名（批次 71，截图批注「这名字看着不爽」）：prompt 输入新名；空串=清除
 // 覆盖回归源标题。写 meta.display_name，前端刷新当前视图。

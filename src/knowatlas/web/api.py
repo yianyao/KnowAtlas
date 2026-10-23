@@ -18,7 +18,7 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from ..datalayer.db import REJECT_COOLING_DAYS
-from ..errors import ContractError
+from ..errors import AdapterError, ContractError
 from ..semantic.keywords import word_ok as _cloud_word_ok
 
 _TOKEN_HEADER = "x-knowatlas-token"
@@ -325,6 +325,46 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "extra_locators": extra_locs, "points_count": n_points,
                 "merged_from": entry.meta.get("merged_from") or [],
                 "body": body_text}
+
+    @app.get("/api/entries/{entry_id}/emmx_tree")
+    def entry_emmx_tree(request: Request, entry_id: str):
+        """脑图大纲树（批次 91）：读 .emmx 重建节点树，站内树形浏览不依赖外部工具。
+
+        locator 形如 emmx://<相对路径>#map，相对路径在 [sources.emmx].roots 下
+        逐根探测；文件缺失/解析失败返回 404/422+原因（前端诚实提示，不渲染
+        假树）。只读解析，零写库零 LLM。
+        """
+        entry = dl.get_entry(entry_id)
+        if entry is None or entry.source_type != "emmx":
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "条目不存在或非脑图"}},
+                status_code=404)
+        loc = entry.locator or ""
+        if not loc.startswith("emmx://") or "#map" not in loc:
+            return JSONResponse(
+                {"error": {"code": "NOT_MINDMAP",
+                           "message": "该条目无整图大纲（降级或节点条目）"}},
+                status_code=404)
+        rel = loc[len("emmx://"):].split("#", 1)[0]
+        path = None
+        for root in (cfg.get("sources.emmx.roots") or []):
+            cand = Path(str(root)) / rel
+            if cand.is_file():
+                path = cand
+                break
+        if path is None:
+            return JSONResponse(
+                {"error": {"code": "FILE_MISSING",
+                           "message": f"脑图文件不在 roots 下：{rel}"}},
+                status_code=404)
+        from ..adapters.emmx import parse_tree
+        try:
+            tree = parse_tree(path)
+        except AdapterError as e:
+            return JSONResponse(
+                {"error": {"code": "PARSE_FAILED", "message": str(e)}},
+                status_code=422)
+        return {"id": entry_id, "title": entry.title, **tree}
 
     @app.post("/api/entries/auto-name")
     def auto_name(request: Request, body: dict = Body(default={})):

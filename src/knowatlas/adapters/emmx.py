@@ -355,6 +355,61 @@ def _roots(topics: dict[str, tuple[str, str]], order: list[str]) -> list[str]:
     return [sid for sid in order if topics[sid][1] not in topics]
 
 
+def _tree_json(topics: dict[str, tuple[str, str]], order: list[str]) -> dict[str, Any]:
+    """节点集 → 嵌套树 JSON（批次 91：前端树形浏览数据）。
+
+    单顶层直接以它为根；多顶层（含断链按顶层）包一个无标题虚拟根，前端
+    渲染为页内并列分支。深度由 _MAX_DEPTH 兜底（引用环不断下钻）。
+    """
+    children: dict[str, list[str]] = {}
+    for sid in order:
+        sup = topics[sid][1]
+        children.setdefault(sup if sup in topics else "", []).append(sid)
+
+    def _walk(sid: str, depth: int) -> dict[str, Any]:
+        node: dict[str, Any] = {"title": topics[sid][0], "children": []}
+        if depth < _MAX_DEPTH:
+            for child in children.get(sid, []):
+                node["children"].append(_walk(child, depth + 1))
+        return node
+
+    roots = children.get("", [])
+    if len(roots) == 1:
+        return _walk(roots[0], 1)
+    return {"title": "", "children": [_walk(r, 1) for r in roots]}
+
+
+def parse_tree(path: Path) -> dict[str, Any]:
+    """读 .emmx 重建全部页节点树（批次 91：站内树形浏览，不依赖外部 MindMaster）。
+
+    返回 {"pages": [{"name": 页名, "tree": {title, children}}], "node_count": N}；
+    坏 ZIP / page.xml 缺失 / 无主题节点 → AdapterError（调用方给前端诚实提示，
+    不渲染假树）。只读解析，零写库零 LLM。
+    """
+    try:
+        with zipfile.ZipFile(path) as zf:
+            pages_out: list[dict[str, Any]] = []
+            node_count = 0
+            for page_name, xml_path in _page_xml_names(zf):
+                try:
+                    data = zf.read(xml_path)
+                except KeyError:
+                    continue
+                parsed = _page_topics(data)
+                if parsed is None:
+                    continue
+                topics, order, _trunc = parsed
+                node_count += len(order)
+                pages_out.append({"name": page_name, "tree": _tree_json(topics, order)})
+            if not pages_out:
+                raise AdapterError(
+                    "page.xml 缺失或无主题节点（与入库降级同口径）",
+                    hint="该 .emmx 为旧版格式或空图，工具内无法重建大纲树")
+            return {"pages": pages_out, "node_count": node_count}
+    except zipfile.BadZipFile as e:
+        raise AdapterError("坏 ZIP 文件，无法解析脑图结构") from e
+
+
 def collect_emmx(config: Any) -> AdapterOutput:
     """按 [sources.emmx].roots 遍历 .emmx 文件，先形态判定再产出条目（§7.8）。"""
     roots = [str(r) for r in (config.get("sources.emmx.roots") or []) if str(r).strip()]
