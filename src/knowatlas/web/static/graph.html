@@ -35,6 +35,10 @@
               font-size: var(--fs-13); z-index: 5;
               box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
   #revpanel h3 { margin: 2px 0 8px; font-size: var(--fs-13); font-weight: 500; }
+  #revpanel .rclose { float: right; background: none; border: none; cursor: pointer;
+                      color: var(--text-3); font-size: var(--fs-13); padding: 0 2px;
+                      line-height: 1; }
+  #revpanel .rclose:hover { color: var(--text-1); }
   #revpanel .ritem { margin: 4px 0; line-height: 1.5; }
   #revpanel .rpath { color: var(--text-3); font-size: var(--fs-12); }
   #revpanel .rkind { display: inline-block; border: 1px solid var(--border-2);
@@ -277,6 +281,7 @@ function layeredCoords(data) {
 function render(data, crumbText, opts = {}) {
   lastData = data;
   nodecard.hidden = true;    // 视图重渲染强制收起弹窗，防残留
+  revpanel.hidden = true;    // 反查面板随视图切换收起（批次 92.5：切页不复现驻留）
   showEntriesBtn.style.display = "none";   // 非层级子树视图一律收起（子树视图按需重开）
   const radiateView = !!opts.radiate;
   const reasonOn = document.getElementById("showReason").checked;
@@ -491,7 +496,8 @@ document.getElementById("reverseBtn").onclick = async () => {
   if (r.status === 404) { tip.textContent = "该节点不支持反查（域名节点无反查）。"; return; }
   const data = await r.json();
   const KC = { category: "分类", entry: "条目", domain: "域名", thread: "线索" };
-  revpanel.innerHTML = `<h3>🔍 反查：谁指向「${data.focus.id}」</h3>` +
+  revpanel.innerHTML = `<h3>🔍 反查：谁指向「${data.focus.id}」`
+    + `<button class="rclose" title="关闭（Esc）">✕</button></h3>` +
     (data.items.length ? data.items.map(it => {
       const inner = it.kind === "thread"
         ? `<a href="${it.url}" target="_blank" rel="noopener">${it.name} ↗</a>`
@@ -506,6 +512,19 @@ document.getElementById("reverseBtn").onclick = async () => {
   revpanel.querySelectorAll("[data-cat]").forEach(s =>
     s.onclick = () => { revpanel.hidden = true; showSubtree(s.dataset.cat); });
 };
+
+// 反查面板收起（批次 92.5）：✕ 按钮 / 点面板外空白 / Esc 三路关闭；
+// 点面板内部与 🔍 按钮本身不触发（按钮点击是打开逻辑，冒泡到 document 前需豁免）
+function closeRev() { revpanel.hidden = true; }
+revpanel.addEventListener("click", e => {
+  if (e.target.closest(".rclose")) closeRev();
+});
+document.addEventListener("click", e => {
+  if (revpanel.hidden || revpanel.contains(e.target)) return;
+  if (e.target.closest("#reverseBtn")) return;
+  closeRev();
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeRev(); });
 
 // ---- 路径固化：当前视图条目一键存为线索（复用第三十二批端点） ----
 document.getElementById("threadBtn").onclick = async () => {
