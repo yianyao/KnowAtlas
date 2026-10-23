@@ -283,3 +283,27 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
                       border: 1px solid var(--border-2);
                       border-radius: var(--radius-ctrl); }
 #mgmt-body > button:hover { color: var(--text-1); border-color: #3A4356; }
+
+/* ---- 词云 / 时间线（第七十七批）：覆盖 index 内联样式的硬编码（本文件后加载胜出） ---- */
+.cloud-scope, .tl-scope { color: var(--text-2); font-size: var(--fs-13); }
+.cloud-scope b, .tl-scope b { color: var(--text-1); }
+.cloud-scope a, .tl-scope a { color: var(--accent-text); }
+.cloud-cat { font-size: var(--fs-13); border: 1px solid var(--border-2);
+             border-radius: 12px; background: var(--bg-2); color: var(--text-2); }
+.cloud-cat:hover { border-color: var(--accent); color: var(--accent-text);
+                   background: var(--accent-soft); }
+.cloud-word:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tl-gran { font-size: var(--fs-12); border: 1px solid var(--border-2);
+           border-radius: 10px; background: var(--bg-2); color: var(--text-2); }
+.tl-gran:hover { color: var(--text-1); }
+.tl-gran.on { border-color: var(--accent); color: var(--accent-text);
+              background: var(--accent-soft); font-weight: 500; }
+.tl-stale { font-size: var(--fs-13); border-top: 1px solid var(--border-1);
+            color: var(--text-2); }
+.tl-stale > b { color: var(--text-1); font-weight: 500; }
+.tl-branch .nm { font-weight: 500; color: var(--text-1); }
+.tl-branch .age { color: var(--danger); font-size: var(--fs-12); }
+.tl-locate { font-size: var(--fs-12); border: 1px solid var(--border-2);
+             border-radius: 10px; background: var(--bg-2); color: var(--text-2); }
+.tl-locate:hover { border-color: var(--accent); color: var(--accent-text);
+                   background: var(--accent-soft); }

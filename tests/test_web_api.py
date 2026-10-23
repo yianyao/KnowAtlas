@@ -310,6 +310,15 @@ def test_static_pages_consumption_defaults():
         assert not re.search(r"(?<![a-zA-Z._])(confirm|alert|prompt)\(", t), f
         assert "ka.toast" in t                       # 轻提示通道已接入
     assert "ka.confirm" in index and "ka.prompt" in index
+    # 线索库令牌化（第七十七批）：tokens 外链 + 硬编码色/Canvas 系统色清零
+    assert '<link rel="stylesheet" href="/tokens.css">' in thread
+    for legacy in ("#4a9eff", "#888", "Canvas", "#ff4a4a"):
+        assert legacy not in thread, legacy
+    # 词云/时间线令牌化（第七十七批）：后端词色经界面层深色映射，时间线轴/柱走令牌
+    assert "CLOUD_DARK_MAP" in index and "cloudDark(w.color)" in index
+    assert 'tok("--accent"' in index                 # 时间线柱色运行时取令牌
+    assert '{ color: "#3f6fb5" }' not in index       # 时间线旧柱色硬编码用法清零
+    #                                                （#3f6fb5 作为映射表键保留属预期）
 
 
 def test_manual_ingest_endpoint_idempotent(client):

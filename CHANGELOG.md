@@ -2684,3 +2684,32 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
   同数）；内联脚本过 node 语法检查；改动文件 UTF-8 无 BOM + LF。
 - 挂账：同前批（真机验收待装 pywebview）；下一批 77 其余视图
   （thread.html 主体 + cloud/timeline 令牌化）。
+
+### 第七十七批：线索库 + 词云 + 时间线令牌化（界面/显示层，业务零改动）
+
+6 批改造路线第 4 批。thread.html 独立页全量对齐设计令牌；index 内
+词云/时间线两视图经 components.css 覆盖块 + 画布运行时取色令牌化。
+后端 `_CLOUD_PALETTE`（api.py，业务区不动）的词元色在界面层做深色
+映射（同色相亮化，词色=主导分类语义一一对应，未命中回退原值）。
+数据端点与交互逻辑零改动。
+
+- thread.html：引 `/tokens.css`，样式块重写——body 深色底、aside
+  面板化（--bg-1）、btn/thread-row/hit/item/badge/reason/digest-box
+  令牌化（accent-soft 悬停/选中）；dialog 从 `Canvas/CanvasText`
+  系统色改令牌深色 + 输入框深色化；两处内联 #4a9eff 清零；字重
+  归一 400/500 两档。
+- 词云（index.html）：`CLOUD_DARK_MAP` 十二色映射表（后端调色板
+  逐色镜像 → 深底亮化版，#888 兜底灰 → --text-3），renderCloudTab
+  词元 `color:${cloudDark(w.color)}`；.cloud-cat/.cloud-scope 经
+  components.css 令牌化（胶囊钮 --bg-2 底 + accent-soft 悬停）。
+- 时间线（index.html）：ECharts 柱色/tooltip/轴色/分隔线运行时读
+  令牌（tok("--accent") 柱色，tooltip --bg-2 深色化，axisLabel
+  --text-3，splitLine --border-1，同 graph.html PAL 模式）；旧柱色
+  #3f6fb5 硬编码用法清零（作映射表键保留）；.tl-gran/.tl-stale/
+  .tl-branch .age（→ --danger）/.tl-locate 令牌化。
+- 测试：静态探针扩 8 条断言（thread tokens 外链 + 四组旧色清零、
+  CLOUD_DARK_MAP/cloudDark/tok("--accent")/旧柱色用法清零）；pytest
+  429 passed + 1 skipped，EXIT=0（与 HEAD 同数）；两页内联脚本过
+  node 语法检查；改动文件 UTF-8 无 BOM + LF。
+- 挂账：同前批（真机验收待装 pywebview）；下一批 78 管理设置视图
+  （mgmt 七入口 + 模态框/书签坞令牌化收尾）。

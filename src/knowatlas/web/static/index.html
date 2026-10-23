@@ -1192,6 +1192,18 @@ function renderWorkbench() {
 // 分类词元点击 → 进入子分类（currentCat 同步 + 树定位高亮 + 词云刷新）；
 // 内容词元点击 → facet 过滤当前范围（出条目列表，复用统一条目渲染）。
 let cloudWord = null;  // 当前 facet 词（null=无 facet）
+// 词云深色映射（第七十七批）：后端 _CLOUD_PALETTE（api.py，业务区不动）是浅底
+// 时代的中调色；界面层按原值映射到深底同色相亮化版（词色=主导分类语义，映射
+// 保持一一对应），未命中（含 #888 兜底灰）回退：灰走令牌、未知色原样透出。
+const CLOUD_DARK_MAP = {
+  "#d1495b": "#E57383", "#e07a3c": "#E8945F", "#c9a227": "#D9B54E",
+  "#5f9e4e": "#72BC64", "#2e9e83": "#45C2A3", "#2b8fb3": "#4FB4DB",
+  "#3f6fb5": "#5B8DEF", "#63599e": "#8F80D8", "#8d5aa8": "#B17CDB",
+  "#b5497e": "#D96EA2", "#a4485f": "#D2738C", "#5f6b7a": "#97A3B5",
+  "#888": "var(--text-3)",
+};
+const cloudDark = c => CLOUD_DARK_MAP[String(c || "").toLowerCase()] || c;
+
 async function renderCloudTab() {
   const body = document.getElementById("cloud-view");
   body.innerHTML = "<small>聚合中…（jieba 分词，首次略慢）</small>";
@@ -1211,7 +1223,7 @@ async function renderCloudTab() {
     ? data.words.map(w => {
         const size = (13 + 22 * Math.sqrt(w.count / max)).toFixed(1);
         const tip = `${w.word}：${w.count} 条` + (w.top ? `，主导分类：${w.top.name}` : "");
-        return `<span class="cloud-word" data-word="${w.word}" style="font-size:${size}px;color:${w.color}"
+        return `<span class="cloud-word" data-word="${w.word}" style="font-size:${size}px;color:${cloudDark(w.color)}"
           title="${tip}">${w.word}</span>`;
       }).join("")
     : "<small style=\"opacity:.6\">无内容词元（该范围无可消费正文，或 jieba 未装）。</small>") + `</div>`;
@@ -1299,13 +1311,23 @@ async function renderTimelineTab() {
   if (tlChart) { tlChart.dispose(); tlChart = null; }
   if (data.buckets.length && typeof echarts !== "undefined") {
     tlChart = echarts.init(box);
+    // 深色化（第七十七批）：柱色/tooltip 运行时读令牌（同 graph.html PAL 模式）
+    const _rs = getComputedStyle(document.documentElement);
+    const tok = (n, f) => _rs.getPropertyValue(n).trim() || f;
     tlChart.setOption({
-      tooltip: { trigger: "axis" },
+      tooltip: { trigger: "axis",
+                 backgroundColor: tok("--bg-2", "#171B24"),
+                 borderColor: tok("--border-2", "#2E3648"),
+                 textStyle: { color: tok("--text-1", "#E9EDF4"), fontSize: 12 } },
       grid: { left: 44, right: 12, top: 20, bottom: 28 },
-      xAxis: { type: "category", data: data.buckets.map(b => b.label) },
-      yAxis: { type: "value", minInterval: 1 },
+      xAxis: { type: "category", data: data.buckets.map(b => b.label),
+               axisLine: { lineStyle: { color: tok("--border-2", "#2E3648") } },
+               axisLabel: { color: tok("--text-3", "#7C8798") } },
+      yAxis: { type: "value", minInterval: 1,
+               axisLabel: { color: tok("--text-3", "#7C8798") },
+               splitLine: { lineStyle: { color: tok("--border-1", "#232937") } } },
       series: [{ type: "bar", data: data.buckets.map(b => b.count),
-                 itemStyle: { color: "#3f6fb5" }, barMaxWidth: 36 }],
+                 itemStyle: { color: tok("--accent", "#5B8DEF") }, barMaxWidth: 36 }],
     });
     tlChart.on("click", p => drillBucket(data.buckets[p.dataIndex].key));
   } else if (!data.buckets.length) {

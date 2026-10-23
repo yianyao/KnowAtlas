@@ -3,56 +3,79 @@
 <head>
 <meta charset="utf-8">
 <title>线索库 · 知道 KnowAtlas</title>
+<link rel="stylesheet" href="/tokens.css">
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
-         display: flex; height: 100vh; }
-  aside { width: 300px; overflow: auto; border-inline-end: 1px solid #8884;
-          padding: 12px; }
+         display: flex; height: 100vh;
+         background: var(--bg-0); color: var(--text-1); }
+  aside { width: 300px; overflow: auto; border-inline-end: 1px solid var(--border-1);
+          padding: 12px; background: var(--bg-1); }
   main { flex: 1; overflow: auto; padding: 16px; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  small { color: #888; }
-  .btn { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
-         background: transparent; color: inherit; font-size: 12px;
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 500; }
+  small { color: var(--text-3); }
+  .btn { cursor: pointer; border: 1px solid var(--border-2);
+         border-radius: var(--radius-ctrl);
+         background: transparent; color: var(--text-2); font-size: var(--fs-12);
          padding: 2px 8px; }
-  .btn:hover { background: #4a9eff22; }
-  .btn.primary { border-color: #4a9eff66; color: #4a9eff; }
-  .btn.danger:hover { background: #ff4a4a22; }
+  .btn:hover { background: var(--accent-soft); color: var(--text-1); }
+  .btn.primary { border-color: var(--accent); color: var(--accent-text); }
+  .btn.danger:hover { background: rgba(224, 92, 92, 0.15); color: var(--danger); }
   #new-thread { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
   .thread-row { display: flex; align-items: center; gap: 6px; margin: 2px 0;
-                padding: 4px 6px; border-radius: 6px; cursor: pointer; }
-  .thread-row:hover { background: #4a9eff18; }
-  .thread-row.active { background: #4a9eff33; font-weight: 600; }
-  .thread-row .cnt { margin-left: auto; font-size: 11px; color: #888; }
+                padding: 4px 6px; border-radius: var(--radius-ctrl); cursor: pointer; }
+  .thread-row:hover { background: var(--accent-soft); }
+  .thread-row.active { background: rgba(91, 141, 239, 0.24); font-weight: 500; }
+  .thread-row .cnt { margin-left: auto; font-size: var(--fs-11); color: var(--text-3); }
   .thread-row .ops { display: none; gap: 2px; }
   .thread-row:hover .ops { display: inline-flex; }
   #recall-box { display: flex; gap: 8px; margin-bottom: 12px; }
-  #recall-input { flex: 1; padding: 6px; box-sizing: border-box; }
+  #recall-input { flex: 1; padding: 6px; box-sizing: border-box;
+                  background: var(--bg-2); color: var(--text-1);
+                  border: 1px solid var(--border-2);
+                  border-radius: var(--radius-ctrl); font-size: var(--fs-13); }
+  #recall-input:focus { border-color: var(--accent); outline: none; }
   .crumb { margin-bottom: 10px; }
-  .hit { margin: 6px 0; padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
-  .hit a { font-weight: 600; }
-  .badge { display: inline-block; font-size: 11px; border: 1px solid #8886;
-           border-radius: 4px; padding: 0 4px; margin-left: 6px; color: #888; }
-  .reason { display: inline-block; font-size: 11px; border: 1px dashed #4a9eff66;
-            border-radius: 4px; padding: 0 6px; margin-left: 6px; color: #4a9eff; }
-  .group-label { font-size: 12px; color: #888; margin: 12px 0 4px; }
+  .hit { margin: 6px 0; padding: 6px 8px; border: 1px solid var(--border-1);
+         border-radius: var(--radius-ctrl); background: var(--bg-1); }
+  .hit a { font-weight: 500; color: var(--text-1); }
+  .badge { display: inline-block; font-size: var(--fs-11);
+           border: 1px solid var(--border-2); border-radius: 4px;
+           padding: 0 4px; margin-left: 6px; color: var(--text-3); }
+  .reason { display: inline-block; font-size: var(--fs-11);
+            border: 1px dashed var(--accent); border-radius: 4px;
+            padding: 0 6px; margin-left: 6px; color: var(--accent-text); }
+  .group-label { font-size: var(--fs-12); color: var(--text-3); margin: 12px 0 4px; }
   .item { display: flex; align-items: center; gap: 8px; margin: 6px 0;
-          padding: 6px 8px; border: 1px solid #8884; border-radius: 6px; }
-  .item .pos { font-size: 11px; color: #888; min-width: 18px; text-align: end; }
+          padding: 6px 8px; border: 1px solid var(--border-1);
+          border-radius: var(--radius-ctrl); background: var(--bg-1); }
+  .item .pos { font-size: var(--fs-11); color: var(--text-3); min-width: 18px;
+               text-align: end; }
   .item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  .item select { font-size: 11px; }
-  .empty { color: #888; }
+  .item .t a { color: var(--text-1); }
+  .item select { font-size: var(--fs-11); background: var(--bg-2);
+                 color: var(--text-1); border: 1px solid var(--border-2);
+                 border-radius: 4px; }
+  .empty { color: var(--text-3); }
   #thread-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  #thread-note { color: #888; font-size: 13px; }
-  #digest-box { border: 1px dashed #4a9eff66; border-radius: 6px; padding: 8px 12px;
-                margin: 10px 0; font-size: 13px; white-space: pre-wrap; }
-  #digest-box .digest-head { color: #4a9eff; font-size: 12px; margin-bottom: 4px; }
-  .delta-sum { color: #888; font-size: 12px; margin-top: 2px; }
+  #thread-note { color: var(--text-3); font-size: var(--fs-13); }
+  #digest-box { border: 1px dashed var(--accent); border-radius: var(--radius-ctrl);
+                padding: 8px 12px; margin: 10px 0; font-size: var(--fs-13);
+                white-space: pre-wrap; background: var(--accent-soft);
+                color: var(--text-2); }
+  #digest-box .digest-head { color: var(--accent-text); font-size: var(--fs-12);
+                             margin-bottom: 4px; }
+  .delta-sum { color: var(--text-3); font-size: var(--fs-12); margin-top: 2px; }
   .toolbar { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
-  dialog { border: 1px solid #8888; border-radius: 8px; padding: 16px;
-           background: Canvas; color: CanvasText; min-width: 320px; }
-  dialog::backdrop { background: rgba(0,0,0,.5); }
-  dialog input { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0; }
+  dialog { border: 1px solid var(--border-2); border-radius: var(--radius-card);
+           padding: 16px; background: var(--bg-2); color: var(--text-1);
+           min-width: 320px; box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6); }
+  dialog::backdrop { background: rgba(8, 10, 14, 0.62); }
+  dialog input { width: 100%; box-sizing: border-box; padding: 6px; margin: 8px 0;
+                 background: var(--bg-3); color: var(--text-1);
+                 border: 1px solid var(--border-2);
+                 border-radius: var(--radius-ctrl); }
+  dialog input:focus { border-color: var(--accent); outline: none; }
   dialog .btns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog button { cursor: pointer; padding: 4px 12px; }
 </style>
@@ -60,7 +83,7 @@
 </head>
 <body>
 <aside>
-  <div style="margin-bottom:8px"><a href="/index.html" style="color:#4a9eff;font-size:13px">← 返回工作台</a></div>
+  <div style="margin-bottom:8px"><a href="/index.html" style="color:var(--accent-text);font-size:13px">← 返回工作台</a></div>
   <h1>🧵 线索库</h1>
   <small>主题聚合召回 + 线索串联（完整方案 §9.4）。跨源散落的知识，按主题串成可复用的阅读路径。</small>
   <button id="new-thread" class="btn primary">＋ 新建线索</button>
@@ -155,7 +178,7 @@ async function loadThreadList() {
   try {
     data = await (await fetch("/api/threads")).json();
   } catch {                       // 加载失败明示可重试，不停留在「加载中…」
-    box.innerHTML = `<small>线索列表加载失败——确认 serve 在跑后<a href="javascript:location.reload()" style="color:#4a9eff">刷新重试</a>。</small>`;
+    box.innerHTML = `<small>线索列表加载失败——确认 serve 在跑后<a href="javascript:location.reload()" style="color:var(--accent-text)">刷新重试</a>。</small>`;
     return;
   }
   if (!data.threads || !data.threads.length) {
