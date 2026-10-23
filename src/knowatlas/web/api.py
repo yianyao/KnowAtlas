@@ -366,6 +366,17 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 status_code=422)
         return {"id": entry_id, "title": entry.title, **tree}
 
+    @app.get("/api/graph/topics")
+    def graph_topics():
+        """知识主题聚合（批次 88，方案 §9：点聚类主题节点，条目退溯源层）。
+
+        全库点向量贪心归簇（阈值 0.72），簇 ≥2 点成主题；主题名=成员共享词
+        （禁发明性命名）。零费用零写库，纯查询期计算；点向量未建时返回
+        note 提示。试点口径：先看聚合效果再定铺开与下钻交互。
+        """
+        from ..pipeline.graph_topics import topic_clusters
+        return topic_clusters(dl)
+
     @app.post("/api/entries/auto-name")
     def auto_name(request: Request, body: dict = Body(default={})):
         """AI 批量起名（批次 71，截图批注「按知识的名字来命名」）。

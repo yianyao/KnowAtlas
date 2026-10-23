@@ -82,6 +82,7 @@
           title="当前为纯层级视图——展开本分类子树内条目（经典视图）">📋 显示条目</button>
   <label title="在边上常驻显示关联理由（tooltip 恒显）">
     <input type="checkbox" id="showReason"> 🏷 关联解释</label>
+  <button id="topicBtn" title="知识点聚类主题视图（批次 88 试点：语义相近的点聚成主题，条目退溯源层）">🧠 主题</button>
   <button id="reverseBtn" title="哪些焦点能到达当前焦点">🔍 反查</button>
   <button id="threadBtn" title="当前视图条目一键存为线索">🧵 固化为线索</button>
   <span id="crumb"></span>
@@ -174,6 +175,16 @@ nodecard.addEventListener("click", e => {
 function showCard(d, cx, cy) {
   keepCard();
   cardKey = String(d.id);
+  // 知识点节点（批次 88 主题视图）：text 直显 + 溯源条目名，不 fetch 条目概要
+  if (d._point) {
+    nodecard.innerHTML = `<div class="ct">◆ 知识点</div><div class="cs"></div>`
+      + (d.path ? `<div class="cp">${d.path}</div>` : "");
+    nodecard.querySelector(".cs").textContent = d.text || "（无内容）";
+    nodecard.style.left = Math.min(cx + 14, window.innerWidth - 320) + "px";
+    nodecard.style.top = Math.min(cy + 14, window.innerHeight - 200) + "px";
+    nodecard.hidden = false;
+    return;
+  }
   const info = [];
   if (d.path) info.push(`<div class="cp">路径：${d.path}</div>`);
   if (d.reasons && d.reasons.length)
@@ -433,6 +444,41 @@ async function doSearch(q, push = true) {
     renderBread();
   }
 }
+
+// ---- 知识主题聚合视图（批次 88 试点：点向量聚类主题节点，条目退溯源层） ----
+async function showTopics(push = true) {
+  const data = await (await fetch("/api/graph/topics")).json();
+  currentRadiate = null; currentSubtree = null;
+  if (data.note || !(data.topics || []).length) {
+    tip.textContent = data.note || "还没有可聚合的知识主题（需要 ≥2 个语义相近的知识点）。";
+    render({ nodes: [], links: [] }, "知识主题");
+    return;
+  }
+  const nodes = [], links = [], seen = new Set();
+  data.topics.forEach((t, i) => {
+    const tid = "t:" + i;
+    nodes.push({ id: tid, name: t.name, kind: "category", value: t.size,
+                 path: `${t.size} 个知识点 · 溯源 ${t.sources_count} 条目` });
+    for (const p of t.points) {
+      const pid = "p:" + p.point_id;
+      if (!seen.has(pid)) {
+        seen.add(pid);
+        nodes.push({ id: pid, name: (p.text || "").slice(0, 22), kind: "entry",
+                     _point: true, text: p.text || p.summary,
+                     path: "溯源：" + p.sources.map(s => s.title).join("、") });
+      }
+      links.push({ source: tid, target: pid, kind: "attach" });
+    }
+  });
+  render({ nodes, links, truncated: {}, focus: { id: "" } },
+         `知识主题 ${data.topics.length} 个（阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`);
+  tip.textContent = "主题=语义相近知识点聚合（共享词命名）；悬停成员点看知识内容与溯源条目。";
+  if (push) {
+    nav.push({ label: "知识主题", load: p => showTopics(false) });
+    renderBread();
+  }
+}
+document.getElementById("topicBtn").onclick = () => showTopics();
 
 // ---- 放射模式（第三十三批）：焦点一跳邻域，空层降级不压栈 ----
 async function showRadiate(nodeId, perChannel = 8, push = true) {
