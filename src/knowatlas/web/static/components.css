@@ -118,3 +118,168 @@ dialog::backdrop { background: rgba(8, 10, 14, 0.6); }
 #bulk-bar { bottom: 40px; background: var(--bg-2);
             border: 1px solid var(--border-2); border-radius: var(--radius-card);
             color: var(--text-1); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); }
+
+/* ================= 批次 75：检索视图（三栏 + 条目卡 + 预览常驻 + 命令面板）=================
+   布局：导航 92px | 分类树（可拖宽）| 列表 flex | 预览面板（可拖宽/可收起）。
+   本块全部为显示层规则；内联 <style> 的同名规则因加载顺序在后者胜出被覆盖。 */
+
+/* ---- 检索视图三栏 ---- */
+#view-search.view-split { display: flex; flex-direction: row; padding: 0; overflow: hidden; }
+#search-col { flex: 1; min-width: 0; overflow: auto; padding: 10px 16px 16px; }
+.col-split { flex: none; width: 5px; cursor: col-resize; background: transparent; }
+.col-split:hover, body.col-resizing .col-split { background: var(--accent); }
+#resize-mask { position: fixed; inset: 0; z-index: 350; cursor: col-resize; }
+#resize-mask[hidden] { display: none; }
+body.col-resizing { user-select: none; }
+body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/thread）吞拖拽事件 */
+
+/* ---- 预览面板（右侧常驻；收起后右缘留还原键）---- */
+#preview-panel { width: 292px; flex: none; min-width: 0; display: flex;
+                 flex-direction: column; background: var(--bg-1);
+                 border-inline-start: 1px solid var(--border-1); }
+#preview-panel[hidden] { display: none; }
+.pv-head { display: flex; align-items: center; gap: 8px; flex: none; height: 38px;
+           padding: 0 8px 0 12px; border-bottom: 1px solid var(--border-1); }
+.pv-title { font-size: var(--fs-12); font-weight: 500; color: var(--text-2);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-open { margin-inline-start: auto; font-size: var(--fs-11); font-weight: 500;
+           color: var(--accent-text); text-decoration: none; white-space: nowrap; }
+.pv-open:hover { text-decoration: underline; }
+.pv-open[hidden] { display: none; }
+.pv-close { flex: none; width: 22px; height: 22px; display: flex; align-items: center;
+            justify-content: center; font-size: var(--fs-11); color: var(--text-3);
+            background: transparent; border: 1px solid var(--border-1);
+            border-radius: var(--radius-ctrl); cursor: pointer; }
+.pv-close:hover { color: var(--text-1); background: var(--bg-3); }
+#pv-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+           padding: 10px 12px 0; }
+#pv-body { flex: 1; margin: 0; padding: 10px 12px 16px; overflow: auto;
+           font: var(--fs-13)/1.7 system-ui, "Microsoft YaHei", sans-serif;
+           color: var(--text-2); white-space: pre-wrap; word-break: break-word; }
+#pv-body[hidden] { display: none; }
+#pv-empty { padding: 28px 16px; font-size: var(--fs-12); line-height: 2;
+            color: var(--text-3); }
+#pv-empty[hidden] { display: none; }
+#pv-restore { position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+              z-index: 60; writing-mode: vertical-rl; letter-spacing: 2px;
+              padding: 12px 5px; font-size: var(--fs-11); color: var(--text-2);
+              background: var(--bg-2); border: 1px solid var(--border-2);
+              border-inline-end: none; border-radius: var(--radius-card) 0 0 var(--radius-card);
+              cursor: pointer; }
+#pv-restore:hover { color: var(--accent-text); background: var(--bg-3); }
+#pv-restore[hidden] { display: none; }
+
+/* ---- 命令面板（Ctrl/Cmd+K；原生菜单的现代替代入口）---- */
+#cmdk { position: fixed; inset: 0; z-index: 380; display: flex;
+        justify-content: center; align-items: flex-start; padding-top: 14vh;
+        background: rgba(8, 10, 14, 0.55); }
+#cmdk[hidden] { display: none; }
+.cmdk-box { width: 560px; max-width: 92vw; background: var(--bg-2);
+            border: 1px solid var(--border-2); border-radius: var(--radius-win);
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6); overflow: hidden; }
+#cmdk-input { width: 100%; box-sizing: border-box; height: 44px; padding: 0 16px;
+              font-size: var(--fs-14); color: var(--text-1); background: transparent;
+              border: 0; border-bottom: 1px solid var(--border-1); }
+#cmdk-input:focus { outline: none; }
+#cmdk-input::placeholder { color: var(--text-3); }
+#cmdk-list { max-height: 46vh; overflow: auto; padding: 6px; }
+.cmdk-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+             border-radius: var(--radius-ctrl); font-size: var(--fs-13);
+             color: var(--text-2); cursor: pointer; }
+.cmdk-item .k { margin-inline-start: auto; font-size: var(--fs-11); color: var(--text-3); }
+.cmdk-item.on { color: var(--text-1); background: var(--accent-soft); }
+.cmdk-empty { padding: 14px 12px; font-size: var(--fs-12); color: var(--text-3); }
+
+/* ---- 条目卡（统一 .entry 令牌化：分类/检索/暂存/管理/词云/时间线各视图共用）---- */
+.entry-host { display: flex; flex-direction: column; gap: 6px; }
+.entry { margin: 0; padding: 8px 12px; background: var(--bg-2);
+         border: 1px solid var(--border-1); border-radius: var(--radius-card); }
+.entry:hover { border-color: var(--border-2); background: var(--bg-3); }
+.entry-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.entry-main .badge { margin-left: 0; }
+.entry a { font-size: var(--fs-13); font-weight: 500; color: var(--text-1);
+           text-decoration: none; }
+.entry a:hover { color: var(--accent-text); text-decoration: underline; }
+.entry-snippet { margin-top: 4px; font-size: var(--fs-12); line-height: 1.6;
+                 color: var(--text-2); }
+.badge { font-size: var(--fs-11); color: var(--text-3);
+         border: 1px solid var(--border-1); border-radius: 4px;
+         padding: 0 5px; margin-left: 6px; white-space: nowrap; }
+/* 条目行按钮（hover 显现的规则在内联样式，此处只管外观） */
+.entry .rename-btn, .entry .move-btn, .entry .reject-btn, .entry .cid-btn,
+.entry .confirm-btn, .entry .keep-btn, .entry .form-btn, .entry .rejudge-btn,
+.entry .restore-btn, .entry .errata-btn, .entry .errata-keep-btn,
+.entry .wb-focus-btn {
+  cursor: pointer; font-size: var(--fs-11); padding: 1px 7px; margin-left: 6px;
+  color: var(--text-3); background: transparent;
+  border: 1px solid var(--border-1); border-radius: var(--radius-ctrl); }
+.entry button:hover { color: var(--text-1); border-color: var(--border-2);
+                     background: var(--bg-3); }
+.entry .reject-btn:hover { color: #F09595; border-color: #A32D2D; }
+.entry .rename-btn:hover, .entry .confirm-btn:hover,
+.entry .wb-focus-btn:hover { color: var(--accent-text);
+                             border-color: rgba(91, 141, 239, 0.4); }
+
+/* ---- 检索视图其余部件令牌化 ---- */
+#crumb { margin-bottom: 10px; font-size: var(--fs-12); color: var(--text-3); }
+#crumb span { cursor: pointer; color: var(--accent-text); }
+#crumb span:last-child { color: var(--text-2); cursor: default; }
+#filter { margin: 8px 0; padding: 3px 8px; font-size: var(--fs-12);
+          color: var(--text-1); background: var(--bg-2);
+          border: 1px solid var(--border-1); border-radius: var(--radius-ctrl); }
+#home-board .hb-title { font-size: var(--fs-14); font-weight: 500;
+                        color: var(--text-2); }
+#home-board .hb-cats button { padding: 8px 14px; font-size: var(--fs-13);
+  color: var(--text-2); background: var(--bg-2);
+  border: 1px solid var(--border-1); border-radius: var(--radius-card); }
+#home-board .hb-cats button:hover { color: var(--accent-text);
+  border-color: rgba(91, 141, 239, 0.4); background: var(--bg-3); }
+#home-board .hb-cats button .n { color: var(--text-3); }
+#wb-tabs { border-bottom: 1px solid var(--border-1); }
+.wb-tab { font-size: var(--fs-12); color: var(--text-2);
+          border: 1px solid var(--border-1); border-bottom: none;
+          border-radius: var(--radius-ctrl) var(--radius-ctrl) 0 0; }
+.wb-tab:hover { color: var(--text-1); background: var(--bg-3); }
+.wb-tab.on { color: var(--accent-text); border-color: var(--border-2);
+             font-weight: 500; }
+#wb-solidify { font-size: var(--fs-11); color: var(--accent-text);
+               border: 1px solid rgba(91, 141, 239, 0.4); border-radius: var(--radius-ctrl); }
+#wb-solidify:hover { background: var(--accent-soft); }
+.wb-radiate-focus { font-weight: 500; color: var(--text-1); }
+.wb-radiate-focus a { color: var(--accent-text); }
+.wb-channel { color: var(--text-3); border-bottom: 1px dashed var(--border-2); }
+.wb-focus-btn { cursor: pointer; font-size: var(--fs-11); color: var(--accent-text);
+                background: none; border: 1px solid rgba(91, 141, 239, 0.4);
+                border-radius: var(--radius-ctrl); padding: 1px 8px; margin-left: 6px; }
+.wb-focus-btn:hover { background: var(--accent-soft); }
+/* 知识集分组（组头信号非人工命名） */
+.set-group { background: var(--bg-1); border: 1px solid var(--border-1);
+             border-inline-start: 3px solid var(--accent);
+             border-radius: var(--radius-card); }
+.sig-word { color: #5BC0BE; border-color: rgba(91, 192, 190, 0.35); }
+.sig-category { color: var(--accent-text); border-color: rgba(91, 141, 239, 0.35); }
+.sig-host { color: #C79AEA; border-color: rgba(199, 154, 234, 0.35); }
+.set-excerpt { color: var(--text-2); }
+.cat-agg-bar button { font-size: var(--fs-11); color: var(--accent-text);
+                      background: none; border: 1px solid rgba(91, 141, 239, 0.4);
+                      border-radius: var(--radius-ctrl); padding: 2px 10px; }
+.cat-agg-bar button:hover { background: var(--accent-soft); }
+.cat-agg-bar .set-note { color: var(--text-3); }
+/* 点级下钻（两层形态） */
+.pt-toggle { color: var(--success); }
+.pt-item { border-inline-start: 2px solid rgba(63, 182, 139, 0.4); }
+.pt-text { color: var(--text-2); }
+/* 管理页 */
+#mgmt-tabs { border-bottom: 0; }
+.mtab { font-size: var(--fs-11); color: var(--text-2);
+        border: 1px solid var(--border-1); border-radius: var(--radius-ctrl); }
+.mtab:hover { color: var(--text-1); background: var(--bg-3); }
+.mtab.on { color: var(--accent-text); border-color: rgba(91, 141, 239, 0.4);
+           background: var(--accent-soft); font-weight: 500; }
+#mgmt-desc { color: var(--text-3); }
+#mgmt-body > button { cursor: pointer; height: 28px; padding: 0 14px;
+                      margin-top: 12px; font-size: var(--fs-12); font-weight: 500;
+                      color: var(--text-2); background: var(--bg-3);
+                      border: 1px solid var(--border-2);
+                      border-radius: var(--radius-ctrl); }
+#mgmt-body > button:hover { color: var(--text-1); border-color: #3A4356; }

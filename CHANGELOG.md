@@ -2624,3 +2624,40 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
 - 挂账：pywebview 未安装（本批不动环境；跑桌面壳前 pip install pywebview）；
   真机验收（拖拽/最大化/三栏调宽/树折叠/深色一致性）待装依赖后双通道验；
   工作区未提交的 db.py display_name 追修按用户指示搁置不碰。
+
+### 第七十五批：检索视图三栏化 + 命令面板 + 令牌化浮层（界面/布局/显示层，业务零改动）
+
+6 批改造路线第 2 批。本批起检索视图按桌面工具形态重构：分类树 / 结果列表 /
+预览面板三栏，预览从弹窗改右栏常驻；新增 Ctrl+K 命令面板；三页原生弹窗
+（prompt/alert/confirm，约 60 处）全部替换为深色令牌化 toast + 模态框。
+交互语义逐点对齐原生（confirm→true=确认；prompt→null=取消），端点与业务
+逻辑零改动。
+
+- 三栏可调宽：`#view-search` 改 view-split（`#search-col` flex + 5px 分隔条
+  + `#preview-panel`）；树栏 180-420px、预览栏 240-560px 拖拽调宽，宽度记
+  localStorage（knowatlas-side-w / knowatlas-pv-w，58 批折叠纪律同款）；
+  拖拽期全屏 `#resize-mask` 拦截 mousemove（graph/thread 是 iframe 会吞事件）。
+- 预览面板右栏常驻（原 `#preview-dialog` 弹窗删除）：默认展开，✕/命令面板
+  可收起，收起后右缘留「◀ 预览」还原键；点任意条目标题即在此预览（检索
+  结果卡同步接入——此前只有分类卡有预览）；⌘/Ctrl+点击标题保留新标签打开。
+- 条目卡令牌化（components.css）：`.entry`/`.entry-main`/`.badge`/行内按钮/
+  set-group/sig-*/wb-tab/mtab/crumb/filter/home-board/pt-* 等统一深色令牌；
+  结构仅加 `.entry-main` 包装 div，类名与 data 属性不变（bindEntryButtons 等
+  挂载点零改动）。
+- Ctrl/Cmd+K 命令面板（`#cmdk`）：视图切换 / 折叠展开分类树与预览面板 /
+  收录新条目 / 聚焦搜索框 / 刷新状态栏 / 空分类开关——全部派发既有函数；
+  ↑↓ 选择、回车执行、Esc/点遮罩关闭。决策记录：pywebview 原生应用菜单仅
+  macOS 生效（__app__），Windows 壳不可用且菜单栏形态过时，命令面板是替代。
+- 浮层套件 `ui.js` + `ui.css`（三页共用）：ka.toast（轻提示，自动消失，
+  同屏最多 5 条）+ ka.alert/confirm/prompt（复用单个 `<dialog>`，深色令牌，
+  Esc=取消）。约 60 处原生弹窗全量替换（失败告知→toast error；结果报告/
+  可复制文本→模态框；输入/确认→await 对应 Promise），静态探针断言三页
+  零残留。
+- graph.html / thread.html：引 ui.js/ui.css；弹窗调用点同批替换（thread
+  约 20 处、graph 4 处）。
+- 测试：静态探针扩 12 条断言（view-split/三栏 ID/预览面板/命令面板/掩体/
+  宽度偏好/Ctrl+K/ui.js 三页引入/零残留正则）；pytest 429 passed + 1
+  skipped，EXIT=0（与 HEAD 同数）；三页内联脚本 + ui.js 过 node 语法检查；
+  新文件 UTF-8 无 BOM + LF。
+- 挂账：桌面壳真机验收（拖拽/最大化/三栏/树折叠/命令面板/浮层一致性，
+  双通道：pywebview 壳 + 浏览器）；下一批 76 关系图（ECharts 令牌化）。

@@ -43,6 +43,7 @@
                      background: transparent; color: inherit; font-size: 11px;
                      padding: 0 6px; margin-left: 6px; }
 </style>
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
 <header>
@@ -69,6 +70,7 @@
 <div id="chart"></div>
 <div id="revpanel" hidden></div>
 <div id="nodecard" hidden></div>
+<script src="/ui.js"></script>
 <script>
 const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
                      llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
@@ -466,18 +468,18 @@ document.getElementById("reverseBtn").onclick = async () => {
 document.getElementById("threadBtn").onclick = async () => {
   const entryIds = (lastData ? lastData.nodes : [])
     .filter(n => n.kind === "entry").map(n => String(n.id).slice(2));
-  if (!entryIds.length) { alert("当前视图没有条目节点，无可固化内容。"); return; }
-  const name = prompt(`线索名称（将收录当前视图 ${entryIds.length} 条条目）：`,
+  if (!entryIds.length) { ka.toast("当前视图没有条目节点，无可固化内容。", "warn"); return; }
+  const name = await ka.prompt(`线索名称（将收录当前视图 ${entryIds.length} 条条目）：`,
                       currentRadiate ? currentRadiate.name : "图上探索 " + new Date().toLocaleDateString());
   if (!name || !name.trim()) return;
   const res = await fetch("/api/threads", { method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: name.trim(), entry_ids: entryIds }) });
   const data = await res.json();
-  if (res.status === 403) { alert("需要写令牌（服务配置 KNOWATLAS_WEB_TOKEN 时写操作须携带）。"); return; }
-  if (data.error) { alert("失败：" + data.error.message); return; }
+  if (res.status === 403) { ka.toast("需要写令牌（服务配置 KNOWATLAS_WEB_TOKEN 时写操作须携带）。", "warn"); return; }
+  if (data.error) { ka.toast("失败：" + data.error.message, "error"); return; }
   const skippedNote = (data.skipped || []).length ? `\n（${data.skipped.length} 条跳过：不存在或已在其他位置）` : "";
-  if (confirm(`线索「${data.name}」已建立，收录 ${data.added.length} 条。${skippedNote}\n现在打开线索库？`))
+  if (await ka.confirm(`线索「${data.name}」已建立，收录 ${data.added.length} 条。${skippedNote}\n现在打开线索库？`))
     window.open(`/thread.html?id=${data.id}`, "_blank", "noopener");
 };
 

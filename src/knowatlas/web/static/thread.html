@@ -56,6 +56,7 @@
   dialog .btns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog button { cursor: pointer; padding: 4px 12px; }
 </style>
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
 <aside>
@@ -97,6 +98,7 @@
     </div>
   </form>
 </dialog>
+<script src="/ui.js"></script>
 <script>
 const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", opml: "OPML" };
 const REL_LABEL = { seq: "顺承", because: "因果", prereq: "前置", contrast: "对比" };
@@ -119,7 +121,7 @@ async function ensureSession() {
 }
 async function writeJSON(url, body) {
   if (sessionInfo && sessionInfo.configured === false) {
-    const t = prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
+    const t = await ka.prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
     if (t === null) return { __aborted: true };
     localStorage.setItem("knowatlas_token", t.trim());
   }
@@ -174,9 +176,9 @@ async function loadThreadList() {
   box.querySelectorAll("button[data-act=del]").forEach(b => b.onclick = async (ev) => {
     ev.stopPropagation();
     const t = data.threads.find(x => x.id === b.dataset.id);
-    if (!confirm(`删除线索「${t.name}」？（条目本身不受影响）`)) return;
+    if (!(await ka.confirm(`删除线索「${t.name}」？（条目本身不受影响）`))) return;
     const res = await writeJSON(`/api/threads/${b.dataset.id}/delete`, {});
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     if (currentThread && currentThread.id === b.dataset.id) closeThread();
     loadThreadList();
   });
@@ -185,7 +187,7 @@ async function loadThreadList() {
 // ---- 线索编辑 ----
 async function openThread(tid) {
   const data = await (await fetch(`/api/threads/${tid}`)).json();
-  if (data.error) { alert(data.error.message); return; }
+  if (data.error) { ka.toast(data.error.message, "error"); return; }
   currentThread = data;
   renderThread();
   loadThreadList();
@@ -235,16 +237,16 @@ function renderThread() {
     const idx = currentThread.items.findIndex(x => x.item_id === iid);
     if (act === "up" && idx > 0) {
       const r = await writeJSON(`/api/threads/${currentThread.id}/items/${iid}/move`, { position: idx - 1 });
-      if (r.error) alert("失败：" + r.error.message); else openThread(currentThread.id);
+      if (r.error) ka.toast("失败：" + r.error.message, "error"); else openThread(currentThread.id);
     } else if (act === "down" && idx < currentThread.items.length - 1) {
       const r = await writeJSON(`/api/threads/${currentThread.id}/items/${iid}/move`, { position: idx + 1 });
-      if (r.error) alert("失败：" + r.error.message); else openThread(currentThread.id);
+      if (r.error) ka.toast("失败：" + r.error.message, "error"); else openThread(currentThread.id);
     } else if (act === "rm") {
       const r = await writeJSON(`/api/threads/${currentThread.id}/items/${iid}/remove`, {});
-      if (r.error) alert("失败：" + r.error.message); else openThread(currentThread.id);
+      if (r.error) ka.toast("失败：" + r.error.message, "error"); else openThread(currentThread.id);
     } else if (act === "note") {
       const it = currentThread.items[idx];
-      const note = prompt(`条目「${it.title.slice(0, 40)}」的线索备注：`, it.note || "");
+      const note = await ka.prompt(`条目「${it.title.slice(0, 40)}」的线索备注：`, it.note || "");
       if (note === null) return;
       await updateItem(iid, { note });
     }
@@ -255,13 +257,13 @@ function renderThread() {
       const r = await writeJSON(
         `/api/threads/${currentThread.id}/items/${sel.dataset.rel}/update`,
         { relation_type: sel.value });
-      if (r.error) { alert("失败：" + r.error.message); openThread(currentThread.id); }
+      if (r.error) { ka.toast("失败：" + r.error.message, "error"); openThread(currentThread.id); }
     };
   });
 }
 async function updateItem(itemId, patch) {
   const r = await writeJSON(`/api/threads/${currentThread.id}/items/${itemId}/update`, patch);
-  if (r.error) { alert("失败：" + r.error.message); return; }
+  if (r.error) { ka.toast("失败：" + r.error.message, "error"); return; }
   openThread(currentThread.id);
 }
 
@@ -294,11 +296,11 @@ async function doRecall() {
 }
 async function addToCurrent(entryId) {
   if (!currentThread) {
-    alert("先新建或选择一条线索（左侧列表）。");
+    ka.toast("先新建或选择一条线索（左侧列表）。", "warn");
     return;
   }
   const r = await writeJSON(`/api/threads/${currentThread.id}/items`, { entry_id: entryId });
-  if (r.error) { alert("失败：" + r.error.message); return; }
+  if (r.error) { ka.toast("失败：" + r.error.message, "error"); return; }
   openThread(currentThread.id);
   loadThreadList();
 }
@@ -318,16 +320,16 @@ document.getElementById("name-form").onsubmit = async (e) => {
   document.getElementById("name-dialog").close();
   if (nameDialogMode === "new") {
     const res = await writeJSON("/api/threads", { name: v.trim() });
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     await loadThreadList();
     openThread(res.id);
   } else if (nameDialogMode === "rename") {
     const res = await writeJSON(`/api/threads/${currentThread.id}/update`, { name: v.trim() });
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     openThread(currentThread.id);
   } else if (nameDialogMode === "note") {
     const res = await writeJSON(`/api/threads/${currentThread.id}/update`, { note: v });
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     openThread(currentThread.id);
   }
 };
@@ -337,21 +339,21 @@ document.getElementById("rename-btn").onclick = () =>
 document.getElementById("note-btn").onclick = () =>
   openNameDialog("线索备注：", currentThread.note || "", "note");
 document.getElementById("delete-btn").onclick = async () => {
-  if (!confirm(`删除线索「${currentThread.name}」？（条目本身不受影响）`)) return;
+  if (!(await ka.confirm(`删除线索「${currentThread.name}」？（条目本身不受影响）`))) return;
   const res = await writeJSON(`/api/threads/${currentThread.id}/delete`, {});
-  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   closeThread();
 };
 document.getElementById("suggest-btn").onclick = async () => {
   if (!currentThread) return;
   const res = await writeJSON(`/api/threads/${currentThread.id}/suggest`, {});
-  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   if (!res.llm_used) {
-    alert("LLM 不可用或未配置（[llm] enabled + key）——已按当前顺序返回，未做改动。");
+    ka.toast("LLM 不可用或未配置（[llm] enabled + key）——已按当前顺序返回，未做改动。", "warn");
     return;
   }
   const why = res.rationale ? "\n\n建议理由：\n" + res.rationale : "";
-  alert(`已应用 LLM 建议排序${res.applied ? "" : "（未能写入，请刷新后重试）"}。${why}`);
+  await ka.alert(`已应用 LLM 建议排序${res.applied ? "" : "（未能写入，请刷新后重试）"}。${why}`, "建议排序完成");
   openThread(currentThread.id);
 };
 document.getElementById("digest-btn").onclick = async () => {
@@ -361,13 +363,13 @@ document.getElementById("digest-btn").onclick = async () => {
   btn.textContent = "⏳ 生成中…";
   try {
     const res = await writeJSON(`/api/threads/${currentThread.id}/digest`, {});
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     if (!res.llm_used) {
-      alert("LLM 不可用或未配置（[llm] enabled + key）——摘要未生成，线程视图不受影响。");
+      ka.toast("LLM 不可用或未配置（[llm] enabled + key）——摘要未生成，线程视图不受影响。", "warn");
       openThread(currentThread.id);
       return;
     }
-    alert(`摘要完成：${res.summarized} 条「本轮新增」已落条目，线程级摘要${res.applied ? "已写入" : "未能写入（请重试）"}。`);
+    ka.toast(`摘要完成：${res.summarized} 条「本轮新增」已落条目，线程级摘要${res.applied ? "已写入" : "未能写入（请重试）"}。`, "success");
     openThread(currentThread.id);
   } finally {
     btn.disabled = false;

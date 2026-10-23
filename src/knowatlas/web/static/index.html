@@ -199,6 +199,7 @@
 </style>
 <link rel="stylesheet" href="/tokens.css">
 <link rel="stylesheet" href="/components.css">
+<link rel="stylesheet" href="/ui.css">
 </head>
 <body>
 <header id="topbar">
@@ -242,24 +243,40 @@
   </div>
   <div id="tree">加载中…</div>
 </aside>
+<div class="col-split" id="side-split" title="拖动调整分类树宽度"></div>
 <main>
-  <section id="view-search" class="view">
-    <div id="crumb"></div>
-    <select id="filter" style="display:none">
-      <option value="">全部来源</option>
-      <option value="bookmark">书签</option>
-      <option value="manual">手动</option>
-    </select>
-    <!-- 空状态首页（2026-10-22 用户抽检反馈「啥也没有」）：左栏默认收起（58 批纪律）时
-         主区给大类快捷入口兜底——点击展开左栏并进入该类；任何检索/分类交互后整板被
-         renderEntries 覆盖，不再复活（与原一行提示同生命周期） -->
-    <div id="hits" class="entry-host">
-      <div id="home-board">
-        <div class="hb-title">🧭 从这里开始</div>
-        <div id="hb-cats" class="hb-cats"><small>分类加载中…</small></div>
-        <small>或在上方输入关键词回车检索；左侧 ◀ 按钮折叠/展开分类树（快捷键 [ ）。</small>
+  <section id="view-search" class="view view-split">
+    <div id="search-col">
+      <div id="crumb"></div>
+      <select id="filter" style="display:none">
+        <option value="">全部来源</option>
+        <option value="bookmark">书签</option>
+        <option value="manual">手动</option>
+      </select>
+      <!-- 空状态首页（2026-10-22 用户抽检反馈「啥也没有」）：左栏收起时
+           主区给大类快捷入口兜底——点击展开左栏并进入该类；任何检索/分类交互后整板被
+           renderEntries 覆盖，不再复活（与原一行提示同生命周期） -->
+      <div id="hits" class="entry-host">
+        <div id="home-board">
+          <div class="hb-title">🧭 从这里开始</div>
+          <div id="hb-cats" class="hb-cats"><small>分类加载中…</small></div>
+          <small>或在上方输入关键词回车检索；Ctrl+K 命令面板；左侧 ◀ 折叠/展开分类树（快捷键 [ ）。</small>
+        </div>
       </div>
     </div>
+    <div class="col-split" id="pv-split" title="拖动调整预览面板宽度"></div>
+    <!-- 预览面板（第七十五批：原对话框改为右侧常驻栏——默认展开，可收起；
+         点任意条目标题在此预览正文，不跳走；⌘/Ctrl+点击仍在新标签打开原文） -->
+    <aside id="preview-panel">
+      <div class="pv-head">
+        <span class="pv-title" id="pv-title">预览</span>
+        <a class="pv-open" id="pv-open" href="#" target="_blank" rel="noopener" hidden>打开原文 ↗</a>
+        <button class="pv-close" id="pv-close" title="收起预览面板（命令面板里可重新打开）">✕</button>
+      </div>
+      <div id="pv-meta"></div>
+      <div id="pv-empty">点击左侧任意条目标题——在这里预览正文，不跳走。<br><br>Ctrl/⌘ + 点击标题：在新标签打开原文。<br><br>快捷键：Ctrl+K 命令面板 · [ 折叠分类树 · 三栏分隔条可拖宽。</div>
+      <pre id="pv-body" hidden></pre>
+    </aside>
   </section>
   <section id="view-graph" class="view" hidden>
     <iframe id="graph-frame" data-src="/graph.html" title="知识关系图"></iframe>
@@ -305,16 +322,19 @@
   <button id="ms-autoname" title="AI 起名（批次 71）：按正文生成知识化短名（默认提示词，可改）；已有名字的跳过">✨AI 起名</button>
   <button id="ms-cancel">取消</button>
 </div>
-<!-- 预览面板（批次 71）：点条目标题弹出——正文预览+元信息+打开原文 -->
-<dialog id="preview-dialog" style="border:1px solid var(--border-2);border-radius:10px;max-width:720px;width:88vw;padding:0">
-  <div style="padding:14px 18px;border-bottom:1px solid var(--border-1);display:flex;justify-content:space-between;align-items:center;gap:8px">
-    <b id="pv-title" style="font-size:15px"></b>
-    <span><a id="pv-open" href="#" target="_blank" rel="noopener" class="primary" style="text-decoration:none;font-size:13px">打开原文 ↗</a>
-    <button onclick="document.getElementById('preview-dialog').close()" style="margin-left:8px">✕</button></span>
+<!-- 命令面板（第七十五批：Ctrl/Cmd+K）。pywebview 原生应用菜单仅 macOS 生效
+     （__app__），Windows 桌面壳不可用且菜单栏形态过时——命令面板是替代入口，
+     全部派发既有函数，零业务改动。 -->
+<div id="cmdk" hidden>
+  <div class="cmdk-box">
+    <input id="cmdk-input" placeholder="输入命令…（↑↓ 选择 · 回车执行 · Esc 关闭）" autocomplete="off">
+    <div id="cmdk-list"></div>
   </div>
-  <div id="pv-meta" style="padding:8px 18px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
-  <pre id="pv-body" style="margin:0;padding:12px 18px 16px;white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--mono,monospace);max-height:60vh;overflow:auto;color:var(--text-2)"></pre>
-</dialog>
+</div>
+<!-- 三栏拖拽期全屏掩体：拦截 mousemove，防 graph/thread iframe 吞事件 -->
+<div id="resize-mask" hidden></div>
+<!-- 预览面板收起后的右缘还原键 -->
+<button id="pv-restore" hidden title="展开预览面板">◀ 预览</button>
 <!-- bookmarklet 左缘小书签坞（第五十九批）：默认收缩到左缘，悬停展开显示用途；
      拖到书签栏后任意网页一键收录。拖拽期间保持展开。 -->
 <div id="bm-dock">
@@ -348,6 +368,7 @@
     <button type="button" id="add-url-btn">收录</button>
   </div>
 </dialog>
+<script src="/ui.js"></script>
 <script src="/vendor/echarts.min.js"></script>
 <script>
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
@@ -368,7 +389,7 @@ async function ensureSession() {
 async function writeJSON(url, body) {
   // 兜底：仅当服务端未配置令牌（理论上 serve 启动即自动生成，实践中不会发生）
   if (sessionInfo && sessionInfo.configured === false) {
-    const t = prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
+    const t = await ka.prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
     if (t === null) return { __aborted: true };
     localStorage.setItem("knowatlas_token", t.trim());
   }
@@ -470,75 +491,81 @@ function renderHomeBoard(topNodes) {
 }
 
 async function opAddChild(n) {
-  const name = prompt(`在「${n.name}」下新建子分类，名称：`);
+  const name = await ka.prompt(`在「${n.name}」下新建子分类，名称：`);
   if (!name) return;
   const res = await writeJSON("/api/categories", { name, parent_ids: [n.id] });
   if (!res.__aborted && !res.error) loadTree();
-  else if (res.error) alert("失败：" + res.error.message);
+  else if (res.error) ka.toast("失败：" + res.error.message, "error");
 }
 async function opRename(n) {
-  const name = prompt(`重命名「${n.name}」为：`, n.name);
+  const name = await ka.prompt(`重命名「${n.name}」为：`, n.name);
   if (!name || name === n.name) return;
   const res = await writeJSON(`/api/categories/${n.id}/rename`, { name });
   if (!res.__aborted && !res.error) loadTree();
-  else if (res.error) alert("失败：" + res.error.message);
+  else if (res.error) ka.toast("失败：" + res.error.message, "error");
 }
 async function opMove(n) {
-  const p = prompt(`移动「${n.name}」到目标分类（输入其完整路径如 技术开发/前端；留空 = 移到顶层）：`);
+  const p = await ka.prompt(`移动「${n.name}」到目标分类（输入其完整路径如 技术开发/前端；留空 = 移到顶层）：`);
   if (p === null) return;
   const pid = pathToId[p.trim()];
-  if (p.trim() && !pid) { alert("目标路径不存在：" + p); return; }
+  if (p.trim() && !pid) { ka.toast("目标路径不存在：" + p, "error"); return; }
   const res = await writeJSON(`/api/categories/${n.id}/move`, { parent_ids: pid ? [pid] : [] });
   if (!res.__aborted && !res.error) loadTree();
-  else if (res.error) alert("失败：" + res.error.message);
+  else if (res.error) ka.toast("失败：" + res.error.message, "error");
 }
 async function opMerge(n) {
-  const p = prompt(`把「${n.name}」合并进目标分类（其条目与子树并入，本分类删除）。目标完整路径：`);
+  const p = await ka.prompt(`把「${n.name}」合并进目标分类（其条目与子树并入，本分类删除）。目标完整路径：`);
   if (!p) return;
   const tid = pathToId[p.trim()];
-  if (!tid) { alert("目标路径不存在：" + p); return; }
-  if (!confirm(`确认把「${n.name}」合并进「${p}」？该操作不可自动撤销。`)) return;
+  if (!tid) { ka.toast("目标路径不存在：" + p, "error"); return; }
+  if (!(await ka.confirm(`确认把「${n.name}」合并进「${p}」？该操作不可自动撤销。`))) return;
   const res = await writeJSON(`/api/categories/${n.id}/merge`, { target_id: tid });
   if (!res.__aborted && !res.error) { if (currentCat === n.id) currentCat = null; loadTree(); }
-  else if (res.error) alert("失败：" + res.error.message);
+  else if (res.error) ka.toast("失败：" + res.error.message, "error");
 }
 
 const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散", opml: "OPML" };
 function srcLabel(t) { return SRC_LABEL[t] || t; }
 function entryHTML(e) {
-  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
+  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><div class="entry-main"><a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
        + `<span class="badge">${srcLabel(e.source_type)}</span>`
        + `<button class="rename-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}" title="改名（批次 71：写覆盖层，重同步不冲回）">✏️</button>`
        + `<button class="move-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
-       + `<button class="reject-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
+       + `<button class="reject-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div></div>`;
 }
-// 预览面板（批次 71，截图批注「点开啥也看不出来」）：点条目标题不跳走，
-// 弹层显示正文预览+元信息；「打开原文」按钮走原 locator。Esc/×关闭。
+// 预览面板（第七十五批：原弹窗对话框改为右侧常驻栏——点条目标题不跳走，
+// 面板内显示正文预览+元信息；「打开原文」按钮走原 locator；⌘/Ctrl+点击标题
+// 保留原行为（新标签打开链接，见 bindEntryButtons）。
 async function openPreview(id) {
+  const panel = document.getElementById("preview-panel");
+  if (panel.hidden) pvApply(false);   // 收起状态下点条目 → 先展开面板再看内容
   const res = await fetch(`/api/entries/${id}/preview`);
-  if (!res.ok) { alert("预览失败：" + res.status); return; }
+  if (!res.ok) { ka.toast("预览失败：" + res.status, "error"); return; }
   const d = await res.json();
-  const dlg = document.getElementById("preview-dialog");
   document.getElementById("pv-title").textContent = d.title || "(无题)";
+  document.getElementById("pv-title").title = d.title || "";
   document.getElementById("pv-meta").innerHTML =
     `<span class="badge">${srcLabel(d.source_type)}</span>`
     + (d.categories || []).map(c => `<span class="badge">📁${c}</span>`).join(" ")
     + (d.extra_locators && d.extra_locators.length
        ? `<span class="badge" title="合并条目的其他来源（entry_locators）">🔗${d.extra_locators.length} 来源</span>` : "")
     + (d.points_count ? `<span class="badge">◆ ${d.points_count} 点</span>` : "")
-    + (d.native_path ? `<small style="color:#888"> ${d.native_path}</small>` : "");
+    + (d.native_path ? `<span class="badge" title="本地路径">${d.native_path}</span>` : "");
   document.getElementById("pv-body").textContent = d.body || "（无正文预览——未抓取或二进制文件。可在数据管理页跑 --fetch-limit 抓正文。）";
-  document.getElementById("pv-open").href = d.locator;
-  dlg.showModal();
+  document.getElementById("pv-body").hidden = false;
+  document.getElementById("pv-empty").hidden = true;
+  const open = document.getElementById("pv-open");
+  open.href = d.locator || "#";
+  open.hidden = !d.locator;
 }
 // 改名（批次 71，截图批注「这名字看着不爽」）：prompt 输入新名；空串=清除
 // 覆盖回归源标题。写 meta.display_name，前端刷新当前视图。
 async function opRename(id, oldTitle) {
-  const name = prompt(`改名为（留空则清除覆盖、回归源标题）：\n${oldTitle.slice(0, 80)}`, "");
+  const name = await ka.prompt(`改名为（留空则清除覆盖、回归源标题）：\n${oldTitle.slice(0, 80)}`, "");
   if (name === null) return;  // 取消
   const res = await writeJSON(`/api/entries/${id}/rename`, { name });
   if (res.__aborted) return;
-  if (res.error) { alert("改名失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("改名失败：" + res.error.message, "error"); return; }
   refreshCurrent();
 }
 function bindEntryButtons() {
@@ -562,7 +589,7 @@ function bindEntryButtons() {
   document.querySelectorAll(".cid-btn").forEach(b => b.onclick = () => {
     navigator.clipboard.writeText(b.dataset.id)
       .then(() => { b.textContent = "✓"; setTimeout(() => b.textContent = "🆔", 800); })
-      .catch(() => { prompt("复制失败，请手动复制条目 ID：", b.dataset.id); });
+      .catch(() => { ka.alert("复制失败，请手动复制条目 ID：\n" + b.dataset.id, "复制失败"); });
   });
   attachCatChips();  // 双向联动②：条目 → 分类定位徽标（所有条目视图统一挂）
   attachPointChips();  // ③默认聚合呈现（批次 67）：点级收进可展开区
@@ -614,7 +641,7 @@ async function attachCatChips() {
     const res = await writeJSON(`/api/entries/${b.dataset.id}/confirm-category`, {});
     if (!res.__aborted && !res.error) {
       b.textContent = "✓已确认"; setTimeout(() => { b.textContent = "✓"; }, 1200);
-    } else if (res.error) alert("确认失败：" + res.error.message);
+    } else if (res.error) ka.toast("确认失败：" + res.error.message, "error");
   });
   // 人工校正（第五十二批）：条目行统一注入多选框 + 拖拽源——所有生成
   // .entry[data-id] 的视图（分类/暂存/检索/词云切面/管理页等）自动生效。
@@ -696,14 +723,14 @@ function attachRejudgeBtns() {
     btn.textContent = label;
     btn.title = `人工裁决（④一键合并/拆开）：把「${rel}」重灌为${form === "integral" ? "整图一条（并）" : "按节点切条（拆）"}——改判定缓存+emmx 单源重灌，点层下次 kpoints 自动重抽`;
     btn.onclick = async () => {
-      if (!confirm(`人工裁决：把「${rel}」重灌为${form === "integral" ? "整图一条" : "按节点切条"}？\n（emmx 单源重灌，数秒；点层下次 kpoints 自动重抽）`)) return;
+      if (!(await ka.confirm(`人工裁决：把「${rel}」重灌为${form === "integral" ? "整图一条" : "按节点切条"}？\n（emmx 单源重灌，数秒；点层下次 kpoints 自动重抽）`))) return;
       btn.disabled = true; btn.textContent = "重灌中…";
       const res = await writeJSON("/api/sources/emmx/rejudge", { rel, form });
       btn.disabled = false; btn.textContent = label;
       if (res.__aborted) return;
-      if (res.error) { alert("失败：" + res.error.message); return; }
+      if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
       const n = res.emmx && res.emmx.created;
-      alert(`重灌完成：emmx 新建 ${n ?? "?"} 条（purge ${res.purge?.purged ?? "?"} 条旧条目）。\n点层将在下次 kpoints 自动重抽。`);
+      await ka.alert(`重灌完成：emmx 新建 ${n ?? "?"} 条（purge ${res.purge?.purged ?? "?"} 条旧条目）。\n点层将在下次 kpoints 自动重抽。`, "重灌完成");
       if (typeof refreshCurrent === "function" && refreshCurrent) refreshCurrent();
     };
     d.appendChild(btn);
@@ -733,16 +760,16 @@ function attachFormBtns() {
     split.className = "form-btn rejudge-btn";
     split.textContent = "⧉拆";
     split.title = "条目级拆分（批次 70）：本文档强制按知识点切分（meta.force_form=split，LLM 切点，覆盖永久生效——全量重抽也尊重）";
-    split.onclick = () => {
-      if (!confirm("强制拆分本文档为多个知识点？\n（LLM 切点，需 llm.enabled；覆盖永久生效，点层即时重抽）")) return;
+    split.onclick = async () => {
+      if (!(await ka.confirm("强制拆分本文档为多个知识点？\n（LLM 切点，需 llm.enabled；覆盖永久生效，点层即时重抽）"))) return;
       entryFormOp(d.dataset.id, "split", split, "⧉拆");
     };
     const merge = document.createElement("button");
     merge.className = "form-btn rejudge-btn";
     merge.textContent = "◫合";
     merge.title = "条目级合并（批次 70）：本文档强制整条即一点（meta.force_form=integral，零 LLM 费用，覆盖永久生效）";
-    merge.onclick = () => {
-      if (!confirm("强制本文档整条作为一个知识点？\n（零 LLM 费用；覆盖永久生效，点层即时重抽）")) return;
+    merge.onclick = async () => {
+      if (!(await ka.confirm("强制本文档整条作为一个知识点？\n（零 LLM 费用；覆盖永久生效，点层即时重抽）"))) return;
       entryFormOp(d.dataset.id, "integral", merge, "◫合");
     };
     d.appendChild(split);
@@ -754,13 +781,13 @@ async function entryFormOp(entryId, form, btn, label) {
   const res = await writeJSON(`/api/entries/${entryId}/form`, { form });
   btn.disabled = false;
   if (res.__aborted) return;
-  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   if (res.errors && res.errors.length) {
-    alert("覆盖已写但重抽未产出：" + res.errors.map(e => e.error).join("；") + "\n（下次 kpoints 会自动补抽）");
+    await ka.alert("覆盖已写但重抽未产出：" + res.errors.map(e => e.error).join("；") + "\n（下次 kpoints 会自动补抽）", "部分失败");
   } else {
     const n = res.points_created ?? 0;
-    alert(form === "auto" ? "已清除覆盖，回归规则判定（重抽完成）。"
-      : `完成：${form === "split" ? "拆分" : "整条"}，产 ${n} 个知识点（覆盖已永久生效）。`);
+    ka.toast(form === "auto" ? "已清除覆盖，回归规则判定（重抽完成）。"
+      : `完成：${form === "split" ? "拆分" : "整条"}，产 ${n} 个知识点（覆盖已永久生效）。`, "success");
   }
   if (typeof refreshCurrent === "function" && refreshCurrent) refreshCurrent();
 }
@@ -787,19 +814,19 @@ document.getElementById("ms-cancel").onclick = () => {
   clearSelection();
 };
 document.getElementById("ms-move").onclick = () => {
-  if (!selection.size) { alert("先勾选条目（勾上「多选」后条目前会出现复选框）"); return; }
+  if (!selection.size) { ka.toast("先勾选条目（勾上「多选」后条目前会出现复选框）", "warn"); return; }
   opRecategorize(currentSelection(), "");
 };
 // 批量转正/舍弃（批次 68，截图痛点「舍弃十个点十次」）：待审/已舍弃/暂存区
 // 队列通用——多选后一键流转，每条服务端留痕（bulk_activate/bulk_reject）。
 async function bulkStatus(action) {
-  if (!selection.size) { alert("先勾选条目（勾上「多选」后条目前会出现复选框）"); return; }
+  if (!selection.size) { ka.toast("先勾选条目（勾上「多选」后条目前会出现复选框）", "warn"); return; }
   const ids = [...selection];
   const verb = action === "activate" ? "转正（进消费面）" : "舍弃（30 天冷却，可反悔）";
-  if (!confirm(`确认${verb} ${ids.length} 条？`)) return;
+  if (!(await ka.confirm(`确认${verb} ${ids.length} 条？`))) return;
   const res = await writeJSON("/api/entries/bulk-status", { ids, action });
   if (res.__aborted) return;
-  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   clearSelection();
   refreshCurrent();
 }
@@ -809,38 +836,38 @@ document.getElementById("ms-reject").onclick = () => bulkStatus("reject");
 // 第一条为主条目（保留），其余并入（链接/知识点/分类归主条目，自身舍弃）。
 // 顺序敏感——提示用户主条目是第一条；合并后预览主条目确认。
 document.getElementById("ms-merge").onclick = async () => {
-  if (selection.size < 2) { alert("合并至少勾选 2 条；第一条为主条目（保留），其余并入它"); return; }
+  if (selection.size < 2) { ka.toast("合并至少勾选 2 条；第一条为主条目（保留），其余并入它", "warn"); return; }
   const ids = [...selection];
   const names = ids.map(id => {
     const d = document.querySelector(`.entry[data-id="${id}"]`);
     return d ? (d.querySelector(".entry-title-link") || {}).textContent || id : id;
   });
-  if (!confirm(`合并 ${ids.length} 条 → 保留第 1 条为主条目：\n\n① ${names[0]}\n其余 ${ids.length - 1} 条的链接/知识点/分类并入它，自身置「已舍弃」。\n\n主条目：\n${names[0]}\n被并：\n${names.slice(1).map((n, i) => `${i + 2}. ${n}`).join("\n")}`)) return;
+  if (!(await ka.confirm(`合并 ${ids.length} 条 → 保留第 1 条为主条目：\n\n① ${names[0]}\n其余 ${ids.length - 1} 条的链接/知识点/分类并入它，自身置「已舍弃」。\n\n主条目：\n${names[0]}\n被并：\n${names.slice(1).map((n, i) => `${i + 2}. ${n}`).join("\n")}`))) return;
   const res = await writeJSON("/api/entries/merge", { primary_id: ids[0], merge_ids: ids.slice(1) });
   if (res.__aborted) return;
-  if (res.error) { alert("合并失败：" + res.error.message); return; }
-  alert(`已合并：${res.merged} 条并入主条目，知识点溯源移动 ${res.points_moved} 条。`);
+  if (res.error) { ka.toast("合并失败：" + res.error.message, "error"); return; }
+  ka.toast(`已合并：${res.merged} 条并入主条目，知识点溯源移动 ${res.points_moved} 条。`, "success");
   clearSelection();
   refreshCurrent();
 };
 // AI 起名（批次 71，截图批注「能不能按知识的名字来命名」）：勾选条目 →
 // 可改提示词 → LLM 按正文起知识化短名。无正文条目降级剪「| 站点名」尾巴。
 document.getElementById("ms-autoname").onclick = async () => {
-  if (!selection.size) { alert("先勾选要起名的条目（建议书签类）"); return; }
-  const promptTxt = prompt(
+  if (!selection.size) { ka.toast("先勾选要起名的条目（建议书签类）", "warn"); return; }
+  const promptTxt = await ka.prompt(
     "AI 起名提示词（可改，取消=不执行）：\n（对每条取正文交 LLM 生成 8-20 字知识化短名）",
     "你是知识库管理员。根据文档正文给它起一个知识化的短名字。\n要求：\n1. 8-20 个字，中文为主（专有名词保留原文）\n2. 直说知识内容本身，不要「浅谈」「一文读懂」等水词\n3. 去掉网站名、作者署名、管道符尾巴\n4. 只输出名字本身，不要引号或解释");
   if (promptTxt === null) return;
   const ids = [...selection];
-  if (!confirm(`对 ${ids.length} 条执行 AI 起名？（几分钱/条；已有名字的跳过）`)) return;
+  if (!(await ka.confirm(`对 ${ids.length} 条执行 AI 起名？（几分钱/条；已有名字的跳过）`))) return;
   const res = await writeJSON("/api/entries/auto-name", { ids, prompt: promptTxt });
   if (res.__aborted) return;
-  if (res.error) { alert("AI 起名失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("AI 起名失败：" + res.error.message, "error"); return; }
   const parts = [`起名 ${res.count} 条`];
   if (res.skipped.length) parts.push(`跳过 ${res.skipped.length}（已有名字/不存在）`);
   if (res.degraded.length) parts.push(`降级 ${res.degraded.length}（无正文，剪站点尾巴）`);
   if (res.errors.length) parts.push(`失败 ${res.errors.length}`);
-  alert(parts.join("；") + (res.count ? "\n\n" + res.named.slice(0, 8).map(n => `「${n.old.slice(0, 30)}」→「${n.new}」`).join("\n") : ""));
+  await ka.alert(parts.join("；") + (res.count ? "\n\n" + res.named.slice(0, 8).map(n => `「${n.old.slice(0, 30)}」→「${n.new}」`).join("\n") : ""), "AI 起名完成");
   clearSelection();
   refreshCurrent();
 };
@@ -869,16 +896,16 @@ document.getElementById("move-form").onsubmit = async (e) => {
     res = await writeJSON("/api/entries/batch-recategorize", { entry_ids: moveTargets, target_path: p, keep_existing: keep });
   }
   document.getElementById("move-dialog").close();
-  if (res.error) { alert("失败：" + res.error.message); return; }
-  if (res.skipped && res.skipped.length) alert(`完成 ${res.done.length} 条；跳过 ${res.skipped.length} 条（条目不存在）`);
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
+  if (res.skipped && res.skipped.length) ka.toast(`完成 ${res.done.length} 条；跳过 ${res.skipped.length} 条（条目不存在）`, "info");
   clearSelection();
   // 留在当前视图，只局部刷新（不跳转）
   refreshCurrent ? refreshCurrent() : loadTree();
 }
 async function opReject(entryId, title) {
-  if (!confirm(`舍弃「${title.slice(0, 60)}」？\n\n将不再出现在树/检索/图中；重新同步也不会恢复。\n（可在管理页「已舍弃」里找回）`)) return;
+  if (!(await ka.confirm(`舍弃「${title.slice(0, 60)}」？\n\n将不再出现在树/检索/图中；重新同步也不会恢复。\n（可在管理页「已舍弃」里找回）`))) return;
   const res = await writeJSON(`/api/entries/${entryId}/reject`, {});
-  if (res.error) { alert("失败：" + res.error.message); return; }
+  if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   refreshCurrent ? refreshCurrent() : loadTree();
 }
 function renderEntries(list) {
@@ -893,7 +920,7 @@ async function showCategory(catId) {
   showView("search");
   document.getElementById("filter").style.display = "block";
   const data = await (await fetch(`/api/categories/${catId}/entries`)).json();
-  if (data.error) { alert(data.error.message); return; }
+  if (data.error) { ka.toast(data.error.message, "error"); return; }
   catEntries = data.entries;
   const crumb = document.getElementById("crumb");
   const parts = (data.paths[0] || "").split("/");
@@ -1148,11 +1175,11 @@ function renderWorkbench() {
     b.onclick = () => { wb.tab = b.dataset.tab; renderWorkbench(); });
   const sf = document.getElementById("wb-solidify");
   if (sf) sf.onclick = async () => {
-    const name = (prompt("线索名称：", "检索：" + wb.q) || "").trim();
+    const name = ((await ka.prompt("线索名称：", "检索：" + wb.q)) || "").trim();
     if (!name) return;
     const res = await writeJSON("/api/threads",
       { name, entry_ids: wb.merged.map(x => x.id) });
-    if (res.error) { alert("失败：" + res.error.message); return; }
+    if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
     openThread(res.id);  // 页签内打开线索库（不再整页跳转）
   };
   if (wb.tab === "agg") renderAggTab();
@@ -1311,10 +1338,14 @@ async function drillBucket(key) {
 }
 
 function entryCard(e) {
-  return `<div class="entry" data-id="${e.id}"><a href="${e.locator}" target="_blank" rel="noopener">${e.title}</a>`
+  // 第七十五批：检索结果标题同样进右侧预览面板（class/data-id 与分类卡一致）；
+  // ⌘/Ctrl+点击标题仍在新标签打开原文（bindEntryButtons 里保留修饰键直通）。
+  return `<div class="entry" data-id="${e.id}"><div class="entry-main">`
+    + `<a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
     + e.channels.map(ch => `<span class="badge" title="关联解释：${ch.replace(/"/g, "&quot;")}">${chLabel(ch)}</span>`).join("")
     + `<button class="wb-focus-btn" data-id="${e.id}" title="以该条目为焦点进入放射视图">🎯 放射</button>`
-    + (e.snippet ? `<br><small>${e.snippet}</small>` : "")
+    + `</div>`
+    + (e.snippet ? `<div class="entry-snippet">${e.snippet}</div>` : "")
     + `</div>`;
 }
 
@@ -1481,7 +1512,7 @@ async function mgmtNonk() {
     body.insertAdjacentHTML("beforeend",
       `<button id="reject-all-nonk" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
   document.getElementById("reject-all-nonk")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
+    async () => { if (await ka.confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
       (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); refreshCurrent(); })();
     } });
 }
@@ -1508,7 +1539,7 @@ async function mgmtDead() {
     body.insertAdjacentHTML("beforeend",
       `<button id="reject-all-dead" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${data.dead.length} 条失效链接</button>`);
   document.getElementById("reject-all-dead")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${data.dead.length} 条失效链接？（可在已舍弃里找回）`))
+    async () => { if (await ka.confirm(`确认舍弃全部 ${data.dead.length} 条失效链接？（可在已舍弃里找回）`))
       rejectMany(data.dead.map(x => x.id)); });
 }
 
@@ -1541,7 +1572,7 @@ async function mgmtFresh() {
     body.insertAdjacentHTML("beforeend",
       `<button id="reject-all-fresh" style="margin-top:12px;padding:6px 14px;cursor:pointer">🚫 一键舍弃全部 ${ids.length} 条候选</button>`);
   document.getElementById("reject-all-fresh")?.addEventListener("click",
-    () => { if (confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
+    async () => { if (await ka.confirm(`确认舍弃全部 ${ids.length} 条候选？（可在已舍弃里找回）`)) {
       (async () => { for (const id of ids) await writeJSON(`/api/entries/${id}/reject`, {}); refreshCurrent(); })();
     } });
 }
@@ -1572,9 +1603,9 @@ async function mgmtErrata() {
   bindEntryButtons();
   document.querySelectorAll(".errata-btn").forEach(b => b.onclick = async () => {
     // 改正 = 勘误附注层：原文永不改写（方案 §7.6 定稿——溯源链保住）
-    const text = prompt("勘误文字（将与原文并显，原文不改写）：");
+    const text = await ka.prompt("勘误文字（将与原文并显，原文不改写）：");
     if (!text || !text.trim()) return;
-    const evidence = prompt("可核查依据（官方文档 URL/版本号，可空）：") || "";
+    const evidence = (await ka.prompt("可核查依据（官方文档 URL/版本号，可空）：")) || "";
     await writeJSON(`/api/entries/${b.dataset.id}/errata`, { text: text.trim(), evidence: evidence.trim() });
     refreshCurrent();
   });
@@ -1660,12 +1691,14 @@ document.querySelectorAll("#mgmt-tabs .mtab").forEach(b =>
 
 // 设置：显示空分类（原侧栏选项，第五十九批移入顶栏 ⚙）
 const _emptyCb = document.getElementById("show-empty-cats");
-_emptyCb.checked = showEmptyCats;
-_emptyCb.onchange = (e) => {
-  showEmptyCats = e.target.checked;
-  localStorage.setItem("knowatlas-show-empty", showEmptyCats ? "1" : "0");
+function applyShowEmpty(v) {
+  showEmptyCats = v;
+  localStorage.setItem("knowatlas-show-empty", v ? "1" : "0");
+  _emptyCb.checked = v;
   loadTree();
-};
+}
+_emptyCb.checked = showEmptyCats;
+_emptyCb.onchange = (e) => applyShowEmpty(e.target.checked);
 
 // bookmarklet 落地接收（第 49 批）：?add=<url> → 打开收录对话框、填入 URL、
 // 自动提交（复用同一条链路与结果展示）。只收 http(s)；先清掉 query 参数防刷新重发。
@@ -1682,6 +1715,7 @@ if (_addOk) {
 const _sideBtn = document.getElementById("side-collapse");
 function sideApply(hide) {
   document.body.classList.toggle("side-hide", hide);
+  document.getElementById("side-split").hidden = hide;   // 树栏收起时间隔条一并隐藏
   _sideBtn.textContent = hide ? "▶" : "◀";
   _sideBtn.title = hide ? "展开左栏（快捷键 [ ）" : "收起左栏（快捷键 [ ）";
   localStorage.setItem("knowatlas-side", hide ? "hide" : "show");
@@ -1717,8 +1751,9 @@ ensureSession().then(async () => {
   document.getElementById("wc-close").onclick = () => call("close");
 })();
 
-// 状态栏：服务就绪即填库统计（GET /api/stats 只读）；失败置红点
-(async () => {
+// 状态栏：服务就绪即填库统计（GET /api/stats 只读）；失败置红点。
+// 第七十五批提为具名函数——命令面板「刷新状态栏统计」复用同一通道。
+async function refreshStatus() {
   const dot = document.getElementById("st-dot");
   const text = document.getElementById("st-text");
   try {
@@ -1734,6 +1769,126 @@ ensureSession().then(async () => {
     dot.classList.add("off");
     text.textContent = "服务未连接";
   }
+}
+refreshStatus();
+
+// ---- 批次 75：三栏宽度 / 预览面板常驻 / 命令面板（纯显示层，派发既有函数）----
+
+// 预览面板：默认常驻右栏；收起后右缘留「◀ 预览」还原键。宽度偏好
+// localStorage「knowatlas-pv-w」（240-560），显式收起记「knowatlas-preview」。
+function pvApply(hide) {
+  document.getElementById("preview-panel").hidden = hide;
+  document.getElementById("pv-split").hidden = hide;
+  document.getElementById("pv-restore").hidden = !hide;
+  localStorage.setItem("knowatlas-preview", hide ? "hide" : "show");
+}
+(function () {
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const pvW = clamp(parseInt(localStorage.getItem("knowatlas-pv-w") || "292", 10) || 292, 240, 560);
+  document.getElementById("preview-panel").style.width = pvW + "px";
+  const sideW = clamp(parseInt(localStorage.getItem("knowatlas-side-w") || "240", 10) || 240, 180, 420);
+  document.querySelector("#layout aside").style.width = sideW + "px";
+  document.getElementById("pv-close").onclick = () => pvApply(true);
+  document.getElementById("pv-restore").onclick = () => pvApply(false);
+  pvApply(localStorage.getItem("knowatlas-preview") === "hide");
+})();
+
+// 三栏宽拖拽：树栏/预览栏均可拖分隔条调整，宽度记 localStorage。拖拽期间
+// 全屏 mask 拦截 mousemove——graph/thread 是 iframe，会吞掉拖拽事件。
+(function () {
+  const mask = document.getElementById("resize-mask");
+  function bind(splitId, boxSel, key, min, max, dir) {
+    const split = document.getElementById(splitId);
+    const box = document.querySelector(boxSel);
+    split.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      const startX = e.clientX;
+      const startW = box.getBoundingClientRect().width;
+      mask.hidden = false;
+      document.body.classList.add("col-resizing");
+      const move = (ev) => {
+        const w = Math.min(max, Math.max(min, startW + (ev.clientX - startX) * dir));
+        box.style.width = w + "px";
+      };
+      const up = () => {
+        mask.hidden = true;
+        document.body.classList.remove("col-resizing");
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+        localStorage.setItem(key, String(Math.round(box.getBoundingClientRect().width)));
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+    });
+  }
+  bind("side-split", "#layout aside", "knowatlas-side-w", 180, 420, 1);
+  bind("pv-split", "#preview-panel", "knowatlas-pv-w", 240, 560, -1);
+})();
+
+// 命令面板（Ctrl/Cmd+K）。pywebview 原生应用菜单仅 macOS 生效（__app__），
+// Windows 桌面壳不可用且菜单栏形态过时——命令面板是替代入口：全部派发
+// 既有函数（showView/sideToggle/pvApply/openIngest/refreshStatus…）。
+(function () {
+  const wrap = document.getElementById("cmdk");
+  const input = document.getElementById("cmdk-input");
+  const list = document.getElementById("cmdk-list");
+  let items = [], sel = 0;
+  const sideHidden = () => document.body.classList.contains("side-hide");
+  const pvHidden = () => document.getElementById("preview-panel").hidden;
+  const CMDS = [
+    { label: "检索", hint: "视图", run: () => showView("search") },
+    { label: "关系图", hint: "视图", run: () => showView("graph") },
+    { label: "线索库", hint: "视图", run: () => showView("thread") },
+    { label: "词云", hint: "视图", run: () => showView("cloud") },
+    { label: "时间线", hint: "视图", run: () => showView("timeline") },
+    { label: "管理", hint: "视图 · 暂存/待审/清理/舍弃/数据", run: () => showView("mgmt") },
+    { label: () => (sideHidden() ? "展开" : "收起") + "分类树", hint: "快捷键 [", run: () => sideToggle() },
+    { label: () => (pvHidden() ? "展开" : "收起") + "预览面板", hint: "右侧常驻栏", run: () => pvApply(!pvHidden()) },
+    { label: "收录新条目…", hint: "同 kadd：抓正文 → 归类 → 索引", run: () => openIngest() },
+    { label: "聚焦搜索框", hint: "输入主题词回车检索", run: () => { const s = document.getElementById("search"); s.focus(); s.select(); } },
+    { label: "刷新状态栏统计", hint: "GET /api/stats", run: () => refreshStatus() },
+    { label: () => (showEmptyCats ? "隐藏" : "显示") + "空分类", hint: "左树过滤", run: () => applyShowEmpty(!showEmptyCats) },
+  ];
+  const labelOf = (c) => typeof c.label === "function" ? c.label() : c.label;
+  function render(filter) {
+    const q = (filter || "").trim().toLowerCase();
+    items = CMDS.filter(c => !q || (labelOf(c) + " " + (c.hint || "")).toLowerCase().includes(q));
+    sel = 0;
+    list.innerHTML = items.length
+      ? items.map((c, i) => `<div class="cmdk-item${i === 0 ? " on" : ""}" data-i="${i}">`
+          + `<span>${labelOf(c)}</span><span class="k">${c.hint || ""}</span></div>`).join("")
+      : `<div class="cmdk-empty">没有匹配的命令</div>`;
+    list.querySelectorAll(".cmdk-item").forEach(el =>
+      el.onclick = () => run(parseInt(el.dataset.i, 10)));
+  }
+  function move(d) {
+    if (!items.length) return;
+    sel = (sel + d + items.length) % items.length;
+    list.querySelectorAll(".cmdk-item").forEach((el, i) => el.classList.toggle("on", i === sel));
+    const on = list.querySelector(".cmdk-item.on");
+    if (on) on.scrollIntoView({ block: "nearest" });
+  }
+  function run(i) {
+    const c = items[i];
+    close();
+    if (c) c.run();
+  }
+  function open() { render(""); wrap.hidden = false; input.value = ""; input.focus(); }
+  function close() { wrap.hidden = true; }
+  input.addEventListener("input", () => render(input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Enter") { e.preventDefault(); run(sel); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  });
+  wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(); });
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      wrap.hidden ? open() : close();
+    }
+  });
 })();
 </script>
 </body>

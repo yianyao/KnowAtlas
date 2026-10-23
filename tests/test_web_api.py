@@ -251,7 +251,9 @@ def test_entry_summary_endpoint(client, dl):
 
 
 def test_static_pages_consumption_defaults():
-    """静态页探针（第三十七批立；第五十九批页签化改版）：六页签+管理集中+收录对话框。"""
+    """静态页探针（第三十七批立；第五十九批页签化改版；第七十五批三栏+浮层套件）。"""
+    import re
+
     from knowatlas.web.app import _STATIC_DIR
 
     graph = (_STATIC_DIR / "graph.html").read_text(encoding="utf-8")
@@ -262,7 +264,7 @@ def test_static_pages_consumption_defaults():
     for v in ("search", "graph", "thread", "cloud", "timeline", "mgmt"):
         assert f'data-view="{v}"' in index
     # 检索默认显示，其余视图默认隐藏
-    assert '<section id="view-search" class="view">' in index
+    assert '<section id="view-search" class="view view-split">' in index   # 第七十五批：三栏
     for v in ("graph", "thread", "cloud", "timeline", "mgmt"):
         assert f'<section id="view-{v}" class="view" hidden>' in index
     # 管理页集中七入口（第五十九批六入口 + 第六十四批勘误裁决：暂存/待清理/失效/时效/勘误/已舍弃/数据管理）
@@ -286,6 +288,22 @@ def test_static_pages_consumption_defaults():
     assert 'knowatlas-side") === "hide"' in index  # 桌面壳默认展开，显式收起才折叠
     thread = (_STATIC_DIR / "thread.html").read_text(encoding="utf-8")
     assert "color-scheme: dark" in graph and "color-scheme: dark" in thread
+    # 检索视图三栏 + 预览常驻 + 命令面板 + 拖拽调宽（第七十五批）
+    assert 'id="search-col"' in index and 'id="side-split"' in index
+    assert 'id="pv-split"' in index and 'id="preview-panel"' in index
+    assert 'id="pv-restore"' in index and 'id="pv-empty"' in index
+    assert 'id="resize-mask"' in index               # 拖拽期全屏掩体（防 iframe 吞事件）
+    assert 'id="cmdk"' in index and 'id="cmdk-input"' in index
+    assert '"knowatlas-pv-w"' in index and '"knowatlas-side-w"' in index  # 宽度偏好持久化
+    assert '"k" || e.key === "K"' in index           # Ctrl/Cmd+K 命令面板快捷键
+    # 浮层套件：三页均引 ui.js/ui.css，原生弹窗全量替换为零残留
+    # （WebView2 下原生 prompt/alert/confirm 是 Chromium 浅色对话框，与深色壳断裂）
+    for f in ("index.html", "graph.html", "thread.html"):
+        t = (_STATIC_DIR / f).read_text(encoding="utf-8")
+        assert "/ui.js" in t and "/ui.css" in t
+        assert not re.search(r"(?<![a-zA-Z._])(confirm|alert|prompt)\(", t), f
+        assert "ka.toast" in t                       # 轻提示通道已接入
+    assert "ka.confirm" in index and "ka.prompt" in index
 
 
 def test_manual_ingest_endpoint_idempotent(client):
