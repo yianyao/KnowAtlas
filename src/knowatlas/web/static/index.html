@@ -715,9 +715,11 @@ async function attachPointChips() {
       + `<div class="pt-list" hidden>${pts.map(p =>
           `<div class="pt-item"><b>${_escHtml(p.summary || "(无摘要)")}</b>`
           + `<span class="badge">${p.judge || ""}</span>`
+          + `<button class="pt-explain" data-pid="${p.id}"`
+          + ` title="大白话解释这条知识+给上手示例（LLM，结果缓存）">💬 释疑</button>`
           + `<div class="pt-text">${_escHtml(p.text || "")}`
           + (p.text_len > (p.text || "").length ? `<small>…全文 ${p.text_len} 字见条目原文</small>` : "")
-          + `</div></div>`).join("")}</div></div>`);
+          + `</div><div class="pt-explain-box" hidden></div></div>`).join("")}</div></div>`);
   }
   document.querySelectorAll(".pt-toggle:not([data-bound])").forEach(t => {
     t.dataset.bound = "1";
@@ -726,6 +728,33 @@ async function attachPointChips() {
       if (!list) return;
       list.hidden = !list.hidden;
       t.textContent = `◆ ${t.textContent.match(/\d+/)?.[0] || ""} 点 ${list.hidden ? "▸" : "▾"}`;
+    };
+  });
+  // 释疑按钮（批次 90）：缓存命中（p.explain 透出）直接渲染；否则 POST 换取。
+  // 按钮点击走事件委托挂在 pt-block 外层不安全（innerHTML 重建）——逐按钮绑定。
+  document.querySelectorAll(".pt-explain:not([data-bound])").forEach(btn => {
+    btn.dataset.bound = "1";
+    btn.onclick = async () => {
+      const box = btn.closest(".pt-item").querySelector(".pt-explain-box");
+      if (!box.hidden) { box.hidden = true; return; }   // 再点收起
+      box.hidden = false;
+      if (box.dataset.loaded === "1") return;
+      box.textContent = "释疑中…（LLM 生成，几秒）";
+      try {
+        const r = await fetch(`/api/points/${btn.dataset.pid}/explain`,
+                              {method: "POST", headers: {"Content-Type": "application/json"}});
+        const d = await r.json();
+        if (!r.ok) {
+          box.textContent = `释疑失败：${(d.error && d.error.message) || r.status}`;
+          return;
+        }
+        box.innerHTML = `<div class="pe-line">💬 ${_escHtml(d.explanation)}</div>`
+          + (d.examples ? `<div class="pe-line pe-ex">例：${_escHtml(d.examples)}</div>` : "")
+          + (d.cached ? `<small style="opacity:.5">（缓存）</small>` : "");
+        box.dataset.loaded = "1";
+      } catch (err) {
+        box.textContent = "释疑失败：网络错误";
+      }
     };
   });
 }

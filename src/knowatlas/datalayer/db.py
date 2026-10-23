@@ -2104,6 +2104,19 @@ class DataLayer:
     def count_points(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM points").fetchone()[0]
 
+    def merge_meta_of_point(self, point_id: str, patch: dict[str, Any]) -> None:
+        """点 meta 局部合并（批次 90：释疑结果缓存 explain；条目层 merge_meta
+        的点层对应物，浅合并语义一致）。"""
+        with self.transaction() as conn:
+            row = conn.execute("SELECT meta FROM points WHERE id=?",
+                               (point_id,)).fetchone()
+            if row is None:
+                return
+            meta = json.loads(row["meta"] or "{}")
+            meta.update(patch)
+            conn.execute("UPDATE points SET meta=? WHERE id=?",
+                         (json.dumps(meta, ensure_ascii=False), point_id))
+
     def set_point_aging(self, point_id: str, flag: str, reason: str) -> None:
         """点级老化结论落列（批次 93，裁决 #14）：stale 退出消费面 / ok 免疫复扫 /
         keep 只记游标留观（flag 传 '' 表示维持未判）。永不物理删除点。"""
@@ -2162,7 +2175,8 @@ class DataLayer:
         marks = ",".join("?" * len(entry_ids))
         rows = self._conn.execute(
             "SELECT ps.entry_id, p.id, p.summary, p.text, p.judge, p.content_hash,"
-            " p.created_at FROM point_sources ps JOIN points p ON p.id = ps.point_id"
+            " p.created_at, p.meta FROM point_sources ps"
+            " JOIN points p ON p.id = ps.point_id"
             f" WHERE ps.entry_id IN ({marks}) ORDER BY ps.entry_id, p.created_at, p.id",
             entry_ids).fetchall()
         for r in rows:
@@ -2170,6 +2184,13 @@ class DataLayer:
             text = d.pop("text") or ""
             d["text_len"] = len(text)
             d["text"] = text if len(text) <= text_cap else text[:text_cap] + "…[截断]"
+            # 释疑缓存透出（批次 90：已释疑的点前端直接展示，零重复费用）
+            try:
+                explain = (json.loads(d.pop("meta") or "{}").get("explain") or {})
+            except json.JSONDecodeError:
+                explain = {}
+            if explain.get("explanation"):
+                d["explain"] = explain
             out[d["entry_id"]].append(d)
         return out
 

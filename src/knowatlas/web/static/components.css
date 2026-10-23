@@ -304,6 +304,15 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
 .pt-toggle { color: var(--success); }
 .pt-item { border-inline-start: 2px solid rgba(63, 182, 139, 0.4); }
 .pt-text { color: var(--text-2); }
+/* 释疑按钮与结果区（批次 90）：LLM 大白话解释+示例，缓存于点 meta */
+.pt-explain { cursor: pointer; border: 1px solid var(--border-2); border-radius: var(--radius-ctrl);
+              background: transparent; color: var(--text-2); font-size: var(--fs-11);
+              padding: 0 6px; margin-left: 6px; }
+.pt-explain:hover { color: var(--text-1); border-color: var(--accent); }
+.pt-explain-box { margin: 6px 0 2px; padding: 6px 8px; border-radius: var(--radius-ctrl);
+                  background: var(--bg-2); color: var(--text-2); line-height: 1.7; }
+.pt-explain-box .pe-line { margin: 2px 0; }
+.pt-explain-box .pe-ex { color: var(--text-3); }
 /* 管理页 */
 #mgmt-tabs { border-bottom: 0; }
 .mtab { font-size: var(--fs-11); color: var(--text-2);

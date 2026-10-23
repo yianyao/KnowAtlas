@@ -4,6 +4,15 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十批：大白话释疑按钮
+
+- **释疑=用户逐点触发的按需 LLM 动作**（方案 §9「几分钱/次」，不预跑不批量）：检索结果点卡新增 💬 释疑按钮 → `POST /api/points/{id}/explain`（写访问守卫 + content-type 白名单同口径）→ point_explain task 单点输入（批处理纪律的 documented exception——释疑由用户逐点点击触发，无批可批）。
+- **point_explain task**（semantic/tasks/point_explain.py v1.0.0）：输入只给点文本+概要，输出 `{explanation, examples}`（大白话解释 + 上手示例）；纪律写死 prompt——只围绕点文本解释、不联网不编造出处、简体中文（命令/代码/API 名/版本号保留原文）。
+- **缓存零重复费用**：结果落点 `meta.explain`（explanation/examples/explained_at，merge_meta_of_point 浅合并），重复释疑直接回缓存 `cached:true` 零 LLM 调用；`?refresh=1` 强制重释；`points_of_entries` 透出缓存供前端秒开。
+- **降级诚实**：LLM 未启用 503（LLM_DISABLED）；解析失败/空产出 502（EXPLAIN_FAILED）；点不存在 404。
+- **前端**（index.html + components.css）：点卡 💬 释疑按钮 + 展开式结果框（再点收起；`dataset.loaded` 防重不重复请求；释疑中提示）；修复释疑 fetch 缺 Content-Type 头（写守卫 415，测试先行暴露）。
+- **测试 4 项**（test_point_explain.py：task ok+空文本/坏产出+LlmError；API lifecycle 含缓存零费用+refresh+404；LLM disabled 503）；canary capabilities 指纹更新（+point_explain@1.0.0 → 5a9caa261f47）。
+
 ### 变更工单 · 第九十一批：脑图站内树形浏览 + 第八十七批：点向量语义检索 + 第八十八批：图聚合试点 + 第九十三批：老化点级化
 
 - **93 老化点级化**（迁移 010 `points.aging_flag/reason/checked_at`，DDL 指纹 6d27e850d44e；裁决 #14「只老化确实过时的部分点」）：

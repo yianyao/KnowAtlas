@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -365,6 +366,52 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 {"error": {"code": "PARSE_FAILED", "message": str(e)}},
                 status_code=422)
         return {"id": entry_id, "title": entry.title, **tree}
+
+    @app.post("/api/points/{point_id}/explain")
+    async def point_explain(point_id: str, request: Request,
+                            refresh: int = 0):
+        """大白话释疑（批次 90，方案 §9）：点卡片 → LLM 解释+示例。
+
+        结果缓存在点 meta.explain（explanation/examples/explained_at）——重复
+        释疑零费用；?refresh=1 强制重释（覆盖缓存）。LLM 调用产生费用，走写
+        访问守卫；LLM 未启用返回 503（前端隐藏按钮的兜底提示）。释疑只基于
+        点文本（模型自身知识，不联网不编造出处）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        row = dl._conn.execute(
+            "SELECT id, text, summary, meta FROM points WHERE id=?",
+            (point_id,)).fetchone()
+        if row is None:
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "知识点不存在"}},
+                status_code=404)
+        meta = json.loads(row["meta"] or "{}")
+        if not refresh and meta.get("explain", {}).get("explanation"):
+            return {"point_id": point_id, "cached": True, **meta["explain"]}
+        from ..semantic.llm import LlmClient
+        llm = LlmClient.from_config(cfg)
+        if llm is None:
+            return JSONResponse(
+                {"error": {"code": "LLM_DISABLED",
+                           "message": "LLM 未启用——释疑是增强层（[llm] enabled=true）"}},
+                status_code=503)
+        from ..semantic.base import TaskContext
+        from ..semantic.tasks import point_explain as explain_task
+        res = explain_task.run({"point_id": point_id, "text": row["text"],
+                                "summary": row["summary"]},
+                               TaskContext(run_id="web-explain", llm=llm))
+        if not res.get("llm_used"):
+            return JSONResponse(
+                {"error": {"code": "EXPLAIN_FAILED",
+                           "message": res.get("error", "释疑失败")}},
+                status_code=502)
+        payload = {"explanation": res["explanation"], "examples": res["examples"],
+                   "explained_at": _now_iso()}
+        dl.merge_meta_of_point(point_id, {"explain": payload})
+        dl.log_task(_now_iso(), "web", "point_explain", point_id, {})
+        return {"point_id": point_id, "cached": False, **payload}
 
     @app.get("/api/graph/topics")
     def graph_topics():
