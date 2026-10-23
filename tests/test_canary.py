@@ -17,11 +17,11 @@ from knowatlas.registry.builtins import build_registries
 
 CANARY: dict[str, str] = {
     "ddl": "6d27e850d44e",
-    "source_types": "dfeff8409159",
-    "schemes": "40123837bf71",
+    "source_types": "6b64be2ddfef",
+    "schemes": "021aa146daa7",
     "entry_fields": "1a9d42828612",
     "config_keys": "e672d0a323eb",
-    "capabilities": "5a9caa261f47",
+    "capabilities": "76e11a857b3a",
 }
 
 

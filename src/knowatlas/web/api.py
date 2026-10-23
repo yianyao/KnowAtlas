@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 
 from ..datalayer.db import REJECT_COOLING_DAYS
 from ..errors import AdapterError, ContractError
+from ..models import Entry, FetchResult
 from ..semantic.keywords import word_ok as _cloud_word_ok
 
 _TOKEN_HEADER = "x-knowatlas-token"
@@ -412,6 +413,120 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.merge_meta_of_point(point_id, {"explain": payload})
         dl.log_task(_now_iso(), "web", "point_explain", point_id, {})
         return {"point_id": point_id, "cached": False, **payload}
+
+    # ---- 知识梳理合成层（批次 69，§7.9：勾点 → LLM 方案 → 预览 → 人确认落库） ----
+
+    def _synth_items(point_ids: list[str]):
+        """取所选点（消费面口径：stale/不可消费点视为不存在——防幻觉闸门不放过期料）。"""
+        items, missing = [], []
+        for pid in point_ids:
+            hit = dl.get_point_hit(pid)
+            if hit is None:
+                missing.append(pid)
+                continue
+            src_title = ""
+            if hit.sources:
+                src_title = hit.sources[0].get("title", "") if isinstance(
+                    hit.sources[0], dict) else str(getattr(hit.sources[0], "title", ""))
+            items.append({"point_id": hit.point_id, "text": hit.text,
+                          "summary": hit.summary or "", "source_title": src_title})
+        return items, missing
+
+    @app.post("/api/synthesize/preview")
+    async def synthesize_preview(request: Request):
+        """梳理预览：勾选点 + 提示词 → LLM 生成 Markdown（不落库，人确认前零副作用）。"""
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        point_ids = [str(p) for p in (body.get("point_ids") or [])][:30]
+        if not point_ids:
+            return JSONResponse(
+                {"error": {"code": "NO_SOURCES",
+                           "message": "未勾选知识点——合成必须溯源（防幻觉闸门）"}},
+                status_code=400)
+        items, missing = _synth_items(point_ids)
+        if not items:
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "所选点不存在或已退出消费面",
+                           "missing": missing}},
+                status_code=404)
+        from ..semantic.llm import LlmClient
+        llm = LlmClient.from_config(cfg)
+        if llm is None:
+            return JSONResponse(
+                {"error": {"code": "LLM_DISABLED",
+                           "message": "LLM 未启用——合成是增强层（[llm] enabled=true）"}},
+                status_code=503)
+        from ..semantic.base import TaskContext
+        from ..semantic.tasks import synthesize as synth_task
+        res = synth_task.run(items, TaskContext(run_id="web-synth", llm=llm),
+                             instruction=str(body.get("instruction") or ""))
+        if not res.get("llm_used"):
+            return JSONResponse(
+                {"error": {"code": "SYNTHESIZE_FAILED",
+                           "message": res.get("error", "合成失败")}},
+                status_code=502)
+        dl.log_task(_now_iso(), "web", "synthesize_preview", "preview",
+                    {"points": len(items)})
+        return {"markdown": res["markdown"], "points": items, "missing": missing}
+
+    @app.post("/api/synthesize/commit")
+    async def synthesize_commit(request: Request):
+        """确认落库：预览确认后的 Markdown → source_type=synthesized 独立条目。
+
+        强制溯源（§7.9 设计 2）：meta.sources=[point_id...] 必非空；条目 active
+        可检索（回灌），与原始层隔离（source_type 独立标识，前端合成徽标）。
+        内容寻址：同一 Markdown 重复确认幂等（upsert unchanged，不产生重复条目）。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        body = await request.json()
+        point_ids = [str(p) for p in (body.get("point_ids") or [])][:30]
+        markdown = str(body.get("markdown") or "").strip()
+        if not point_ids or not markdown:
+            return JSONResponse(
+                {"error": {"code": "NO_SOURCES",
+                           "message": "缺知识点或文档内容——合成必须溯源（防幻觉闸门）"}},
+                status_code=400)
+        items, missing = _synth_items(point_ids)
+        if not items:
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "所选点不存在或已退出消费面",
+                           "missing": missing}},
+                status_code=404)
+        content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        title = str(body.get("title") or "").strip()
+        if not title:
+            for ln in markdown.splitlines():
+                ln = ln.strip()
+                if ln.startswith("#"):
+                    title = ln.lstrip("#").strip()
+                    break
+        title = (title or f"合成方案 {datetime.now():%Y-%m-%d %H:%M}")[:120]
+        source_key = content_hash[:16]
+        entry = Entry.build(
+            source_type="synthesized", source_key=source_key, title=title,
+            locator=f"synth://{source_key}", locator_canonical=None,
+            native_path=None,
+            inline_content=markdown if len(markdown) <= 4000 else markdown[:4000],
+            content_hash=content_hash if len(markdown) > 4000 else None,
+            meta={"sources": [it["point_id"] for it in items],
+                  "source_titles": sorted({it["source_title"] for it in items
+                                           if it["source_title"]}),
+                  "synthesized_at": _now_iso(),
+                  "instruction": str(body.get("instruction") or "")[:2000]},
+        )
+        if entry.content_hash:
+            dl.put_content(FetchResult(text=markdown, content_hash=content_hash,
+                                       fetcher="synthesize",
+                                       fetched_at=_now_iso()))
+        dl.upsert_entries([entry])
+        dl.log_task(_now_iso(), "web", "synthesize_commit", entry.id,
+                    {"points": len(items), "chars": len(markdown)})
+        return {"entry_id": entry.id, "title": title, "points": len(items),
+                "missing": missing}
 
     @app.get("/api/graph/topics")
     def graph_topics():

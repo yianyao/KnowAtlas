@@ -4,6 +4,15 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第六十九批：知识梳理合成层（勾点合成方案，回灌+隔离+强制溯源）
+
+- **裁决落地**（§7.9，2026-10-22 用户裁决「回灌+隔离」）：勾选若干知识点 → 可修改提示词 → LLM 生成整理后的 Markdown 方案文档 → **预览不落库** → 人确认后落 `source_type=synthesized` 独立条目回灌知识库（active 可检索、可参与聚类），与原始层隔离（独立 source_type 标识）；**强制溯源**：`meta.sources=[point_id...]` 必非空，API 层防幻觉闸门（空 sources/空 markdown 400；所选点不在消费面 404——stale 点不喂给合成）。
+- **synthesize task**（semantic/tasks/synthesize.py v1.0.0）：输入所选点（text+溯源条目名）+ 用户提示词（空走 DEFAULT_INSTRUCTION 默认模板）；输出 `{markdown}`；纪律写死 prompt——只基于给定知识点梳理不编造、不联网、Markdown 规范输出、简体中文（命令/代码/API 名/版本号保留原文）、允许归并不允许丢要点。全自动重排固化、AI 配图明确不做（§7.9 边界）。
+- **API**：`POST /api/synthesize/preview`（生成预览零副作用，≤30 点）；`POST /api/synthesize/commit`（落库；**内容寻址**：entry_id=sha256(markdown) 前 16 位 → 同文重复确认幂等不产生重复条目；标题取 markdown 一级标题，缺省「合成方案 日期 时间」；>4000 字正文入 content_store 引用计数，inline 留截断）；均走写访问守卫；LLM 未启用 503、合成失败 502。
+- **前端**（index.html + components.css）：检索结果点卡新增勾选框 → 勾中≥1 点浮出底部梳理条（已选 N 点 / 🧬 梳理 / 取消）→ 提示词面板（预填默认模板可改）→ 生成预览（`<pre>` 展示 Markdown）→ 确认入库 → 成功后可点标题直达条目预览；Esc/✕/点遮罩三路关闭；搜索重渲染勾选态自动复位。
+- **契约变更（canary 工单）**：SOURCE_TYPES 白名单 +`synthesized`（dfeff8409159→6b64be2ddfef）；SCHEMES 白名单 +`synth`（synth://<content_key> 内容寻址定位符，40123837bf71→021aa146daa7）；capabilities +synthesize@1.0.0（5a9caa261f47→76e11a857b3a）。
+- **测试 4 项**（test_synthesize.py：task ok+空清单/无 LLM/坏产出；preview 零副作用+400/404；commit 建 synthesized 条目+溯源 meta+幂等；防幻觉闸门）。老化出口：synthesized 条目走 §7.5 既有 rejected→30 天冷却→物理删除链路，零新增机制。
+
 ### 变更工单 · 第九十批：大白话释疑按钮
 
 - **释疑=用户逐点触发的按需 LLM 动作**（方案 §9「几分钱/次」，不预跑不批量）：检索结果点卡新增 💬 释疑按钮 → `POST /api/points/{id}/explain`（写访问守卫 + content-type 白名单同口径）→ point_explain task 单点输入（批处理纪律的 documented exception——释疑由用户逐点点击触发，无批可批）。

@@ -9,8 +9,8 @@ from __future__ import annotations
 from ..fetchers import file_reader, http_simple
 from ..semantic.tasks import (
     aging_judge, classify_coarse, classify_deep, delta_summarize, errata_check,
-    point_aging, point_explain, point_extract, tag_keywords, thread_digest,
-    thread_suggest, topic_recall,
+    point_aging, point_explain, point_extract, synthesize, tag_keywords,
+    thread_digest, thread_suggest, topic_recall,
 )
 from .capability import CapabilitySpec, LocatorRegistry, SemanticRegistry
 
@@ -52,6 +52,8 @@ def build_registries(config) -> tuple[LocatorRegistry, SemanticRegistry]:
     semantics.register(point_aging.SPEC, point_aging.run)
     # 大白话释疑（批次 90）：点卡片 → LLM 解释+示例，结果缓存点 meta 零重复费用
     semantics.register(point_explain.SPEC, point_explain.run)
+    # 知识梳理合成层（批次 69，§7.9）：勾选点 → LLM 生成方案文档，synthesized 回灌+隔离
+    semantics.register(synthesize.SPEC, synthesize.run)
     # 勘误三级 L2（第六十四批，方案 §7.6）：事实一致性核查，error 必附依据否则降 suspect
     semantics.register(errata_check.SPEC, errata_check.run)
     return locators, semantics

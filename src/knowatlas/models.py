@@ -10,6 +10,7 @@ from typing import Any
 SOURCE_TYPES = (
     "bookmark", "folder", "emmx", "mail", "ima", "txdoc", "db", "session",
     "wxfav", "manual", "wxchat", "wxarticle", "bili", "expand", "opml",
+    "synthesized",   # 知识梳理合成层（批次 69，§7.9：LLM 生成物回灌+隔离+强制溯源）
 )
 
 # status 枚举：active=在库 / archived=源里消失（可复活） / rejected=用户明确舍弃（永不复活，
@@ -21,6 +22,7 @@ STATUSES = ("active", "archived", "rejected", "deleted", "pending")
 # §5 locator scheme 清单（canary 覆盖项）
 SCHEMES = (
     "http", "https", "file", "mail", "ima", "txdoc", "emmx", "db", "session", "wxfav", "bili",
+    "synth",   # 合成条目定位符 synth://<content_key>（批次 69；无外部源，内容寻址）
 )
 
 # §9.4 threads.thread_type：curated=用户串联线索 / source=源还原的原始会话线程

@@ -1472,6 +1472,8 @@ function renderAggTab() {
     html += `<small class="set-note">◆ 知识点 ${wb.points.length} 条（点正文摘要；点「来源」看出处原文）：</small>`;
     for (const p of wb.points) {
       html += `<div class="entry point-hit"><div class="entry-main">`
+        + (p.point_id ? `<label class="pt-pick" title="勾选用于知识梳理（合成方案）">`
+          + `<input type="checkbox" class="synth-check" data-pid="${p.point_id}"></label>` : "")
         + `<span class="badge">◆ 知识点</span>`
         + (p.point_id ? `<button class="pt-explain" data-pid="${p.point_id}"`
           + ` title="大白话解释这条知识+给上手示例（LLM，结果缓存）">💬 释疑</button>` : "")
@@ -1511,6 +1513,7 @@ function renderAggTab() {
   body.querySelectorAll(".pt-src").forEach(a =>
     a.onclick = (e) => { e.preventDefault(); openPreview(a.dataset.id); });  // 溯源 → 预览面板
   _bindExplainBtns();  // 检索结果点卡释疑（批次 90）
+  if (window.synthRefresh) window.synthRefresh();  // 重渲染后勾选态复位，梳理条收起（批次 69）
   attachCatChips();  // 分类定位徽标
   bindEntryButtons();
 }
@@ -2036,6 +2039,116 @@ function pvApply(hide) {
       wrap.hidden ? open() : close();
     }
   });
+})();
+</script>
+<!-- 知识梳理合成层（批次 69，§7.9）：勾点 → 提示词面板 → 预览 → 人确认落库 -->
+<div id="synthBar" hidden>
+  <span id="synthCount"></span>
+  <button id="synthGo" class="btn" title="把勾选的知识点交给 LLM 梳理成方案文档（预览后确认入库）">🧬 梳理</button>
+  <button id="synthClear" class="btn">取消</button>
+</div>
+<div id="synthModal" hidden>
+  <div class="synth-panel">
+    <div class="synth-head">🧬 知识梳理
+      <button id="synthClose" class="rclose" title="关闭（Esc）">✕</button>
+    </div>
+    <label class="synth-lab">梳理要求（可修改）：</label>
+    <textarea id="synthPrompt" rows="4"></textarea>
+    <div class="synth-actions">
+      <button id="synthPreview" class="btn">生成预览</button>
+      <button id="synthCommit" class="btn primary" disabled title="预览满意后入库；合成条目强制溯源所选知识点">确认入库</button>
+    </div>
+    <div id="synthStatus"></div>
+    <pre id="synthOut" hidden></pre>
+  </div>
+</div>
+<script>
+(() => {
+  // 与后端 synthesize.DEFAULT_INSTRUCTION 保持同文（前端预填，用户可改后提交）
+  const DEFAULT_PROMPT = "请将下列知识点梳理成一篇结构化的方案文档（Markdown）：提炼共性、归并重复、按主题组织小节；操作类知识给出步骤，概念类知识给出解释脉络；末尾附「来源知识点」一节列出要点索引。只基于给定知识点梳理，不要引入它们之外的内容。";
+  const bar = document.getElementById("synthBar");
+  const modal = document.getElementById("synthModal");
+  const promptTa = document.getElementById("synthPrompt");
+  const out = document.getElementById("synthOut");
+  const statusEl = document.getElementById("synthStatus");
+  const commitBtn = document.getElementById("synthCommit");
+  const previewBtn = document.getElementById("synthPreview");
+  let md = "";
+  const picked = () =>
+    [...document.querySelectorAll(".synth-check:checked")].map(c => c.dataset.pid);
+  function refresh() {
+    const n = picked().length;
+    bar.hidden = n === 0;
+    if (n === 0) { modal.hidden = true; return; }
+    document.getElementById("synthCount").textContent = `已选 ${n} 个知识点`;
+  }
+  window.synthRefresh = refresh;
+  document.addEventListener("change", (e) => {
+    if (e.target.classList && e.target.classList.contains("synth-check")) refresh();
+  });
+  document.getElementById("synthClear").onclick = () => {
+    document.querySelectorAll(".synth-check:checked").forEach(c => { c.checked = false; });
+    refresh();
+  };
+  document.getElementById("synthGo").onclick = () => {
+    promptTa.value = DEFAULT_PROMPT;
+    out.hidden = true; out.textContent = "";
+    statusEl.textContent = ""; md = ""; commitBtn.disabled = true;
+    modal.hidden = false;
+  };
+  const close = () => { modal.hidden = true; };
+  document.getElementById("synthClose").onclick = close;
+  modal.addEventListener("mousedown", (e) => { if (e.target === modal) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.hidden) close();
+  });
+  previewBtn.onclick = async () => {
+    const ids = picked();
+    if (!ids.length) { statusEl.textContent = "未勾选知识点"; return; }
+    statusEl.textContent = "梳理中…（LLM 生成，几秒到十几秒）";
+    out.hidden = true; md = ""; commitBtn.disabled = true;
+    try {
+      const r = await fetch("/api/synthesize/preview", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({point_ids: ids, instruction: promptTa.value})});
+      const d = await r.json();
+      if (!r.ok) {
+        statusEl.textContent = `梳理失败：${(d.error && d.error.message) || r.status}`;
+        return;
+      }
+      md = d.markdown;
+      out.textContent = md; out.hidden = false;
+      commitBtn.disabled = false;
+      statusEl.textContent = `预览就绪（基于 ${d.points.length} 个知识点）。满意再点「确认入库」。`;
+    } catch (err) {
+      statusEl.textContent = "梳理失败：网络错误";
+    }
+  };
+  commitBtn.onclick = async () => {
+    const ids = picked();
+    if (!md || !ids.length) { statusEl.textContent = "先生成预览再入库"; return; }
+    statusEl.textContent = "入库中…";
+    try {
+      const r = await fetch("/api/synthesize/commit", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({point_ids: ids, instruction: promptTa.value,
+                              markdown: md})});
+      const d = await r.json();
+      if (!r.ok) {
+        statusEl.textContent = `入库失败：${(d.error && d.error.message) || r.status}`;
+        return;
+      }
+      statusEl.innerHTML = `✅ 已入库：<a href="#" id="synthOpen">${d.title}</a>`
+        + `（溯源 ${d.points} 个知识点，条目可检索）`;
+      document.getElementById("synthOpen").onclick = (e) => {
+        e.preventDefault(); openPreview(d.entry_id);
+      };
+      document.querySelectorAll(".synth-check:checked").forEach(c => { c.checked = false; });
+      bar.hidden = true;
+    } catch (err) {
+      statusEl.textContent = "入库失败：网络错误";
+    }
+  };
 })();
 </script>
 </body>
