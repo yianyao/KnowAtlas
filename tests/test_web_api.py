@@ -333,6 +333,11 @@ def test_static_pages_consumption_defaults():
     # 第八十一批：display:flex 作者样式会压过 UA 的 [hidden]{display:none}，
     # 检索视图切走后仍叠在其他视图上（真机验收实测）——同特异性反制规则必须存在
     assert "#view-search.view-split[hidden]" in comps
+    # 第八十二批（真机验收）：①折叠不藏展开入口——aside 收窄条留按钮，
+    # 内联 display:none 被覆盖；②pywebview 桥异步注入，win-ctrls 必须等
+    # 官方 pywebviewready 事件（同步查 window.pywebview 永远落空）
+    assert "body.side-hide aside" in comps
+    assert "pywebviewready" in index
 
 
 def test_manual_ingest_endpoint_idempotent(client):

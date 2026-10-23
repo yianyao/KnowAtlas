@@ -1762,15 +1762,22 @@ ensureSession().then(async () => {
 // ---- 桌面壳（第七十四批）：窗口控制 + 状态栏（纯展示，无业务副作用）----
 // 窗口控制仅在 pywebview 壳内出现（浏览器端 hidden 保持）；拖拽区由
 // components.css 的 .pywebview-drag-region 承担（create_window easy_drag=False）。
+// 第八十二批修补：pywebview 桥是页面加载后异步注入的，页面脚本跑时
+// window.pywebview 必然未就绪（真机实测三钮永远不出现）——改为官方
+// pywebviewready 事件驱动，桥已就绪则立即初始化，否则等事件。
 (function () {
-  const api = window.pywebview && window.pywebview.api;
-  if (!api) return;
-  document.body.classList.add("in-desktop");
-  document.getElementById("win-ctrls").hidden = false;
-  const call = (name) => { try { api[name](); } catch (e) { /* 桥未就绪：忽略 */ } };
-  document.getElementById("wc-min").onclick = () => call("minimize");
-  document.getElementById("wc-max").onclick = () => call("toggle_maximize");
-  document.getElementById("wc-close").onclick = () => call("close");
+  function initShell() {
+    const api = window.pywebview && window.pywebview.api;
+    if (!api) return;
+    document.body.classList.add("in-desktop");
+    document.getElementById("win-ctrls").hidden = false;
+    const call = (name) => { try { api[name](); } catch (e) { /* 桥未就绪：忽略 */ } };
+    document.getElementById("wc-min").onclick = () => call("minimize");
+    document.getElementById("wc-max").onclick = () => call("toggle_maximize");
+    document.getElementById("wc-close").onclick = () => call("close");
+  }
+  if (window.pywebview && window.pywebview.api) initShell();
+  else window.addEventListener("pywebviewready", initShell);
 })();
 
 // 状态栏：服务就绪即填库统计（GET /api/stats 只读）；失败置红点。

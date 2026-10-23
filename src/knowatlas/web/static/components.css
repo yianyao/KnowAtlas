@@ -67,6 +67,14 @@ aside { width: 240px; flex: none; display: flex; flex-direction: column;
                  background: transparent; border: 1px solid var(--border-1);
                  border-radius: var(--radius-ctrl); cursor: pointer; }
 #side-collapse:hover { color: var(--text-1); background: var(--bg-3); }
+/* 第八十二批：折叠不藏展开入口（真机验收实测：display:none 连按钮一起消失，
+   用户找不回分类栏）。aside 收成窄条只留展开钮——后加载覆盖内联 display:none。 */
+body.side-hide aside { display: flex; width: 30px; min-width: 30px;
+                       padding: 8px 3px; overflow: hidden; }
+body.side-hide .side-head { flex-direction: column; gap: 4px; width: 100%; }
+body.side-hide .side-title { display: none; }
+body.side-hide #side-collapse { margin-inline-start: 0; align-self: center; }
+body.side-hide #tree { display: none; }
 #tree { flex: 1; overflow: auto; padding: 6px 6px 12px; }
 #tree > small { display: block; padding: 8px 6px; }
 .tree-node { margin: 1px 0 1px 10px; }

@@ -2795,3 +2795,18 @@ hidden 的逻辑本身正确，但检索视图的 hidden 失效，唯独「检�
   均已补过同款反制，批次 75 这条漏了）。
 - 测试：静态探针 +1 断言；pytest 429 passed + 1 skipped EXIT=0。
   挂账：重建 exe 后用户重验视图切换。
+
+### 第八十二批：树折叠展开入口 + 壳窗口控制钮修补（真机验收第三/四坑）
+
+真机验收连续两坑：①分类树折叠后连「◀/▶」按钮一起消失（body.side-hide
+aside{display:none} 把 aside 内的 #side-collapse 一并藏了），用户找不回
+分类栏；②桌面壳右上角窗口控制钮（最小化/最大化/关闭）永不出现——
+win-ctrls 初始化同步查 window.pywebview，而 pywebview 桥是页面加载后
+异步注入的，脚本跑时必然未就绪，IIFE 直接 return。
+
+- 修补①：aside 折叠态收成 30px 窄条只留展开钮（components.css 覆盖
+  内联 display:none：aside display:flex/宽 30px/标题与树隐藏/按钮居中）。
+- 修补②：改为 pywebview 官方 pywebviewready 事件驱动——桥已就绪立即
+  初始化，否则监听事件（浏览器通道无此事件，三钮保持 hidden）。
+- 测试：探针 +2 断言；pytest 429 passed + 1 skipped EXIT=0；内联脚本
+  node 语法检查过。挂账：重建 exe 后用户重验。
