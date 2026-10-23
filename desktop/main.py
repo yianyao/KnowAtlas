@@ -95,6 +95,16 @@ def main() -> int:
     from knowatlas.web.app import create_app
 
     cfg = load_config()
+    # --port/--host 覆盖写回 cfg（第七十九批壳层修补，业务文件零改动）：
+    # 安全中间件的 Host 白名单按 cfg 端口生成（web/api.py _port_of），若只把
+    # 覆盖端口传给 uvicorn，浏览器/探活请求会被 FORBIDDEN_HOST 全拒（打包
+    # 冒烟实测踩坑）。cfg 无公开写入口，直接落 _data（Config 即 dict 封装）。
+    if args.port or args.host:
+        gen = cfg._data.setdefault("general", {})
+        if args.port:
+            gen["server_port"] = args.port
+        if args.host:
+            gen["server_host"] = args.host
     setup_logging(cfg.log_level)
     dl = DataLayer(cfg.db_path)
     dl.init_schema()

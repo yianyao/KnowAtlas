@@ -13,6 +13,8 @@ for f in $files; do
   [ -f "$f" ] || continue
   case "$f" in
     *.bat|*.cmd) continue ;;   # Windows 批处理按约定必须 CRLF，见 .gitattributes
+    # 二进制文件：\r\n 是合法字节序列，非文本检查对象（第七十九批 icon 入库踩坑）
+    *.ico|*.png|*.jpg|*.jpeg|*.gif|*.webp|*.icns|*.woff|*.woff2|*.ttf|*.db) continue ;;
   esac
   if $PY - "$f" <<'PYEOF' 2>/dev/null
 import sys

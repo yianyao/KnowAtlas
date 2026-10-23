@@ -2735,3 +2735,31 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
   HEAD 同数）；内联脚本过 node 语法检查；改动文件 UTF-8 无 BOM + LF。
 - 挂账：同前批（真机验收待装 pywebview）；下一批 79 打包
   （PyInstaller + 图标 + 桌面壳真机验收清单）。
+
+### 第七十九批：PyInstaller 打包 + 冒烟实测两坑修补（6 批桌面化路线收官）
+
+desktop/ 新增打包编排：knowatlas.spec（pywebview/clr_loader/pythonnet
+整包收集 + uvicorn 动态组件 hiddenimports + web/static 与
+datalayer/migrations 数据落位 + torch/sentence_transformers/transformers
+显式排除——embed 延迟可选导入有降级，打包版不含 2GB 模型链）；
+build.py 一键构建（纯 stdlib，缺依赖给精确安装命令）；icon.ico
+（Pillow 生成：深色圆角方底 + 白「知」+ accent 底线）；README 补打包
+说明与 12 项真机验收清单。业务文件零改动，壳入口一处修补。
+
+- 冒烟坑 ①（数据落位）：schema.py 运行时 iterdir() 动态发现迁移文件，
+  冻结后 .py 进 PYZ 目录不存在 → 启动即 FileNotFoundError；补
+  migrations 目录为数据文件落位同位路径。
+- 冒烟坑 ②（壳层修补）：安全中间件 Host 白名单按 cfg 端口生成
+  （web/api.py _port_of），壳 --port 只传 uvicorn 会致覆盖端口被
+  FORBIDDEN_HOST 全拒（探活与浏览器皆 403）——desktop/main.py 在
+  create_app 前把 --port/--host 写回 cfg._data（Config 无公开写入口）。
+- 冒烟结果：临时端口起 exe → /api/session 200（configured=true，读
+  真实 config/DB）+ index.html 200（97.5KB 含深色壳标记）+
+  tokens.css 200（数据落位正确）；console=False 正式版复测 PASS。
+- 环境：venv 补装 pip（ensurepip）+ pyinstaller 6.22.3 + pywebview
+  6.2.1。构建产物 dist/KnowAtlas/（exe 25.9 MB）；中间产物
+  dist/KnowAtlas.old*/stale-* 为会话删除守卫所留（批量删除需确认），
+  可整个手动删除，最终版以最后冒烟为准。
+- 测试：pytest 429 passed + 1 skipped，EXIT=0（与 HEAD 同数）；
+  desktop/main.py 过 py_compile；spec/build.py/README UTF-8 无 BOM
+  + LF。挂账：真机 GUI 验收清单 12 项（desktop/README.md）。
