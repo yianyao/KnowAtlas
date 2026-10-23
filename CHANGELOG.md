@@ -2713,3 +2713,25 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
   node 语法检查；改动文件 UTF-8 无 BOM + LF。
 - 挂账：同前批（真机验收待装 pywebview）；下一批 78 管理设置视图
   （mgmt 七入口 + 模态框/书签坞令牌化收尾）。
+
+### 第七十八批：管理视图 + 树操作 + 书签坞令牌化收尾（界面/显示层，业务零改动）
+
+6 批改造路线第 5 批。index.html 视图层令牌化收官：JS/HTML 内联硬编码
+色清零（mgmt 描述/收录输出/勘误金条/书签提示五处），components.css 补
+最后一批覆盖块（树节点操作钮/分类 chip/脑图路径/定位闪烁动画/拖拽
+落点/多选浮动条按钮/小书签坞页签）。内联 `<style>` 旧文本按既定覆盖
+策略保留（components.css 后加载同特异性胜出，不改内联块）。业务逻辑
+零改动。
+
+- HTML/JS 内联属性五处令牌化：#mgmt-desc/#add-url-out/书签提示
+  （#888→var(--text-3)）、收录成功 ID（#4a9eff→var(--accent-text)）、
+  勘误附注金条（#c9a227→var(--warning)）。
+- components.css 追加：.ops button（树行操作钮）、.cat-chip、
+  .mind-path（→C79AEA 与 .sig-host 同族）、@keyframes catflash 重
+  定义（45% → rgba accent 0.33，同名后加载胜出）、.drop-hint、
+  #bulk-bar button(+.primary)、#bm-tab（Canvas 系统色→令牌）。
+- 测试：静态探针扩 10 条断言（内联属性令牌化 + 旧用法不回潮 +
+  components 七探针）；pytest 429 passed + 1 skipped，EXIT=0（与
+  HEAD 同数）；内联脚本过 node 语法检查；改动文件 UTF-8 无 BOM + LF。
+- 挂账：同前批（真机验收待装 pywebview）；下一批 79 打包
+  （PyInstaller + 图标 + 桌面壳真机验收清单）。

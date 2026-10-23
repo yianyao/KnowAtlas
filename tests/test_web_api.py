@@ -319,6 +319,17 @@ def test_static_pages_consumption_defaults():
     assert 'tok("--accent"' in index                 # 时间线柱色运行时取令牌
     assert '{ color: "#3f6fb5" }' not in index       # 时间线旧柱色硬编码用法清零
     #                                                （#3f6fb5 作为映射表键保留属预期）
+    # 收尾令牌化（第七十八批）：JS 模板内联色清零 + 树操作/书签坞/多选条覆盖块
+    assert 'color:var(--accent-text)" class="add-id"' in index
+    assert "border-left:3px solid var(--warning)" in index   # 勘误附注金条改令牌
+    # 内联 <style> 旧文本按覆盖策略保留（components.css 后加载胜出），只禁用法回潮
+    assert "border-left:3px solid #c9a227" not in index
+    assert 'style="font-size:12px;color:#888' not in index   # HTML 内联属性不走覆盖
+    comps = (_STATIC_DIR / "components.css").read_text(encoding="utf-8")
+    for probe in (".ops button", ".cat-chip", ".mind-path", "#bm-tab",
+                  "#bulk-bar button.primary", "@keyframes catflash",
+                  "rgba(91, 141, 239, 0.33)"):
+        assert probe in comps, probe
 
 
 def test_manual_ingest_endpoint_idempotent(client):

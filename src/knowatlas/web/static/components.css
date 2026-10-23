@@ -307,3 +307,32 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
              border-radius: 10px; background: var(--bg-2); color: var(--text-2); }
 .tl-locate:hover { border-color: var(--accent); color: var(--accent-text);
                    background: var(--accent-soft); }
+
+/* ---- 收尾（第七十八批）：管理/树操作/书签坞/多选条——内联硬编码的最后一批覆盖 ---- */
+.ops button { font-size: var(--fs-11); color: var(--text-3);
+              background: transparent; border: 1px solid var(--border-1);
+              border-radius: 4px; }
+.ops button:hover { color: var(--text-1); border-color: var(--border-2);
+                    background: var(--bg-3); }
+.cat-chip { font-size: var(--fs-11); color: var(--accent-text);
+            border: 1px dashed rgba(91, 141, 239, 0.4);
+            border-radius: 4px; }
+.cat-chip:hover { background: var(--accent-soft); }
+.mind-path { font-size: var(--fs-11); color: #C79AEA;
+             border: 1px dotted rgba(199, 154, 234, 0.35);
+             border-radius: 4px; }
+/* 树定位闪烁：重定义同名 keyframes（后加载胜出）为 accent 半透明 */
+@keyframes catflash { 0%, 100% { background: transparent; }
+                      45% { background: rgba(91, 141, 239, 0.33); } }
+.tree-node > .row > .name.drop-hint { outline: 2px dashed var(--accent);
+                                      outline-offset: 1px; }
+#bulk-bar button { font-size: var(--fs-12); color: var(--text-2);
+                   background: transparent; border: 1px solid var(--border-2);
+                   border-radius: var(--radius-ctrl); }
+#bulk-bar button:hover { color: var(--text-1); border-color: #3A4356; }
+#bulk-bar button.primary { color: var(--accent-text);
+                           border-color: rgba(91, 141, 239, 0.4); }
+#bulk-bar button.primary:hover { background: var(--accent-soft); }
+#bm-tab { font-size: var(--fs-12); background: var(--bg-2); color: var(--text-2);
+          border: 1px solid var(--border-2); border-left: none; }
+#bm-dock:hover #bm-tab { color: var(--text-1); }
