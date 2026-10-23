@@ -125,6 +125,9 @@ dialog::backdrop { background: rgba(8, 10, 14, 0.6); }
 
 /* ---- 检索视图三栏 ---- */
 #view-search.view-split { display: flex; flex-direction: row; padding: 0; overflow: hidden; }
+/* 第八十一批：display:flex（作者样式）会压过 UA 的 [hidden]{display:none}，
+   导致检索视图切走后仍叠在其他视图上（真机验收实测）。同特异性 + 后置 = 胜出。 */
+#view-search.view-split[hidden] { display: none; }
 #search-col { flex: 1; min-width: 0; overflow: auto; padding: 10px 16px 16px; }
 .col-split { flex: none; width: 5px; cursor: col-resize; background: transparent; }
 .col-split:hover, body.col-resizing .col-split { background: var(--accent); }

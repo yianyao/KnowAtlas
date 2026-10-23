@@ -2780,3 +2780,18 @@ config/knowatlas.toml`。根因：load_config 按 CWD 解析配置（业务规�
   范围与 KNOWATLAS_CONFIG 用法说明），不再无声崩溃。
 - README 打包节同步改写；源码态验证定位函数（CWD=dist/KnowAtlas 命中
   仓库根）+ py_compile 过。挂账：重建后 exe 双击冒烟与 12 项验收。
+
+### 第八十一批：视图切换叠层修补（真机验收第二坑）
+
+真机切到关系图后初始检索视图仍叠在其上。根因：components.css
+`#view-search.view-split { display:flex }`（作者样式，特异性 1 id + 1
+class）压过 UA 对 hidden 属性的 `display:none`——showView 统一切
+hidden 的逻辑本身正确，但检索视图的 hidden 失效，唯独「检索 → 其他」
+这条路坏（其余五视图无 display 覆盖，反向 graph→检索 正常）。
+
+- 修补：components.css 补同特异性后置规则
+  `#view-search.view-split[hidden] { display: none; }`（与其余八个
+  hidden 控制元素既有惯例一致——win-ctrls/preview-panel/cmdk 等此前
+  均已补过同款反制，批次 75 这条漏了）。
+- 测试：静态探针 +1 断言；pytest 429 passed + 1 skipped EXIT=0。
+  挂账：重建 exe 后用户重验视图切换。

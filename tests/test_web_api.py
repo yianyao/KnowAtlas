@@ -330,6 +330,9 @@ def test_static_pages_consumption_defaults():
                   "#bulk-bar button.primary", "@keyframes catflash",
                   "rgba(91, 141, 239, 0.33)"):
         assert probe in comps, probe
+    # 第八十一批：display:flex 作者样式会压过 UA 的 [hidden]{display:none}，
+    # 检索视图切走后仍叠在其他视图上（真机验收实测）——同特异性反制规则必须存在
+    assert "#view-search.view-split[hidden]" in comps
 
 
 def test_manual_ingest_endpoint_idempotent(client):
