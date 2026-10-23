@@ -185,7 +185,7 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
     try:
         if args.embed or args.embed_force:
             from .semantic.embed import from_config as embedder_from_config
-            from .pipeline.embed_index import embed_entries
+            from .pipeline.embed_index import embed_entries, embed_points
 
             embedder = embedder_from_config(cfg)
             if embedder is None:
@@ -193,7 +193,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                       " requirements-optional）——主链路不受影响")
                 return _EXIT_SKIP
             stats = embed_entries(dl, embedder, force=args.embed_force)
-            print(f"OK 向量索引完成：{stats}")
+            pstats = embed_points(dl, embedder, force=args.embed_force)
+            print(f"OK 向量索引完成：条目 {stats} | 点 {pstats}")
             return _EXIT_OK
         if args.cluster_report:
             from .semantic.embed import from_config as embedder_from_config

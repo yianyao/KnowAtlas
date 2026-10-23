@@ -1947,6 +1947,47 @@ class DataLayer:
             conn.executemany("DELETE FROM entry_vectors WHERE entry_id=?",
                              [(e,) for e in entry_ids])
 
+    # ---- 点向量（迁移 009，批次 87；与条目向量同构——只存取 BLOB，数学在
+    #      semantic/embed.py；点 text 是抽取产物可重抽，本表可随时重建） ----
+
+    def put_point_vectors(self, records: list[dict[str, Any]]) -> int:
+        """批量 upsert 点向量 {point_id, dim, vector(bytes), model}；返回写入数。"""
+        if not records:
+            return 0
+        now = _now()
+        with self.transaction() as conn:
+            for r in records:
+                conn.execute(
+                    "INSERT INTO point_vectors (point_id, dim, vector, model, created_at) "
+                    "VALUES (?,?,?,?,?) ON CONFLICT(point_id) DO UPDATE SET "
+                    "dim=excluded.dim, vector=excluded.vector, model=excluded.model, "
+                    "created_at=excluded.created_at",
+                    (r["point_id"], int(r["dim"]), r["vector"], r["model"], now),
+                )
+        self.log_task(now, "point_vectors", "put", records[0]["model"],
+                      {"count": len(records), "model": records[0]["model"]})
+        return len(records)
+
+    def all_point_vectors(self, model: str | None = None) -> dict[str, bytes]:
+        """{point_id: vector_bytes}（model 过滤；缺省取全部——单模型场景够用）。"""
+        if model:
+            rows = self._conn.execute(
+                "SELECT point_id, vector FROM point_vectors WHERE model=?",
+                (model,)).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT point_id, vector FROM point_vectors").fetchall()
+        return {r["point_id"]: r["vector"] for r in rows}
+
+    def all_points_text(self) -> dict[str, str]:
+        """{point_id: text}（向量构建原料；text 是抽取产物，全量点均可编码）。"""
+        rows = self._conn.execute("SELECT id, text FROM points").fetchall()
+        return {r["id"]: (r["text"] or "") for r in rows}
+
+    def count_point_vectors(self) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) FROM point_vectors").fetchone()[0]
+
     # ---- 知识点（迁移 007，第六十二批；点 text 是抽取产物可重抽重建，原文永在
     #      entries/content_store；content_hash 去重，一点多溯源走 point_sources） ----
 
@@ -2520,6 +2561,30 @@ class DataLayer:
             if len(out) >= limit:
                 break
         return out
+
+    def get_point_hit(self, point_id: str) -> PointHit | None:
+        """单点检索视图（批次 87：点向量融合时补全向量独有点；search_points 同
+        口径——溯源全不可消费的点返回 None 不露面）。"""
+        r = self._conn.execute(
+            "SELECT id, substr(text,1,200) AS text, summary FROM points WHERE id=?",
+            (point_id,),
+        ).fetchone()
+        if r is None:
+            return None
+        cons = _consumable("e")
+        srcs = self._conn.execute(
+            "SELECT e.id AS entry_id,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+            " e.locator"
+            " FROM point_sources ps JOIN entries e ON e.id = ps.entry_id"
+            " WHERE ps.point_id = ? AND e.status='active'" + cons +
+            " ORDER BY ps.created_at LIMIT 6",
+            (point_id,),
+        ).fetchall()
+        if not srcs:
+            return None
+        return PointHit(r["id"], r["text"], r["summary"],
+                        tuple(dict(x) for x in srcs), 1.0)
 
     # ---- 日志与运行记录 ----
 

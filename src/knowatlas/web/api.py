@@ -1427,9 +1427,23 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         # 知识点主通道（批次 86）+ 条目区从点反查（批次 92，裁决 #13：搜概念
         # 词应出该概念论述点非全文概要；条目区=命中点的溯源条目去重为主 +
         # 标题/路径直击保留——词越精确条目越少，正文级全文命中不再单独出条目卡）
-        pts = [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
-                "sources": p.sources, "rank": p.rank}
-               for p in dl.search_points(q)]
+        # 批次 87：点向量语义通道——embedder 可用时 FTS 点 + 点向量余弦 RRF
+        # 融合重排（语义词如「进销存」零字面命中也能召回），via_sim 标向量独有点
+        pts_raw = dl.search_points(q)
+        embedder = None
+        try:
+            from ..pipeline.embed_index import search_points_hybrid
+            from ..semantic.embed import from_config as embedder_from_config
+            embedder = embedder_from_config(cfg)
+            fused = search_points_hybrid(dl, embedder, q) if embedder else None
+            pts = fused if fused is not None else [
+                {"point_id": p.point_id, "text": p.text, "summary": p.summary,
+                 "sources": p.sources, "rank": p.rank}
+                for p in pts_raw]
+        except ImportError:
+            pts = [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
+                    "sources": p.sources, "rank": p.rank}
+                   for p in pts_raw]
 
         def _hits_from_points_then_direct() -> list[dict]:
             hits: list[dict] = []

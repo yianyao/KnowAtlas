@@ -74,6 +74,96 @@ def _flush(dl: Any, embedder: Any, batch: list[dict[str, Any]]) -> int:
     return len(batch)
 
 
+# ---- 点向量（批次 87：点升格检索主体后，语义通道同步点级化） ----
+
+def embed_points(dl: Any, embedder: Any, force: bool = False) -> dict[str, Any]:
+    """增量构建点向量索引（与 embed_entries 同纪律）；返回统计 dict。
+
+    点文本 = points.text（截 _TEXT_CAP）；一点多溯源只编码一次（向量挂在
+    point_id 上）。force=False 时已有同模型向量的点跳过。
+    """
+    if embedder is None:
+        return {"embedded": 0, "skipped": 0, "no_text": 0, "model": "",
+                "disabled": True}
+    model = embedder.name
+    already = set(dl.all_point_vectors(model)) if not force else set()
+    texts = dl.all_points_text()
+    embedded = skipped = no_text = 0
+    batch: list[dict[str, Any]] = []
+    for pid, text in texts.items():
+        if pid in already:
+            skipped += 1
+            continue
+        text = text.strip()[:_TEXT_CAP]
+        if not text:
+            no_text += 1
+            continue
+        batch.append({"point_id": pid, "text": text})
+        if len(batch) >= 32:
+            embedded += _flush_points(dl, embedder, batch)
+            batch = []
+    embedded += _flush_points(dl, embedder, batch)
+    return {"embedded": embedded, "skipped": skipped, "no_text": no_text,
+            "model": model}
+
+
+def _flush_points(dl: Any, embedder: Any, batch: list[dict[str, Any]]) -> int:
+    if not batch:
+        return 0
+    vecs = embedder.encode([b["text"] for b in batch])
+    dl.put_point_vectors([
+        {"point_id": b["point_id"], "dim": len(v), "model": embedder.name,
+         "vector": vec_to_blob(normalize(v))}
+        for b, v in zip(batch, vecs)
+    ])
+    return len(batch)
+
+
+def search_points_hybrid(dl: Any, embedder: Any, q: str
+                         ) -> list[dict[str, Any]] | None:
+    """点检索融合（批次 87）：FTS 点命中 + 点向量余弦 → RRF 重排。
+
+    返回 search_points 同构列表（point_id/text/summary/sources/rank，rank 换为
+    RRF 分——数值越小越靠前的 bm25 语义不再成立，前端按数组序渲染，rank 仅
+    作分数展示）；embedder=None 或查询空 → None（调用方沿用纯 FTS 结果）。
+    向量独有点（FTS 零命中但语义相关）同样返回——语义词检索的关键增量。
+    """
+    if embedder is None or not (q or "").strip():
+        return None
+    fts_hits = dl.search_points(q.strip())
+    fts_rank = {p.point_id: i + 1 for i, p in enumerate(fts_hits)}
+    by_id = {p.point_id: p for p in fts_hits}
+
+    qvec = normalize(embedder.encode([q.strip()])[0])
+    cands = {pid: blob_to_vec(b) for pid, b in dl.all_point_vectors().items()}
+    sim_hits = top_similar(qvec, cands, k=_VEC_POOL, threshold=_SIM_THRESHOLD)
+
+    rrf: dict[str, float] = {}
+    for pid, rank in fts_rank.items():
+        rrf[pid] = rrf.get(pid, 0.0) + 1.0 / (_RRF_K + rank)
+    for i, (pid, _score) in enumerate(sim_hits, 1):
+        rrf[pid] = rrf.get(pid, 0.0) + 1.0 / (_RRF_K + i)
+        if pid not in by_id:               # 向量独有点：补全溯源信息
+            full = dl.get_point_hit(pid)
+            if full is not None:
+                by_id[pid] = full
+    if not rrf:
+        return []
+    ranked = sorted(rrf, key=lambda pid: -rrf[pid])
+    out: list[dict[str, Any]] = []
+    for pid in ranked:
+        p = by_id.get(pid)
+        if p is None:
+            continue                       # 溯源全不可消费的点不露面（search_points 同口径）
+        src = p if isinstance(p, dict) else {
+            "point_id": p.point_id, "text": p.text, "summary": p.summary,
+            "sources": p.sources}
+        out.append({"point_id": src["point_id"], "text": src["text"],
+                    "summary": src["summary"], "sources": src["sources"],
+                    "rank": round(rrf[pid], 6), "via_sim": pid not in fts_rank})
+    return out
+
+
 def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
                   ) -> dict[str, Any] | None:
     """FTS + 向量 RRF 融合检索；embedder=None 返回 None（调用方降级 fts）。

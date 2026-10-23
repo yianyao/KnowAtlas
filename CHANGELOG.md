@@ -4,6 +4,16 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十一批：脑图站内树形浏览 + 第八十七批：点向量语义检索
+
+- **91 树形浏览**：emmx 整图条目（judge=integral）在预览面板渲染大纲树——`parse_tree()` 读 .emmx 重建嵌套节点树（断链按顶层、深度兜底防环、坏 ZIP/无主题 AdapterError 诚实降级）；新端点 `GET /api/entries/{id}/emmx_tree`（locator 相对路径逐 roots 探测，缺失 404/解析失败 422）；前端 `<details>` 原生折叠树 + 引导线样式；emmx:// 不再渲染假「打开原文」链接（批次 37 纪律补齐）。零写库零 LLM，纯只读解析。测试 7 项（test_emmx_tree.py）。
+- **87 点向量**（迁移 009 `point_vectors`，DDL 指纹 1eb32f0f8531）：
+  - 表结构与 entry_vectors 同构（point_id PK、FK 级联、float32 LE BLOB、L2 归一化、model 标识）；
+  - `embed_points`：增量构建点向量（一点一编码，重算覆盖；no_text/skipped 统计同 embed_entries 纪律），`ksync --embed` 同步构建条目+点两级向量；
+  - `search_points_hybrid`：FTS 点命中 + 点向量余弦 → RRF 融合重排，**语义词零字面命中也能召回**（「JavaScript数组」连写分词边界、口语化提问等 FTS 盲区由向量通道承接）；向量独有点经 `get_point_hit` 补全溯源（可消费过滤同口径），`via_sim` 标记语义命中；
+  - /api/search 点区自动融合（embedder 可用即启用，ImportError/未配置降级纯 FTS）。
+  - 测试 5 项（test_embed.py：CRUD 级联/增量 force 禁用/融合+纯 sim+不可消费过滤/None 用例/API 融合透出）；test_threads.py 迁移数断言去硬编码改 latest_version()。
+
 ### 变更工单 · 第九十二批：知识整理管线（裁决 12「入库=知识整理，不是切片」）
 
 - **背景与裁决**（2026-10-23 用户原话）：「对于书签收藏或手动录入的外部链接……要提取其知识，可能还包含其目录内其他兄弟页面的知识，而不是提一个链接，或一个骨架，要来何用？……链接地址（或原文内容）允许保留并且应该保留以溯源，但得到的，必须是知识」「入库之前，需要先做知识整理」。GitHub README 抓成页面骨架（Notifications/Fork/Star 按钮墙）与 JS 数组脑图 15 个 API 节点碎切均为此裁决的病灶。
