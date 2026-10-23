@@ -2842,3 +2842,21 @@ win-ctrls 初始化同步查 window.pywebview，而 pywebview 桥是页面加载
 - 验证：playwright 模拟 Ctrl+K 截图核对（输入框聚焦描边清晰、hint
   全部大白话）；pytest 429 passed + 1 skipped EXIT=0；node 语法过。
   挂账：重建 exe 后用户重验。
+
+### 第八十五批：关系图密度自适应（2026-10-23）
+
+**背景**：用户截图批注搜索子图两问题——「内容少的时候是否得适当放大，
+现在挤一起」「加上文字内容是挺好，问题：啥都看不清了」。同批核对打包壳
+（79-84 批）改动范围：desktop/ 全新 + 静态 UI + 钩子/测试，Python 业务
+代码零触碰（用户确认诉求）。
+
+**修复**（graph.html render series 三件套）：
+- force 密度自适应：repulsion 按节点数 340/170/90 三档（<10/<30/其余），
+  少节点 edgeLength [60,220] 散得开；gravity 0.08→0.06；
+- 标签截 18 字 + 省略号（全名 hover 节点卡可见）；
+- `labelLayout: { hideOverlap: true }` 重叠标签自动隐藏——挤在一起时
+  只显示放得下的，hover 逐个看全。
+
+**验证**：浏览器实测（搜「管理」7 节点分布散开/24 字标签截为 18 字/
+hideOverlap 生效）三项 PASS + 截图。壳检查结论同批记录。UTF-8 无 BOM + LF。
+按用户指令暂不推送远程。

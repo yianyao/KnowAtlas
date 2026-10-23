@@ -356,10 +356,17 @@ function render(data, crumbText, opts = {}) {
     } },
     series: [{
       type: "graph", layout: coords ? "none" : "force", roam: true, draggable: true,
-      force: { repulsion: radiateView ? 160 : 90, edgeLength: [30, 120], gravity: 0.08 },
+      // 密度自适应（2026-10-23 用户截图批注「内容少时挤一起/加了文字啥都看不清」）：
+      // 节点少 repulsion/edgeLength 放大散得开，多则收缩防漂散；
+      // 标签截 18 字（全名 hover 节点卡可见）+ hideOverlap 重叠自动避让
+      force: { repulsion: radiateView ? 160 : nodes.length < 10 ? 340 : nodes.length < 30 ? 170 : 90,
+               edgeLength: radiateView ? [30, 120] : nodes.length < 10 ? [60, 220] : [30, 120],
+               gravity: 0.06 },
       data: nodes, links: links,
+      labelLayout: { hideOverlap: true },
       emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
-      label: { position: "right" },
+      label: { position: "right",
+               formatter: p => p.name.length > 18 ? p.name.slice(0, 17) + "…" : p.name },
     }],
   }, { notMerge: true });   // 视图切换整体替换，防旧节点残留
 }
