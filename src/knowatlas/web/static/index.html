@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>知道 KnowAtlas</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
          display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
   /* 顶栏（第五十九批页签化）：品牌 + 全局搜索 + 收录 + 设置 */
@@ -197,11 +197,12 @@
   dialog .btns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog button { cursor: pointer; padding: 4px 12px; }
 </style>
+<link rel="stylesheet" href="/tokens.css">
+<link rel="stylesheet" href="/components.css">
 </head>
 <body>
 <header id="topbar">
-  <button id="side-collapse" title="收起左栏（快捷键 [ ）">◀</button>
-  <span id="brand">知道 KnowAtlas</span>
+  <span class="tb-drag pywebview-drag-region" id="brand">知道 KnowAtlas</span>
   <input id="search" placeholder="输入主题词，回车检索（聚合 / 线索 / 放射）" autocomplete="off">
   <button id="ingest-btn" title="同 kadd：抓正文 → 归类 → 索引">＋ 收录</button>
   <details id="settings">
@@ -212,21 +213,36 @@
       </label>
     </div>
   </details>
+  <span class="tb-drag tb-spacer pywebview-drag-region"></span>
+  <span class="win-ctrls" id="win-ctrls" hidden>
+    <button class="wc-btn" id="wc-min" title="最小化">
+      <svg width="11" height="11" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button class="wc-btn" id="wc-max" title="最大化 / 还原">
+      <svg width="11" height="11" viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+    <button class="wc-btn wc-close" id="wc-close" title="关闭">
+      <svg width="11" height="11" viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1"/></svg>
+    </button>
+  </span>
 </header>
 <div id="layout">
+<nav id="view-tabs">
+  <button class="vtab on" data-view="search"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>检索</button>
+  <button class="vtab" data-view="graph"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="8" cy="12" r="2"/><path d="M5.8 4.9 10.2 5.1M5.3 5.9 7 10M9.8 6.9 8.4 10"/></svg>关系图</button>
+  <button class="vtab" data-view="thread"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.5" y="4.5" width="8" height="7" rx="2"/><rect x="6.5" y="4.5" width="8" height="7" rx="2"/></svg>线索库</button>
+  <button class="vtab" data-view="cloud"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8M2 12h10"/></svg>词云</button>
+  <button class="vtab" data-view="timeline"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2v12"/><circle cx="3" cy="5" r="1.4"/><circle cx="3" cy="11" r="1.4"/></svg>时间线</button>
+  <button class="vtab" data-view="mgmt"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/><circle cx="6" cy="4" r="1.7" fill="#12151C"/><circle cx="10" cy="8" r="1.7" fill="#12151C"/><circle cx="5" cy="12" r="1.7" fill="#12151C"/></svg>管理</button>
+</nav>
 <aside>
-  <small>分类树（点击下钻；悬停节点出现管理按钮；可拖条目到节点改挂）</small>
+  <div class="side-head">
+    <span class="side-title" title="分类树：点击下钻；悬停节点出现管理按钮；可拖条目到节点改挂">分类</span>
+    <button id="side-collapse" title="收起分类树（快捷键 [ ）">◀</button>
+  </div>
   <div id="tree">加载中…</div>
 </aside>
 <main>
-  <nav id="view-tabs">
-    <button class="vtab on" data-view="search">检索</button>
-    <button class="vtab" data-view="graph">关系图</button>
-    <button class="vtab" data-view="thread">线索库</button>
-    <button class="vtab" data-view="cloud">词云</button>
-    <button class="vtab" data-view="timeline">时间线</button>
-    <button class="vtab" data-view="mgmt">管理</button>
-  </nav>
   <section id="view-search" class="view">
     <div id="crumb"></div>
     <select id="filter" style="display:none">
@@ -241,7 +257,7 @@
       <div id="home-board">
         <div class="hb-title">🧭 从这里开始</div>
         <div id="hb-cats" class="hb-cats"><small>分类加载中…</small></div>
-        <small>或在上方输入关键词回车检索；左上 ▶ 展开完整分类树（快捷键 [ ）。</small>
+        <small>或在上方输入关键词回车检索；左侧 ◀ 按钮折叠/展开分类树（快捷键 [ ）。</small>
       </div>
     </div>
   </section>
@@ -273,6 +289,12 @@
   </section>
 </main>
 </div>
+<footer class="shell-status">
+  <span class="st-dot" id="st-dot"></span>
+  <span id="st-text">本地服务连接中…</span>
+  <span class="st-sp"></span>
+  <span>知道 KnowAtlas · 桌面壳</span>
+</footer>
 <div id="bulk-bar" style="display:none">
   <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
   <span id="ms-count">已选 0</span>
@@ -284,14 +306,14 @@
   <button id="ms-cancel">取消</button>
 </div>
 <!-- 预览面板（批次 71）：点条目标题弹出——正文预览+元信息+打开原文 -->
-<dialog id="preview-dialog" style="border:1px solid #ddd;border-radius:10px;max-width:720px;width:88vw;padding:0">
-  <div style="padding:14px 18px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center;gap:8px">
+<dialog id="preview-dialog" style="border:1px solid var(--border-2);border-radius:10px;max-width:720px;width:88vw;padding:0">
+  <div style="padding:14px 18px;border-bottom:1px solid var(--border-1);display:flex;justify-content:space-between;align-items:center;gap:8px">
     <b id="pv-title" style="font-size:15px"></b>
     <span><a id="pv-open" href="#" target="_blank" rel="noopener" class="primary" style="text-decoration:none;font-size:13px">打开原文 ↗</a>
     <button onclick="document.getElementById('preview-dialog').close()" style="margin-left:8px">✕</button></span>
   </div>
   <div id="pv-meta" style="padding:8px 18px 0;display:flex;flex-wrap:wrap;gap:6px;align-items:center"></div>
-  <pre id="pv-body" style="margin:0;padding:12px 18px 16px;white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--mono,monospace);max-height:60vh;overflow:auto;color:#333"></pre>
+  <pre id="pv-body" style="margin:0;padding:12px 18px 16px;white-space:pre-wrap;word-break:break-word;font:13px/1.6 var(--mono,monospace);max-height:60vh;overflow:auto;color:var(--text-2)"></pre>
 </dialog>
 <!-- bookmarklet 左缘小书签坞（第五十九批）：默认收缩到左缘，悬停展开显示用途；
      拖到书签栏后任意网页一键收录。拖拽期间保持展开。 -->
@@ -1654,10 +1676,9 @@ if (_addOk) {
   openIngest(_addQ);
 }
 
-// 左栏折叠（第五十八批纪律保留，第五十九批折叠键上移顶栏）：默认收起
-// （知识窗口优先，用户定调），偏好记 localStorage「knowatlas-side」；[
-// 快捷键切换（输入框聚焦时不触发）。页签化后搜索常驻顶栏，58 批的悬浮
-// 镜像条不再需要。
+// 分类树折叠（第五十八批立；第七十四批桌面壳：折叠键移入树面板头部，
+// 默认展开——1440 宽屏分类树常驻，用户 2026-10-23 明确「分类窗口应可折叠」）：
+// 偏好记 localStorage「knowatlas-side」；[ 快捷键切换（输入框聚焦时不触发）。
 const _sideBtn = document.getElementById("side-collapse");
 function sideApply(hide) {
   document.body.classList.toggle("side-hide", hide);
@@ -1673,7 +1694,7 @@ document.addEventListener("keydown", e => {
   if (e.key === "[" && !/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)
       && !document.activeElement.isContentEditable) sideToggle();
 });
-sideApply(localStorage.getItem("knowatlas-side") !== "show");  // 默认收起；显式展开过的用户保持
+sideApply(localStorage.getItem("knowatlas-side") === "hide");  // 桌面壳默认展开；显式收起过的用户保持
 
 // 先取同源写凭据（服务端种 HttpOnly Cookie），再加载数据——用户无需手工填令牌
 ensureSession().then(async () => {
@@ -1681,6 +1702,39 @@ ensureSession().then(async () => {
   renderHomeBoard(treeData ? treeData.tree : []);
   if (_addOk) document.getElementById("add-url-btn").click();
 });
+
+// ---- 桌面壳（第七十四批）：窗口控制 + 状态栏（纯展示，无业务副作用）----
+// 窗口控制仅在 pywebview 壳内出现（浏览器端 hidden 保持）；拖拽区由
+// components.css 的 .pywebview-drag-region 承担（create_window easy_drag=False）。
+(function () {
+  const api = window.pywebview && window.pywebview.api;
+  if (!api) return;
+  document.body.classList.add("in-desktop");
+  document.getElementById("win-ctrls").hidden = false;
+  const call = (name) => { try { api[name](); } catch (e) { /* 桥未就绪：忽略 */ } };
+  document.getElementById("wc-min").onclick = () => call("minimize");
+  document.getElementById("wc-max").onclick = () => call("toggle_maximize");
+  document.getElementById("wc-close").onclick = () => call("close");
+})();
+
+// 状态栏：服务就绪即填库统计（GET /api/stats 只读）；失败置红点
+(async () => {
+  const dot = document.getElementById("st-dot");
+  const text = document.getElementById("st-text");
+  try {
+    const s = await (await fetch("/api/stats")).json();
+    const bs = s.by_source || {};
+    const total = Object.values(bs).reduce((a, b) => a + b, 0);
+    const parts = [location.host];
+    if (total) parts.push(`条目 ${total}`);
+    if (s.uncategorized !== undefined) parts.push(`未分类 ${s.uncategorized}`);
+    if (s.contents !== undefined) parts.push(`正文块 ${s.contents}`);
+    text.textContent = parts.join(" · ");
+  } catch (e) {
+    dot.classList.add("off");
+    text.textContent = "服务未连接";
+  }
+})();
 </script>
 </body>
 </html>

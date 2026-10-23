@@ -277,6 +277,15 @@ def test_static_pages_consumption_defaults():
     assert 'class="cid-btn"' in index             # 条目行复制 ID
     assert 'id="bm-dock"' in index                # bookmarklet 左缘小书签坞（收缩/hover 展开）
     assert "ccid" in graph                        # 弹窗卡 ID 行（点击复制）
+    # 桌面壳（第七十四批）：令牌/组件外链 + 拖拽区 + 窗口控制 + 状态栏 + 树折叠
+    assert "/tokens.css" in index and "/components.css" in index
+    assert "pywebview-drag-region" in index       # 标题栏拖拽区（pywebview 官方 drag region）
+    assert 'id="win-ctrls"' in index and 'id="wc-min"' in index
+    assert 'class="shell-status"' in index and 'id="st-text"' in index
+    assert 'id="side-collapse"' in index          # 分类树折叠键（树面板头部）
+    assert 'knowatlas-side") === "hide"' in index  # 桌面壳默认展开，显式收起才折叠
+    thread = (_STATIC_DIR / "thread.html").read_text(encoding="utf-8")
+    assert "color-scheme: dark" in graph and "color-scheme: dark" in thread
 
 
 def test_manual_ingest_endpoint_idempotent(client):

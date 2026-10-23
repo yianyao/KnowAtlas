@@ -2587,3 +2587,40 @@ BLOCKED 跳过——按方案 §9「两探针任一通过即算本批完成」�
 **探针 B PG 真机（BLOCKED 跳过）**：本机无 docker 服务，起 PG 补跑的条件
 不具备；日后 docker 可用时按 TODO Phase 7 探针补跑。
 
+
+
+### 第七十四批：桌面壳与设计令牌（界面/布局/显示层，业务零改动）
+
+用户 2026-10-23 定调「不许动业务逻辑，只能改界面和布局、改显示方式」+
+「改成前端桌面应用」+「分类窗口应可折叠」——本批为 6 批改造路线第 1 批
+（74 壳与令牌 → 75 检索视图 → 76 关系图 → 77 其余视图 → 78 管理设置 → 79 打包）。
+
+- 桌面壳入口 `desktop/main.py`（+ README）：pywebview 5.x 无框窗口
+  （frameless + easy_drag=False，拖拽用官方 `.pywebview-drag-region` CSS 类，
+  不误伤画布拖拽与文本选择）；装配与 serve 逐行同构（load_config →
+  DataLayer → build_registries → create_app，uvicorn 进守护线程、pywebview
+  主线程跑）；js_api 暴露 minimize/toggle_maximize/close（hasattr 防空调用）；
+  等服务就绪再开窗（urllib ProxyHandler({}) 绕本机代理）；依赖入
+  requirements-optional（pywebview；缺失时脚本给安装指引，serve/CLI 主链路
+  不受影响）。路径零硬编码（KNOWATLAS_HOME 规则同 serve，可迁移铁律第 4 条）。
+- index.html 壳重构：36px 标题栏（品牌拖拽区 + 全局搜索 + 收录 + 设置 +
+  窗口控制——仅桌面壳内可见，浏览器端 hidden）+ 92px 左导航栏（原页签行改
+  竖排 + SVG 图标，`#view-tabs .vtab` 选择器与 data-view 全部不变）+
+  240px 分类树面板（默认展开——桌面宽屏常驻；◀ 折叠 + `[` 快捷键 +
+  localStorage，响应用户「分类窗口应可折叠」）+ 26px 状态栏（GET /api/stats
+  只读填充，失败置红点）。六个视图 section 与全部 JS 逻辑零改动。
+- 设计令牌 `tokens.css`（深色：bg #0C0E12/#12151C/#171B24/#1E2330；
+  text #E9EDF4/#A6B0C0/#7C8798，对比度 16.4/8.8/5.3:1；accent #5B8DEF，
+  实心键 #3D6FD1 白字 4.8:1；语义 success #3FB68B/warning #DFA43E/
+  danger #E05C5C；13px 基号、400/500 两档字重、4px 栅格、圆角 6/8/10）+
+  `components.css`（壳组件 + 深色基线修正：small/dialog/bm-dock/bulk-bar/
+  树节点/预览面板内联色）。两文件置于内联 `<style>` 之后加载（同特异性
+  后者胜）；视图层内联样式留待批次 75+ 令牌化。
+- graph.html / thread.html：color-scheme 统一 dark（各一行，与壳一致）。
+- 测试：静态探针扩 8 条断言（CSS 外链/拖拽区/窗口控制/状态栏/树折叠键/
+  默认展开口径/两 iframe 页深色基线）；pytest 429 passed + 1 skipped，
+  EXIT=0（与 HEAD 同数——本批只扩断言不增测试函数）；desktop/main.py
+  py_compile 过；九文件字节扫描 UTF-8 无 BOM + LF 全过。
+- 挂账：pywebview 未安装（本批不动环境；跑桌面壳前 pip install pywebview）；
+  真机验收（拖拽/最大化/三栏调宽/树折叠/深色一致性）待装依赖后双通道验；
+  工作区未提交的 db.py display_name 追修按用户指示搁置不碰。
