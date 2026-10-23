@@ -131,16 +131,22 @@ def test_two_char_query_finds_content(dl):
 
 def test_search_hits_apply_display_name(dl):
     """批次 71 追修：检索/聚合视图的标题走 display_name 覆盖层——
-    search_fts 两分支（FTS match + LIKE 兜底）都不得直读 SQL e.title。"""
+    search_fts 两分支（FTS match + LIKE 兜底）都不得直读 SQL e.title。
+    display_name 匹配（2026-10-23 追加）：搜索词只存在于 display_name
+    （原标题/native_path/正文均无）时也必须命中——display_name=「库存管理精华」，
+    原标题无「库存」。"""
     e = make_entry(source_type="bookmark", source_key="https://x.com/a",
                    title="以MVP思维，解析最小的进销存业务流程| 人人都是产品经理",
                    locator="https://x.com/a")
     dl.upsert_entries([e])
-    dl.merge_meta(e.id, {"display_name": "进销存MVP思维"})
-    for q in ("MVP思维", "进销存"):     # FTS match（≥3 字）与 LIKE 兜底（两字）两路
+    dl.merge_meta(e.id, {"display_name": "库存管理精华"})
+    # ≥3 字走 FTS 分支（OR 覆盖层匹配）；两字词走 LIKE 兜底分支
+    for q in ("库存管理", "库存"):
         hits = dl.search_fts(q)
         hit = [h for h in hits if h.entry_id == e.id][0]
-        assert hit.title == "进销存MVP思维"
+        assert hit.title == "库存管理精华"   # 显示走覆盖层
+    # 原标题词仍可命中（FTS 索引原文未动）
+    assert any(h.entry_id == e.id for h in dl.search_fts("MVP思维"))
 
 
 def test_get_content_preview_prefix(dl):

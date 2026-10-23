@@ -2331,6 +2331,15 @@ class DataLayer:
         q = query.strip()
         if not q:
             return []
+        # display_name 匹配（2026-10-23 用户裁决「display_name 入 FTS 索引」的落地形态）：
+        # 不重建 external content 表（正会双倍存储 + snippet 错乱 + 迁移成本）。
+        # ⚠ FTS5 MATCH 不可与 OR 组合（`unable to use function MATCH in the
+        # requested context`）——首版 WHERE MATCH OR dn-LIKE 每查必抛 OperationalError
+        # 静默落兜底（330ms，FTS 索引报废）。改 UNION 两段：FTS 段（bm25 毫秒级）
+        # + display_name 段（instr 粗筛零 JSON 解析 + json_extract 精筛，rank 5.0
+        # 排后），Python 合并去重。十万条量级若 dn 段成瓶颈，升级路径 = display_name
+        # 物化为 entries 生成列 + 索引。
+        like = f"%{self._escape_like(q)}%"
         if len(q) >= 3:
             match = '"' + q.replace('"', '""') + '"'
             try:
@@ -2346,6 +2355,21 @@ class DataLayer:
                     " ORDER BY rank LIMIT ?",
                     (match, limit),
                 ).fetchall()
+                dn = self._conn.execute(
+                    "SELECT e.id,"
+                    " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+                    " e.locator,"
+                    " substr(COALESCE(e.inline_content,''),1,80) AS snip,"
+                    " 5.0 AS rank"
+                    " FROM entries e"
+                    " WHERE e.status='active'" + _consumable("e") +
+                    "   AND instr(e.meta,'display_name')>0"
+                    "   AND json_extract(e.meta,'$.display_name') LIKE ? ESCAPE '\\'"
+                    " LIMIT ?",
+                    (like, limit),
+                ).fetchall()
+                seen = {r["id"] for r in rows}
+                rows = list(rows) + [r for r in dn if r["id"] not in seen]
                 return [SearchHit(r["id"], r["title"], r["locator"], r["snip"], r["rank"])
                         for r in rows]
             except sqlite3.OperationalError:
@@ -2371,6 +2395,8 @@ class DataLayer:
         like = f"%{self._escape_like(q)}%"
         # title 显示走 display_name 覆盖层（批次 71 追修：检索/聚合视图曾显示旧名——
         # SQL 直读 e.title 绕过 _row_to_entry）；WHERE 匹配仍按原文 title（FTS 索引同）。
+        dn_match = ("(instr(e.meta,'display_name')>0"
+                    " AND json_extract(e.meta,'$.display_name') LIKE ? ESCAPE '\\')")
         sel = ("SELECT e.id,"
                " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
                " e.locator,"
@@ -2380,8 +2406,9 @@ class DataLayer:
             " WHERE e.status='active'" + _consumable("e") +
             "   AND (e.title LIKE ? ESCAPE '\\'"
             "      OR e.native_path LIKE ? ESCAPE '\\'"
-            "      OR e.inline_content LIKE ? ESCAPE '\\') LIMIT ?",
-            (like, like, like, limit),
+            "      OR e.inline_content LIKE ? ESCAPE '\\'"
+            "      OR " + dn_match + ") LIMIT ?",
+            (like, like, like, like, limit),
         ).fetchall()
         if len(rows) < limit:
             rows += self._conn.execute(
@@ -2389,7 +2416,8 @@ class DataLayer:
                 " JOIN (SELECT content_hash FROM content_fts"
                 "        WHERE text LIKE ? ESCAPE '\\') c"
                 "   ON c.content_hash = e.content_hash"
-                " WHERE e.status='active'" + _consumable("e") + " LIMIT ?",
+                " WHERE e.status='active'" + _consumable("e") +
+                " LIMIT ?",
                 (like, limit),
             ).fetchall()
         out: list[SearchHit] = []

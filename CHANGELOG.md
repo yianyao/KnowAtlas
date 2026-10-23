@@ -2500,6 +2500,31 @@ extra_locators；auto-name 含跳过/降级剪尾/400/403）。全量 pytest 421
 purge 挂账，并入本批收尾）。UTF-8 无 BOM + LF（naming.py Write 落盘 CRLF
 转 LF——Write 工具在 Windows 的默认行为，收尾扫描必查）。
 
+### 批次 71 追修二：display_name 入检索匹配（2026-10-23）
+
+**背景**：追修一修了显示层（hits title 走覆盖层），但**匹配层**仍按原文
+title——搜用户起的新名搜不到条目。用户裁决「display_name 入 FTS 索引」。
+
+**方案定夺**：不重建 external content 表（正会 inline_content 双倍存储 +
+snippet 错乱 + 迁移成本）。落地形态：search_fts FTS 分支改 **UNION 两段**
+——FTS 段（bm25，毫秒级）+ display_name 段（instr 粗筛零 JSON 解析 +
+json_extract 精筛，rank 5.0 排后），Python 合并去重；LIKE 兜底分支 OR 上
+dn 匹配（纯普通列 OR 合法）。
+
+**踩坑记录**：首版 `WHERE entries_fts MATCH ? OR dn-LIKE` ——FTS5 的 MATCH
+不可与 OR 组合（`unable to use function MATCH in the requested context`），
+每查必抛 OperationalError 被 try/except 静默吞掉落兜底：功能碰巧全对但
+FTS 索引报废（4.9ms → 330ms，60 倍退化）。教训：**FTS5 MATCH 只能作 WHERE
+顶层约束；try/except OperationalError 静默降级会掩盖索引失效**——A/B 基线
+对比（git 旧 SQL vs 新 SQL 同连接计时）才暴露。UNION 版真库复测：display_name
+特有词 3.6ms / 原标题词 0.9ms / dn+FTS 混合 6.6ms，两字词兜底 285ms 与基线
+持平（content_fts 全扫固有）。
+
+**测试**：test_search_hits_apply_display_name 重写——display_name=「库存管理
+精华」（原标题无「库存」）钉两分支命中 + 标题显示覆盖层 + 原标题词回归。
+全量 pytest 通过（exit 0）。真库 serve 验证：搜「进销存M」命中且显示新名。
+提交 864fea0（追修一）+ 本批；按用户指令**暂不推送远程**。UTF-8 无 BOM + LF。
+
 ### 第七十二批：分类浏览集分组 + 关系图层级密度（Phase 7 批次 72，2026-10-22）
 
 **背景**：用户四问裁决（批次 71 后做 72）——①点左树分类右侧条目列表按知识集
