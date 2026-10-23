@@ -114,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     kaging.add_argument("--sweep", action="store_true",
                         help="执行删除出口清扫：冷却期满（30 天）的 rejected 条目物理删除"
                              "+ content_store 引用计数回收（审计留痕）；默认每轮 ksync 自动执行")
+    kaging.add_argument("--points", action="store_true",
+                        help="点级老化 L2（批次 93，裁决 #14）：对溯源条目被标"
+                             " suspect/stale 的点逐点复核——条目过时不连坐点，"
+                             "确证过时的点退出消费面（溯源条目保留，永不物理删除）")
 
     kerrata = sub.add_parser(
         "kerrata", help="勘误三级：--scan 跑 L1 确定性错误扫描（零费用）；"
@@ -442,7 +446,11 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
     setup_logging(cfg.log_level)
     dl = _open(cfg)
     try:
-        if args.sweep:
+        if args.points:
+            from .pipeline.aging import run_point_aging
+            stats = run_point_aging(cfg, dl, limit=max(1, args.limit),
+                                    dry_run=args.dry_run)
+        elif args.sweep:
             stats = sweep_rejections(dl, dry_run=args.dry_run)
             head = "OK 清扫报告（dry-run 未删除）" if args.dry_run else "OK 清扫完成"
             print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
@@ -450,8 +458,9 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
                 print("（审计链在 task_log：被删条目历史日志保留 + sweep_delete 留痕；"
                       "共享内容块只减计数，删到零才清正文）")
             return _EXIT_OK
-        stats = run_aging_judgment(cfg, dl, limit=max(1, args.limit),
-                                   dry_run=args.dry_run)
+        else:
+            stats = run_aging_judgment(cfg, dl, limit=max(1, args.limit),
+                                       dry_run=args.dry_run)
     finally:
         dl.close()
     if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）

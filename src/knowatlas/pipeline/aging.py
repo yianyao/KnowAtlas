@@ -23,7 +23,7 @@ from typing import Any
 
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
-from ..semantic.tasks import aging_judge
+from ..semantic.tasks import aging_judge, point_aging
 
 AGING_BATCH = 20   # 单次 LLM 调用的条目数（方案 §7.5：batch 20）
 BODY_CAP = 3000    # 送 LLM 的单条正文字符上限（控成本；截断不计数——规则信号已含日期）
@@ -119,4 +119,72 @@ def sweep_rejections(dl: Any, dry_run: bool = False) -> dict[str, Any]:
         dl.log_task(_now_iso(), "kaging", "sweep", "all",
                     {"swept": len(stats["swept"]),
                      "content_recycled": stats["content_recycled"]})
+    return stats
+
+
+# ---- 点级老化（批次 93，裁决 #14「只老化确实过时的部分点」） ----
+
+def run_point_aging(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False,
+                    llm: Any = None) -> dict[str, Any]:
+    """对「溯源条目被标 suspect/stale」且未复核过的点跑 LLM 点级复核。
+
+    候选 = 点的任一溯源条目 freshness_flag in (suspect, stale) 且点
+    aging_checked_at=''（ok 免疫复扫；keep 留观不重扫）。条目过时不连坐点：
+    LLM 只看点文本本身判定（point_aging task）；结论落点级三列（stale 退出
+    消费面 / ok 免疫 / keep 留观），永不物理删除点。
+    """
+    if llm is None:
+        llm = LlmClient.from_config(cfg)
+    if llm is None:
+        return {"skipped": "llm 未启用（[llm] enabled=false 或 key 未设）——"
+                           "点级复核是增强层，主链路不受影响"}
+    run_id = uuid.uuid4().hex[:16]
+    dl.start_run(run_id, "kaging")
+    stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
+                             "candidates": 0, "stale": 0, "ok": 0, "keep": 0,
+                             "llm_calls": 0, "errors": []}
+    try:
+        rows = dl._conn.execute(
+            "SELECT DISTINCT p.id AS point_id, p.text, "
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title, "
+            " COALESCE(json_extract(e.meta,'$.freshness_flag'), '') AS entry_flag"
+            " FROM points p"
+            " JOIN point_sources ps ON ps.point_id = p.id"
+            " JOIN entries e ON e.id = ps.entry_id"
+            " WHERE p.aging_checked_at = ''"
+            "   AND e.status = 'active'"
+            "   AND COALESCE(json_extract(e.meta,'$.freshness_flag'), '')"
+            "       IN ('suspect', 'stale')"
+            " ORDER BY p.created_at LIMIT ?",
+            (limit,),
+        ).fetchall()
+        stats["candidates"] = len(rows)
+        if not rows:
+            return stats
+        items = [{"point_id": r["point_id"], "text": r["text"],
+                  "entry_signal": f"来源《{r['title']}》被标 {r['entry_flag']}"}
+                 for r in rows]
+        res = point_aging.run(items, TaskContext(run_id=run_id, llm=llm))
+        if res.get("error"):
+            stats["errors"].append(res["error"])
+            return stats
+        stats["llm_calls"] = 1
+        verdicts = res.get("verdicts", {})
+        for it in items:
+            pid = it["point_id"]
+            v = verdicts.get(pid)
+            if v is None:
+                stats["keep"] += 1          # LLM 漏判 → 留观（只记游标）
+                if not dry_run:
+                    dl.set_point_aging(pid, "", "未获结论留观（漏判）")
+                continue
+            verdict = v["verdict"]
+            stats[verdict] = stats.get(verdict, 0) + 1
+            if not dry_run:
+                # keep 只记游标不写 flag（维持未判，信号更新后可复扫）
+                dl.set_point_aging(pid, verdict if verdict != "keep" else "",
+                                   v["reason"])
+    finally:
+        dl.finish_run(run_id, {k: v for k, v in stats.items() if k != "errors"} |
+                      {"errors": len(stats["errors"])})
     return stats

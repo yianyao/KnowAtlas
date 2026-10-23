@@ -2029,6 +2029,18 @@ class DataLayer:
     def count_points(self) -> int:
         return self._conn.execute("SELECT COUNT(*) FROM points").fetchone()[0]
 
+    def set_point_aging(self, point_id: str, flag: str, reason: str) -> None:
+        """点级老化结论落列（批次 93，裁决 #14）：stale 退出消费面 / ok 免疫复扫 /
+        keep 只记游标留观（flag 传 '' 表示维持未判）。永不物理删除点。"""
+        with self.transaction() as conn:
+            conn.execute(
+                "UPDATE points SET aging_flag=?, aging_reason=?, aging_checked_at=? "
+                "WHERE id=?",
+                (flag, reason, _now(), point_id),
+            )
+        self.log_task(_now(), "kaging", "point_verdict", point_id,
+                      {"flag": flag, "reason": reason[:200]})
+
     def list_points(self, limit: int = 200) -> list[dict[str, Any]]:
         """点列表（created_at 升序=知识形成顺序），附溯源数与最早溯源；meta 已解析。"""
         rows = self._conn.execute(
@@ -2522,6 +2534,7 @@ class DataLayer:
                     " bm25(points_fts) AS rank"
                     " FROM points_fts JOIN points p ON p.rowid = points_fts.rowid"
                     " WHERE points_fts MATCH ?"
+                    "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
                     "   AND EXISTS (SELECT 1 FROM point_sources ps"
                     "               JOIN entries e ON e.id = ps.entry_id"
                     "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
@@ -2535,6 +2548,7 @@ class DataLayer:
                 "SELECT p.id, substr(p.text,1,200) AS text, p.summary, 1.0 AS rank"
                 " FROM points p"
                 " WHERE (p.text LIKE ? ESCAPE '\\' OR p.summary LIKE ? ESCAPE '\\')"
+                "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
                 "   AND EXISTS (SELECT 1 FROM point_sources ps"
                 "               JOIN entries e ON e.id = ps.entry_id"
                 "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
@@ -2566,7 +2580,8 @@ class DataLayer:
         """单点检索视图（批次 87：点向量融合时补全向量独有点；search_points 同
         口径——溯源全不可消费的点返回 None 不露面）。"""
         r = self._conn.execute(
-            "SELECT id, substr(text,1,200) AS text, summary FROM points WHERE id=?",
+            "SELECT id, substr(text,1,200) AS text, summary FROM points"
+            " WHERE id=? AND aging_flag != 'stale'",   # 点级老化退出消费面（批次 93）
             (point_id,),
         ).fetchone()
         if r is None:

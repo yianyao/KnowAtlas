@@ -29,8 +29,9 @@ def test_builtin_specs_present(registries):
     # delta_summarize / thread_digest：线程语义压缩（第五十五批，§9.4 LLM 后置层）；
     # point_extract：知识点抽取（第六十二批，Phase 7 批次 61a，方案 §7.1）；
     # aging_judge：老化 L2 时效复核（第六十三批，Phase 7 批次 64a，方案 §7.5）；
-    # errata_check：勘误 L2 事实核查（第六十四批，Phase 7 批次 65a，方案 §7.6）
+    # errata_check：勘误 L2 事实核查（第六十四批，Phase 7 批次 65a，方案 §7.6）；
+    # point_aging：点级老化 L2（批次 93，裁决 #14 条目过时不连坐点）
     assert {"classify_coarse", "classify_deep", "tag_keywords", "topic_recall",
             "thread_suggest", "delta_summarize",
             "thread_digest", "point_extract", "aging_judge",
-            "errata_check"} == {s.name for s in semantics.specs()}
+            "errata_check", "point_aging"} == {s.name for s in semantics.specs()}

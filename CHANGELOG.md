@@ -4,10 +4,19 @@
 
 ## [0.2.0] - 2026-10-23
 
-### 变更工单 · 第九十一批：脑图站内树形浏览 + 第八十七批：点向量语义检索
+### 变更工单 · 第九十一批：脑图站内树形浏览 + 第八十七批：点向量语义检索 + 第八十八批：图聚合试点 + 第九十三批：老化点级化
 
+- **93 老化点级化**（迁移 010 `points.aging_flag/reason/checked_at`，DDL 指纹 6d27e850d44e；裁决 #14「只老化确实过时的部分点」）：
+  - point_aging task：对疑似过时点 LLM 逐点复核（输入=点文本+来源信号），结论三值 stale/ok/keep；**条目过时不连坐点**；stale 必附可核查依据，无依据自动降级 keep（防幻觉闸门，§7.6 同款）；
+  - run_point_aging 编排（`kaging --points`）：候选=溯源条目 freshness_flag∈(suspect,stale) 且点未复核过；ok 免疫复扫、keep 只记游标留观、漏判全走 keep；dry-run 支持同条目级；
+  - 消费面：aging_flag=stale 的点从 search_points/get_point_hit 退出（两路 FTS/LIKE 同条件），**溯源条目保留**（点 text 是抽取产物永不物理删除，原文永在 entries）；
+  - 测试 5 项（test_point_aging.py：三值+闸门/无 LLM/结论落列+消费退出+条目不连坐/dry-run/漏判+LLM 挂）；capabilities 指纹更新（+point_aging@1.0.0）。
 - **91 树形浏览**：emmx 整图条目（judge=integral）在预览面板渲染大纲树——`parse_tree()` 读 .emmx 重建嵌套节点树（断链按顶层、深度兜底防环、坏 ZIP/无主题 AdapterError 诚实降级）；新端点 `GET /api/entries/{id}/emmx_tree`（locator 相对路径逐 roots 探测，缺失 404/解析失败 422）；前端 `<details>` 原生折叠树 + 引导线样式；emmx:// 不再渲染假「打开原文」链接（批次 37 纪律补齐）。零写库零 LLM，纯只读解析。测试 7 项（test_emmx_tree.py）。
-- **87 点向量**（迁移 009 `point_vectors`，DDL 指纹 1eb32f0f8531）：
+- **88 图聚合试点**（方案 §9；裁决「聚合是通用规则，先试点看效果」）：
+  - pipeline/graph_topics.py：全库点向量贪心归簇（阈值 0.72，56 批同款）→ 簇 ≥2 点成「知识主题」；主题名=成员点共享词 top2（逐词验证**禁发明性命名**），无共享词退化「主题N」；落单点不聚合（宁缺毋滥）；
+  - `GET /api/graph/topics` 零费用零写库（纯查询期计算），点向量未建返回 note；graph.html 🧠 主题按钮：主题节点+成员点两级图，悬停点直显知识内容+溯源条目（_point 卡片，不 fetch 概要）；
+  - 测试 4 项（test_graph_topics.py：聚簇命名/向量不足/不可消费剔除/API 200）。
+- **87 点向量**（迁移 009 `point_vectors`，DDL 指纹 1eb32f0f8531；随 010 并入现指纹 6d27e850d44e）：
   - 表结构与 entry_vectors 同构（point_id PK、FK 级联、float32 LE BLOB、L2 归一化、model 标识）；
   - `embed_points`：增量构建点向量（一点一编码，重算覆盖；no_text/skipped 统计同 embed_entries 纪律），`ksync --embed` 同步构建条目+点两级向量；
   - `search_points_hybrid`：FTS 点命中 + 点向量余弦 → RRF 融合重排，**语义词零字面命中也能召回**（「JavaScript数组」连写分词边界、口语化提问等 FTS 盲区由向量通道承接）；向量独有点经 `get_point_hit` 补全溯源（可消费过滤同口径），`via_sim` 标记语义命中；
