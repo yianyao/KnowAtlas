@@ -1,10 +1,20 @@
-"""point_extract：知识点抽取的 LLM 层——形态判定 + 切点（方案 §7.1，批次 61a）。
+"""point_extract：知识提炼的 LLM 层——形态判定 + 提炼产出（批次 92 重写，v2）。
+
+批次 92 用户裁决（2026-10-23）：**入库=知识整理，不是切片复制**。点正文必须是
+LLM 通读全文后整理出的知识文本（合并同类、剔除寒暄/口号/导航废话、保留命令/
+代码/数字/版本号等硬信息），不是原文照抄或按段落机械切分；每点附 quote（原文
+逐字引句）作溯源锚点——链接与原文保留以溯源，但产出必须是知识。
 
 流水线（用户裁决第 3 条）：每个载体条目先判形态——
-- integral（整条即点）：方案、论证、单主题文档 → 整条一个点；
-- split（集合型切点）：参考集、多主题清单、讨论记录 → 切 2-8 个自包含点。
-判定与切点合并为**单次调用**（实现口径：两步一请求省一半费用；判定理由必落
-meta.judge_reason 供抽检——SOP §7.7 总纪律第 2 条）。
+- integral（整条即点）：方案、论证、报告、单主题完整文档 → 一个点的完整知识陈述；
+- split（集合型切点）：参考集、多主题清单、讨论记录、问答合集 → 2-8 个自包含点。
+三种入口（forced_judge 由规则管线预判，省判定 token 且判定不再可能误切）：
+- forced_judge="integral" → _INTEGRAL_REFINE_PROMPT（不判定，直接提炼单点）；
+- forced_judge="split" → _SPLIT_ONLY_PROMPT（不判定，直接提炼切点）；
+- 无 forced（杂烩目录）→ _SYSTEM_PROMPT（判定+提炼合一）。
+
+纪律（62 批教训固化）：**宁全勿碎**——相邻内容同属一个观点必须合并，按段落/
+章节/脑图节点机械切分是错误做法；点的边界=一个独立可复用的知识点。
 
 降级纪律（与 delta_summarize 同构，可独立关闭）：
 - ctx.llm 为 None（未启用 / key 未设）或条目无正文 → llm_used=false 不产出；
@@ -13,8 +23,7 @@ meta.judge_reason 供抽检——SOP §7.7 总纪律第 2 条）。
 
 签名说明（对 §4.3 SemanticProcessor 批处理签名的 documented exception）：
 输入是单条目（dict）——形态判定是条目级信号，批量会混淆理由归属；输出判定
-+点列表。能力描述以 CapabilitySpec 的 input/output contract 为准
-（canary 覆盖 name@version）。
++点列表。能力描述以 CapabilitySpec 的 input/output contract 为准。
 """
 
 from __future__ import annotations
@@ -27,52 +36,85 @@ from ..base import TaskContext
 
 SPEC = CapabilitySpec(
     name="point_extract",
-    input_contract={"item": "dict（entry_id/title/source_type/body）"},
+    input_contract={"item": "dict（entry_id/title/source_type/body/forced_judge?）"},
     output_contract={"judge": "integral|split", "reason": "一句话判定理由",
-                     "summary": "整条一句话摘要", "points": "list[{text, summary}]",
+                     "summary": "整条一句话摘要",
+                     "points": "list[{text, summary, quote?}]",
                      "llm_used": "bool", "error": "str（可空）"},
-    version="1.0.0",
-    description="知识点抽取：先判 integral（整条即点）/split（集合型切点）再切点，"
-                "判定理由随产出落 meta 抽检；llm 不可用静默降级（原文永在）",
+    version="2.0.0",
+    description="知识提炼（批次 92，裁决 12：入库=知识整理不是切片）：通读全文"
+                "归纳为整理后的知识点，quote 留原文锚点；llm 不可用静默降级",
 )
 
 _MAX_POINTS = 8  # split 切点硬上限（防 LLM 失控刷点）
 
+_REFINE_RULES = (
+    "提炼规则（用户裁决 2026-10-23：入库=知识整理，产出必须是知识）：\n"
+    "- **全部用简体中文输出**（用户裁决补充 2026-10-23：中文优先）——原文为英文等"
+    "外语时译写为中文整理；命令/代码/API 名/版本号/专有名词/书名保留原文不译；\n"
+    "- text 必须是**整理后的知识文本**：通读归纳后用整理过的语言重写——合并同类"
+    "信息、剔除寒暄/口号/导航句/广告/重复表述；命令/代码/数字/版本号/结论等"
+    "硬信息原样保留；\n"
+    "- 相邻内容同属一个观点时必须合并——宁全勿碎，按段落/章节机械切分是错误做法；"
+    "同一知识只产出一个点，不得在不同点里重复；\n"
+    "- 每点带 quote：从原文逐字摘引一句能定位该点的原句（≤60 字），供溯源定位。"
+)
+
 _SYSTEM_PROMPT = (
-    "你是个人知识库的知识点抽取助手。给定一个知识条目（标题+正文），先做形态判定，"
-    "再按形态产出知识点。\n"
+    "你是个人知识库的知识提炼助手。给定一个知识条目（标题+正文），先通读全文"
+    "理解内容，再做形态判定，最后产出整理后的知识——不是复制原文。\n"
     "形态定义：\n"
-    "- integral（整条即点）：方案、论证、报告、单主题完整文档——内容是一个不可拆的"
-    "整体观点/方案，拆开会失真；\n"
-    "- split（集合型切点）：参考集、多主题清单、讨论记录、问答合集——包含多个各自"
-    "独立、可单独复用的知识点。\n"
+    "- integral（整条即点）：方案、论证、报告、单主题完整文档——内容围绕一个"
+    "主题/方案展开，拆开会支离破碎；\n"
+    "- split（集合型切点）：参考集、多主题清单、讨论记录、问答合集——包含多个"
+    "各自独立、可单独复用的知识点。\n"
     "规则：\n"
     '1. 只输出 JSON 对象：{"judge":"integral"或"split","reason":"一句话判定理由",'
-    '"summary":"整条一句话摘要","points":[{"text":"点正文","summary":"一句话摘要"}]}。\n'
-    "2. judge=integral 时 points 只给一个元素：text=结构化压缩正文（保留关键结论/"
-    "步骤/数据/命令，≤800 字），不是逐字复制。\n"
+    '"summary":"整条一句话摘要","points":[{"text":"整理后的知识文本",'
+    '"summary":"一句话摘要","quote":"原文逐字引句"}]}。\n'
+    "2. judge=integral 时 points 只给一个元素：该主题的完整知识陈述（≤800 字，"
+    "保留原文结构脉络：背景→方案→关键决策→结论），绝不逐字照抄。\n"
     "3. judge=split 时 points 给 2-8 个点：每个点自包含（脱离原文可独立阅读，"
-    "补齐必要主语与背景），text≤500 字；保留原文的命令/代码/数字/版本号等硬信息；"
-    "寒暄、导航句、跨点重复内容丢弃。\n"
-    "4. 点的边界=一个独立可复用的知识点；拿不准切不切时倾向切出并各给足背景。\n"
+    "补齐必要主语与背景），text≤500 字。\n"
+    "4. " + _REFINE_RULES + "\n"
     "5. 不要输出 JSON 以外的任何文字。"
 )
 
-# forced split 模式（2026-10-22 用户口径）：形态已由确定性规则判定（文学创作类
-# =知识点集合），LLM 只做切点不做判定——省判定 token，且判定不再可能误切。
+# forced split（2026-10-22 用户口径）：形态已由确定性规则判定（文学创作类
+# =知识点集合），LLM 只做提炼切点不做判定——省判定 token，且判定不再可能误切。
 _SPLIT_ONLY_PROMPT = (
-    "你是个人知识库的知识点抽取助手。给定一个知识条目（标题+正文），它已确定为"
-    "多知识点集合型文档（用户裁决），直接切分知识点。\n"
+    "你是个人知识库的知识提炼助手。给定一个知识条目（标题+正文），它已确定为"
+    "多知识点集合型文档（用户裁决），通读全文后提炼知识点——不是按段落复制。\n"
     "规则：\n"
     '1. 只输出 JSON 对象：{"summary":"整条一句话摘要",'
-    '"points":[{"text":"点正文","summary":"一句话摘要"}]}。\n'
-    "2. 切 2-8 个点：每个点自包含（脱离原文可独立阅读，补齐必要主语与背景），"
-    "text≤500 字；保留原文的命令/代码/数字/版本号等硬信息；寒暄、导航句、"
-    "跨点重复内容丢弃。\n"
-    "3. 不要输出 JSON 以外的任何文字。"
+    '"points":[{"text":"整理后的知识文本","summary":"一句话摘要",'
+    '"quote":"原文逐字引句"}]}。\n'
+    "2. 切 2-8 个点：每个点 = 一个独立可复用的知识点，自包含（脱离原文可独立"
+    "阅读，补齐必要主语与背景），text≤500 字。\n"
+    "3. " + _REFINE_RULES + "\n"
+    "4. 不要输出 JSON 以外的任何文字。"
+)
+
+# forced integral（批次 92）：形态已由规则/用户覆盖判定，LLM 只做整条提炼。
+_INTEGRAL_REFINE_PROMPT = (
+    "你是个人知识库的知识提炼助手。给定一个条目（标题+正文），它已确定为整体型"
+    "文档（方案/论证/单主题，整条即一个知识点），通读全文后产出**整理后的知识"
+    "陈述**——不是复制或压缩原文。\n"
+    "规则：\n"
+    '1. 只输出 JSON 对象：{"summary":"整条一句话摘要","points":[{"text":'
+    '"整理后的知识陈述","summary":"一句话摘要","quote":"原文核心句逐字引句"}]}，'
+    "points 恰好一个元素。\n"
+    "2. text = 该主题的完整知识陈述（≤800 字）：保留结构脉络（背景→方案→关键"
+    "决策→结论），合并重复、剔除寒暄与废话；命令/代码/数字/版本号等硬信息原样"
+    "保留；用整理后的语言重写，不逐字照抄；全部用简体中文输出（外语原文译写为"
+    "中文，代码/命令/专有名词保留原文）。\n"
+    "3. quote 从原文逐字摘引一句核心句（≤60 字）。\n"
+    "4. 不要输出 JSON 以外的任何文字。"
 )
 
 _FORCED_SPLIT_REASON = "用户口径 2026-10-22：文学创作类=知识点集合（规则判定，非 LLM）"
+_FORCED_INTEGRAL_REASON = ("用户口径 2026-10-23：整体型文档整条即点（规则判定/覆盖），"
+                           "LLM 提炼为整理后的知识陈述")
 
 
 def _user_prompt(item: dict[str, Any], body: str) -> str:
@@ -85,23 +127,29 @@ def _user_prompt(item: dict[str, Any], body: str) -> str:
 def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
     """返回 {"judge","reason","summary","points","llm_used"}（失败带 error）。
 
-    points 恒为 list[{text, summary}]：integral 归一为单元素列表，调用方无需分支。
-    forced_judge="split"（item 键，2026-10-22 用户口径）：跳过 LLM 判定直接切点，
-    judge 固定 split、reason 固定口径理由——形态已由规则判定，LLM 只切点。
+    points 恒为 list[{text, summary, quote?}]：integral 归一为单元素列表，调用方
+    无需分支。forced_judge（item 键）："split"/"integral" 跳过 LLM 判定直接提炼，
+    judge 与 reason 固定口径理由——形态已由规则判定；缺省走判定+提炼合一。
     """
     empty = {"judge": "", "reason": "", "summary": "", "points": [], "llm_used": False}
     body = str(item.get("body") or "").strip()
     if ctx.llm is None or not body:
         return empty
-    forced = item.get("forced_judge") == "split"
-    prompt = _SPLIT_ONLY_PROMPT if forced else _SYSTEM_PROMPT
+    forced = str(item.get("forced_judge") or "").strip().lower()
+    if forced == "split":
+        prompt = _SPLIT_ONLY_PROMPT
+    elif forced == "integral":
+        prompt = _INTEGRAL_REFINE_PROMPT
+    else:
+        prompt = _SYSTEM_PROMPT
     try:
         obj = extract_json_object(ctx.llm.chat(prompt,
                                                _user_prompt(item, body)))
     except LlmError as exc:
         return {**empty, "error": str(exc)}
-    if forced:
-        judge, reason = "split", _FORCED_SPLIT_REASON
+    if forced in ("split", "integral"):
+        judge = forced
+        reason = _FORCED_SPLIT_REASON if forced == "split" else _FORCED_INTEGRAL_REASON
     else:
         judge = str(obj.get("judge", "")).strip()
         if judge not in ("integral", "split"):
@@ -118,7 +166,8 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
         if not text:
             continue
         points.append({"text": text,
-                       "summary": str(p.get("summary", "")).strip()})
+                       "summary": str(p.get("summary", "")).strip(),
+                       "quote": str(p.get("quote", "")).strip()})
     if not points:
         return {**empty, "error": "LLM 返回的点全部为空"}
     return {"judge": judge,

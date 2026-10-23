@@ -1123,14 +1123,16 @@ async function doWorkbench(q) {
   const map = new Map();
   for (const h of (fts.hits || []))
     map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
-                          snippet: h.snippet || "", channels: ["fts"] });
+                          snippet: h.snippet || "", via: h.via || "",
+                          channels: ["fts"] });
   for (const h of (hyb.hits || [])) {
     const sims = (h.reasons || []).filter(r => r.startsWith("sim:"));
     if (!sims.length) continue;              // 纯 fts 命中第一路已有
     const ex = map.get(h.entry_id);
     if (ex) { for (const s of sims) if (!ex.channels.includes(s)) ex.channels.push(s); }
     else map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
-                               snippet: h.snippet || "", channels: sims });
+                               snippet: h.snippet || "", via: "",
+                               channels: sims });
   }
   for (const h of (rec.hits || [])) {
     const ex = map.get(h.entry_id);
@@ -1368,8 +1370,10 @@ async function drillBucket(key) {
 function entryCard(e) {
   // 第七十五批：检索结果标题同样进右侧预览面板（class/data-id 与分类卡一致）；
   // ⌘/Ctrl+点击标题仍在新标签打开原文（bindEntryButtons 里保留修饰键直通）。
+  // 批次 92（裁决 #13）：条目区从点反查为主——via=point 的条目带徽标注明来源。
   return `<div class="entry" data-id="${e.id}"><div class="entry-main">`
     + `<a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
+    + (e.via === "point" ? `<span class="badge" title="由命中知识点的溯源反查得到（非全文直击）">◆ 点反查</span>` : "")
     + e.channels.map(ch => `<span class="badge" title="关联解释：${ch.replace(/"/g, "&quot;")}">${chLabel(ch)}</span>`).join("")
     + `<button class="wb-focus-btn" data-id="${e.id}" title="以该条目为焦点进入放射视图">🎯 放射</button>`
     + `</div>`

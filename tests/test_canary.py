@@ -21,7 +21,7 @@ CANARY: dict[str, str] = {
     "schemes": "40123837bf71",
     "entry_fields": "1a9d42828612",
     "config_keys": "e672d0a323eb",
-    "capabilities": "a5755f57d4f2",
+    "capabilities": "2ce6baa5f0c0",
 }
 
 

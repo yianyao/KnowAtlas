@@ -114,3 +114,73 @@ def test_bad_url_rejected_without_request(cfg, monkeypatch):
     with pytest.raises(FetchError, match="http/https"):
         http_deepseek.fetch_page("ftp://x.example/f", ctx)
     assert http.calls == []
+
+
+# ---- 批次 92：GitHub raw 重写 + 骨架检测（裁决 12：抓来的必须是知识） ----
+
+def test_github_blob_rewrites_to_raw():
+    from knowatlas.fetchers.base import github_raw_url
+    assert github_raw_url(
+        "https://github.com/user/repo/blob/main/README.md"
+    ) == "https://raw.githubusercontent.com/user/repo/main/README.md"
+    assert github_raw_url(
+        "https://www.github.com/u/r/raw/dev/docs/a.md"
+    ) == "https://raw.githubusercontent.com/u/r/dev/docs/a.md"
+    # 非 blob/raw 页不重写（仓库首页/issues 无对应 raw 资源）
+    assert github_raw_url("https://github.com/user/repo") == "https://github.com/user/repo"
+    assert github_raw_url("https://github.com/user/repo/issues/1").startswith(
+        "https://github.com/")
+
+
+def test_is_skeleton_body_thresholds():
+    from knowatlas.fetchers.base import is_skeleton_body
+    chrome = ["Skip to content", "Sign in", "Notifications", "Fork", "Star",
+              "Pull requests", "Issues", "Actions", "Projects", "Wiki"]
+    assert is_skeleton_body("\n".join(chrome))
+    assert not is_skeleton_body("\n".join(chrome[:7]))          # 行数不足不判
+    body = "\n".join(f"这是正常的正文段落第{i}行，内容充实。" for i in range(12))
+    assert not is_skeleton_body(body)                            # 正文零命中
+    # 单行兜底（readability 压行）：短语密度 ≥8 且 ≤80 字符/命中
+    wall = "Skip to content Sign in Notifications Fork Star Pull requests " \
+           "Issues Actions Projects Wiki"
+    assert is_skeleton_body(wall)
+    assert not is_skeleton_body("GitHub 教程：fork 与 star 的区别。" * 10)  # 密度不够不判
+
+
+def test_http_simple_raw_direct_text(cfg):
+    """raw.githubusercontent.com 直链：纯文本直取（不经 readability、不骨架检测）。"""
+    from knowatlas.fetchers import http_simple
+    md = "# README\n\n" + "知识内容段落。" * 40
+
+    class RawResp:
+        status_code = 200
+        text = md
+
+    class RawHttp:
+        def get(self, *a, **k):
+            return RawResp()
+
+    text, title = http_simple.fetch_page(
+        "https://raw.githubusercontent.com/u/r/main/README.md",
+        SimpleNamespace(config=cfg, datalayer=None, http=RawHttp(), run_id="t"))
+    assert text == md and title == "README"
+
+
+def test_http_simple_skeleton_upgrades(cfg):
+    """提取结果为按钮墙 → 骨架检测判失败 → 抛 FetchError 触发升级路由重抓。"""
+    from knowatlas.fetchers import http_simple
+    wall = "Skip to content Sign in Notifications Fork Star Pull requests " \
+           "Issues Actions Projects Wiki " + "x" * 200  # 过 min_content_chars
+
+    class SkelResp:
+        status_code = 200
+        text = f"<html><body><p>{wall}</p></body></html>"
+
+    class SkelHttp:
+        def get(self, *a, **k):
+            return SkelResp()
+
+    with pytest.raises(FetchError, match="骨架"):
+        http_simple.fetch_page("https://github.com/u/r/blob/main/README/",
+                               SimpleNamespace(config=cfg, datalayer=None,
+                                               http=SkelHttp(), run_id="t"))

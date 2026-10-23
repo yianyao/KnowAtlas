@@ -7,8 +7,17 @@
 扩散线索 = 种子页内链接中与种子**同目录**（同 scheme+host+父目录路径）者。整站
 同 host 链接不收——导航/推荐噪音会演变成全站爬取，违背「显式触发、小步扩充」。
 
+GitHub 仓库树扩散（批次 92 补充裁决 2026-10-23：链接要探「真正的知识」——收藏
+仓库根，知识常在子目录如 /tree/main/cn-book）：种子为仓库根或 /tree/<分支>/<目录>
+页时，候选 = 页内 (blob|tree)/<分支>/ 链接中位于种子目录范围内者；tree 子目录
+再下钻一层取其文件（BFS ≤2 层、树页 ≤10 页、候选仍受 --expand-limit 封顶）；
+blob 是确定性文件页（非门户/列表），**跳过 L0 价值守卫**；抓取走
+fetch_with_fallback（blob→raw 直链重写，批次 92），locator 保留 blob 原链
+（与用户书签一致、canonical 去重不受影响）。
+
 候选过滤链（顺序固定）：canonical 化去锚 → 排除种子自身 → 未入库
-（find_by_canonical / find_by_locator）→ L0 价值守卫（judge_value 放行）→ limit 截断。
+（find_by_canonical / find_by_locator）→ L0 价值守卫（judge_value 放行，
+GitHub 文件页豁免）→ limit 截断。
 命中的候选逐条 fetch_with_fallback 抓正文入库：source_type="expand"
 （bookmark 会被书签源 full 同步 archive_missing 归档；manual 语义不准），
 meta 记 seed_entry_id + expand_reason（关联解释），照常走 classify_coarse 分类。
@@ -34,6 +43,11 @@ from .kadd import ensure_category_path
 
 _USER_AGENT = "KnowAtlas/0.1 (+personal knowledge indexer)"
 _HREF_RE = re.compile(r"""href\s*=\s*["']([^"'#]+)["']""", re.IGNORECASE)
+_GH_REPO = re.compile(
+    r"^https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)((?:/[^/]+)*?))?/?$")
+_GH_FILE_LINK = re.compile(
+    r"^https?://github\.com/([^/]+)/([^/]+)/(blob|tree)/([^/]+)/(.+)$")
+_GH_MAX_TREE_PAGES = 10  # 树页下钻上限（防大仓库失控抓取；候选另有 limit 封顶）
 
 
 def _now() -> str:
@@ -73,6 +87,87 @@ def _candidate_links(seed_url: str, html: str) -> list[str]:
     return out
 
 
+def _github_scope(seed_url: str) -> tuple[str, str, str, str] | None:
+    """GitHub 仓库/目录种子 → (owner, repo, 分支|'', 目录|'')；非仓库页 None。
+
+    仓库根：branch/目录均空（任意分支任意位置）；/tree/main/cn-book：只收
+    main 分支 cn-book 范围内。issues/pull 等页不匹配（无 /tree 且路径多段）。
+    """
+    m = _GH_REPO.match(seed_url)
+    if not m or m.group(1).lower() in ("orgs", "topics", "features", "about",
+                                       "pricing", "settings", "notifications"):
+        return None
+    return (m.group(1), m.group(2), m.group(3) or "", (m.group(4) or "").strip("/"))
+
+
+def _gh_in_scope(scope_dir: str, rest: str) -> bool:
+    """rest（blob/tree 路径）是否在种子目录范围内。"""
+    if not scope_dir:
+        return True
+    return rest == scope_dir or rest.startswith(scope_dir + "/")
+
+
+def _github_collect(seed_url: str, seed_html: str, client: Any, cfg: Any,
+                    cap: int) -> list[str]:
+    """GitHub 仓库树扩散候选：页内 blob 链接收集 + tree 子目录下钻（BFS ≤2 层）。
+
+    seed_html 复用 expand_seed 已抓的种子页（不重复请求）；树页再逐个抓取
+    （失败静默跳过——扩散是非关键增强，不因单个树页失败中止），页数受
+    _GH_MAX_TREE_PAGES 封顶。返回 blob URL 列表（保序去重，≤cap）。
+    """
+    scope = _github_scope(seed_url)
+    assert scope is not None
+    _, _, seed_branch, scope_dir = scope
+    blobs: list[str] = []
+    seen: set[str] = set()
+    tree_queue: list[tuple[str, str, int]] = [(seed_url, seed_html, 0)]
+    tree_seen: set[str] = {seed_url}
+    pages = 0
+    while tree_queue and len(blobs) < cap and pages < _GH_MAX_TREE_PAGES:
+        url, html, depth = tree_queue.pop(0)
+        pages += 1
+        for raw in _HREF_RE.findall(html):
+            joined = urljoin(url, raw.strip())
+            fm = _GH_FILE_LINK.match(joined)
+            if not fm or fm.group(1).lower() != scope[0].lower() \
+                    or fm.group(2).lower() != scope[1].lower():
+                continue
+            branch, rest = fm.group(4), fm.group(5).strip("/")
+            if seed_branch and branch != seed_branch:
+                continue
+            if not _gh_in_scope(scope_dir, rest):
+                continue
+            if fm.group(3) == "blob":
+                if joined not in seen:
+                    seen.add(joined)
+                    blobs.append(joined)
+                    if len(blobs) >= cap:
+                        break
+            else:  # tree 子目录：下钻一层取其文件（depth ≤2 防深递归）
+                if depth + 1 <= 2 and joined not in tree_seen:
+                    tree_seen.add(joined)
+                    try:
+                        resp = client.get(
+                            joined, follow_redirects=True,
+                            timeout=float(cfg.get("fetch.timeout_seconds", 20)),
+                            headers={"User-Agent": _USER_AGENT})
+                    except Exception:
+                        continue
+                    if resp.status_code < 400:
+                        tree_queue.append((joined, resp.text, depth + 1))
+    return blobs[:cap]
+
+
+def _gh_blob_dir(blob_url: str) -> str:
+    """blob 链接 → 仓库内目录路径（owner/repo/目录），作 native_path 溯源。"""
+    m = _GH_FILE_LINK.match(blob_url)
+    if not m:
+        return ""
+    rest = m.group(5).strip("/")
+    dir_in_repo = rest.rsplit("/", 1)[0] if "/" in rest else ""
+    return f"{m.group(1)}/{m.group(2)}/{dir_in_repo}".rstrip("/")
+
+
 def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                 seed_entry_id: str, limit: int = 20) -> dict[str, Any]:
     """对单个种子条目做一轮同目录扩散。返回统计 dict。"""
@@ -109,8 +204,18 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                     hint="种子页可能已失效；可先跑 kcheck 体检")
             from ..semantic.value_guard import judge_value
 
+            gh_scope = _github_scope(seed.locator)
+            if gh_scope is not None:
+                # GitHub 仓库树扩散（批次 92）：候选=blob 文件页（确定性知识文件，
+                # 跳过 L0 守卫），locator 保留 blob 原链，native_path 记仓库目录
+                link_pool = [(link, True) for link in _github_collect(
+                    seed.locator, resp.text, client, cfg, cap=max(60, limit * 3))]
+            else:
+                link_pool = [(link, False)
+                             for link in _candidate_links(seed.locator, resp.text)]
+
             candidates: list[str] = []
-            for link in _candidate_links(seed.locator, resp.text):
+            for link, is_gh_file in link_pool:
                 c = canonical_url(link)
                 if c == canon_seed:
                     stats["already_known"] += 1                 # 种子自身
@@ -120,10 +225,11 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                         or dl.find_by_locator(link):
                     stats["already_known"] += 1                 # 已入库（canonical 去重）
                     continue
-                reason = judge_value(link)
-                if reason is not None:
-                    stats["blocked_by_guard"] += 1              # L0：门户/列表/资源页
-                    continue
+                if not is_gh_file:                              # L0 守卫（gh 文件页豁免）
+                    reason = judge_value(link)
+                    if reason is not None:
+                        stats["blocked_by_guard"] += 1          # L0：门户/列表/资源页
+                        continue
                 candidates.append(link)
                 if len(candidates) >= max(1, int(limit)):
                     break
@@ -138,6 +244,7 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                                 {"error": str(exc)[:160], "run_id": run_id})
                     continue
                 c = canonical_url(link)
+                is_gh = gh_scope is not None
                 entry = Entry.build(
                     source_type="expand",
                     source_key=f"expand:{seed_entry_id}:{c}",
@@ -147,9 +254,11 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                     inline_content=text[:4000]
                     + ("…[截断，全文在 content_store]" if len(text) > 4000 else ""),
                     content_hash=content_hash(text),
-                    native_path=_parent_dir(seed.locator)[1],
+                    native_path=_gh_blob_dir(link) if is_gh
+                    else _parent_dir(seed.locator)[1],
                     meta={"source_type": "expand", "seed_entry_id": seed_entry_id,
-                          "expand_reason": "series_same_dir"},
+                          "expand_reason": "github_repo_tree" if is_gh
+                          else "series_same_dir"},
                     created_at=_now(),
                 )
                 dl.upsert_entries([entry])

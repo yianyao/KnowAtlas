@@ -1,9 +1,10 @@
-"""知识点抽取测试（0.2.0 第六十二批 61a；第六十六批改规则判定——用户口径）。
+"""知识点抽取测试（0.2.0 第六十二批 61a；第六十六批改规则判定——用户口径；
+第九十二批提炼式重写——裁决「入库=知识整理，不是切片」）。
 
-用户口径（2026-10-22）：分类路径含「文学创作」= 知识点集合（split，LLM 只切点），
-其余全部 = 方案（integral，整条即点零 LLM）。覆盖：规则判定（祖先链含锚词命中）、
-forced split 切点-only prompt、规范化 hash 去重、一点多溯源、幂等重跑、
-LLM 未启用（integral 照产/split 记 error）、故障不阻塞、dry-run、purge_points。
+覆盖：规则判定（祖先链含锚词命中）、forced split/integral 提炼 prompt、
+integral LLM 整条提炼（零 LLM 降级照抄保真）、骨架守门（body_flag=skeleton
+跳过切片）、规范化 hash 去重、一点多溯源、幂等重跑、LLM 未启用（integral
+照抄/split 记 error）、故障不阻塞、dry-run、purge_points。
 """
 
 from __future__ import annotations
@@ -44,6 +45,14 @@ _INTEGRAL_REPLY = (
     '"summary":"一套 SQLite 慢查询排查方案",'
     '"points":[{"text":"SQLite 慢查询排查：先 EXPLAIN QUERY PLAN 看计划，'
     '再补统计信息 ANALYZE。","summary":"SQLite 慢查询排查两步"}]}\n```'
+)
+# forced integral 提炼响应（批次 92）：无 judge 字段——形态已规则判定，
+# LLM 只做整条提炼（quote=原文逐字引句，供溯源锚点）
+_INTEGRAL_REFINE_REPLY = (
+    '{"summary":"一套 SQLite 慢查询排查知识",'
+    '"points":[{"text":"SQLite 慢查询排查：先用 EXPLAIN QUERY PLAN 看执行计划，'
+    '定位全表扫描后 ANALYZE 补统计信息。","summary":"SQLite 慢查询排查两步",'
+    '"quote":"先 EXPLAIN QUERY PLAN 看计划"}]}'
 )
 # forced split 响应：切点-only（无 judge/reason 字段——形态已规则判定）
 _SPLIT_ONLY_REPLY = (
@@ -190,8 +199,8 @@ def test_point_extract_degrades_without_llm_and_body():
     assert res2["llm_used"] is False
 
 
-def test_point_extract_integral_wraps_single_point():
-    """integral 归一为单元素 points；判定理由/摘要透传（LLM 判定备用路径）。"""
+def test_point_extract_integral_judge_path():
+    """未 forced（杂烩目录用）：判定+提炼合一——integral 归一为单元素 points。"""
     llm = FakeLlm([_INTEGRAL_REPLY])
     res = point_extract.run({"source_type": "emmx", "title": "方案", "body": "正文"
                              * 30}, TaskContext(run_id="r1", llm=llm))
@@ -200,6 +209,21 @@ def test_point_extract_integral_wraps_single_point():
     assert "SQLite" in res["points"][0]["text"]
     assert res["reason"] == "单主题方案文档，整体不可拆"
     assert "方案" in llm.calls[0]  # 标题进提示词
+
+
+def test_point_extract_forced_integral_refines():
+    """forced integral（批次 92）：跳过判定直接整条提炼——judge 固定 integral、
+    quote 透传（溯源锚点=原文逐字引句）。"""
+    llm = FakeLlm([_INTEGRAL_REFINE_REPLY])
+    res = point_extract.run({"body": "方案正文先 EXPLAIN QUERY PLAN 看计划。" * 10,
+                             "forced_judge": "integral"},
+                            TaskContext(run_id="r1", llm=llm))
+    assert res["llm_used"] is True
+    assert res["judge"] == "integral"
+    assert "整条即点" in res["reason"]
+    assert len(res["points"]) == 1
+    assert res["points"][0]["quote"] == "先 EXPLAIN QUERY PLAN 看计划"
+    assert "形态判定" not in llm.calls[0]   # 提炼-only prompt（无判定指令）
 
 
 def test_point_extract_forced_split_skips_judgment():
@@ -232,18 +256,22 @@ def test_point_extract_split_and_garbage_and_broken():
 
 # ---- 流水线：规则判定（用户口径）----
 
-def test_pipeline_rule_integral_zero_llm(cfg, dl):
-    """无分类条目 → integral（用户口径：剩下的全是方案），整条即点零 LLM 调用。"""
-    _seed_entries(dl, 1, body="一套完整的 SQLite 慢查询排查方案，" + "细节 " * 60)
-    llm = FakeLlm([])  # 任何 LLM 调用都会抛「多余调用」→ integral 必须零调用
+def test_pipeline_integral_refined_via_llm(cfg, dl):
+    """无分类条目 → integral（用户口径：剩下的全是方案），LLM 整条提炼（批次 92
+    裁决：概要/全文照抄 → 整理后的知识陈述），理由落 meta 可抽检。"""
+    _seed_entries(dl, 1, body="一套完整的 SQLite 慢查询排查方案，"
+                              "先 EXPLAIN QUERY PLAN 看计划。细节 " * 8)
+    llm = FakeLlm([_INTEGRAL_REFINE_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
     assert stats["processed"] == 1 and stats["integral"] == 1 and stats["split"] == 0
     assert stats["points_created"] == 1 and dl.count_points() == 1
-    assert len(llm.calls) == 0                        # 零 LLM 费用
+    assert len(llm.calls) == 1 and "形态判定" not in llm.calls[0]  # 提炼-only
     p = dl.list_points()[0]
     assert p["judge"] == "integral" and p["source_count"] == 1
-    assert "用户口径" in p["meta"]["judge_reason"]    # 口径理由落 meta 可抽检
-    assert "排查方案" in p["text"]                    # 整条正文即点
+    assert "整条即点" in p["meta"]["judge_reason"]
+    assert "EXPLAIN" in p["text"]                     # 提炼后的知识文本非照抄
+    src = dl.point_sources_of(p["id"])[0]
+    assert src.get("anchor")                          # quote 锚点随溯源落库
 
 
 def test_pipeline_rule_split_by_category_path(cfg, dl):
@@ -292,9 +320,9 @@ def test_pipeline_dedup_across_entries_one_point_multi_source(cfg, dl):
 
 
 def test_pipeline_rerun_is_idempotent(cfg, dl):
-    """重跑：已抽条目跳过（游标），零新调用零新点（integral 零 LLM 也一样跳）。"""
+    """重跑：已抽条目跳过（游标），零新调用零新点。"""
     _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
-    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
     llm2 = FakeLlm([])  # 任何多余调用都会抛「多余调用」→ 若不跳过必红
     stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2)
     assert stats2["processed"] == 0 and stats2["points_total"] == 1
@@ -315,15 +343,17 @@ def test_pipeline_llm_failure_recorded_not_blocking(cfg, dl):
 
 def test_pipeline_dry_run_writes_nothing(cfg, dl):
     _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
-    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), dry_run=True)
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]),
+                               dry_run=True)
     assert stats["dry_run"] is True and stats["points_created"] == 1
     assert "points_total" not in stats
     assert dl.count_points() == 0                    # 未写库
     assert dl.point_source_entry_ids() == set()      # 游标未推进（重跑可真写）
 
 
-def test_pipeline_truncates_long_body_for_split(cfg, dl):
-    """split 长正文截断送 LLM（_BODY_CAP 6000）；integral 长文不截断（保真优先）。"""
+def test_pipeline_truncates_long_body_for_llm(cfg, dl):
+    """送 LLM 的长正文截断（_BODY_CAP 6000，split/integral 同口径控费用）；
+    integral 零 LLM 降级才全文保真（_POINT_BODY_CAP 20000）。"""
     from knowatlas.models import FetchResult
 
     long_text = "长" * 9000
@@ -339,17 +369,24 @@ def test_pipeline_truncates_long_body_for_split(cfg, dl):
     assert stats["body_truncated"] == 1
     assert len(llm.calls[0]) < 9000                  # 提示词远小于原文
 
-    # integral 长文：点 text=全文（≤20000 不截断）；正文同样走 content_store
+    # integral 长文走 LLM 提炼（截 6000 送 LLM）
     dl.put_content(FetchResult(text="方案" * 4500, content_hash="pt-long-0002",
                                fetcher="test", fetched_at="2026-10-22T00:00:00+08:00"))
     e2 = Entry.build(source_type="folder", source_key="pt:long2:0", title="长方案",
                      locator="file:///d/long2.md", inline_content=None,
                      content_hash="pt-long-0002", meta={"source_type": "folder"})
     dl.upsert_entries([e2])
-    stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
-    assert stats2["body_truncated"] == 0
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
+    assert stats2["body_truncated"] == 1
     pt = [p for p in dl.list_points() if p["judge"] == "integral"][0]
-    assert len(pt["text"]) == 9000 and pt["text"].endswith("方案")
+    assert "EXPLAIN" in pt["text"]                   # 提炼产物非全文照抄
+
+    # 零 LLM 降级（entry_ids 直取重抽，绕游标）：照抄保真全文（≤20000 不截断）
+    stats3 = run_points_extract(cfg, dl, limit=5, entry_ids=[e2.id])
+    assert stats3["processed"] == 1 and stats3["body_truncated"] == 0
+    p3 = [p for p in dl.list_points()
+          if p["text"].startswith("方案")][0]
+    assert len(p3["text"]) == 9000 and p3["text"].endswith("方案")
 
 
 # ---- 流水线：目录信号三路（批次 67，用户粗规则）----
@@ -363,7 +400,7 @@ def test_mixed_dir_hint_word_routes_to_llm_judge(cfg, dl):
     assert stats["mixed_dir"] == 3          # 三条全走 LLM 判定
     assert stats["integral"] == 3           # LLM 判回 integral（宁整勿碎偏置）
     assert len(llm.calls) == 3
-    assert "先做形态判定" in llm.calls[0]    # 判定+切点合一 prompt（非 forced 切点）
+    assert "再做形态判定" in llm.calls[0]    # 判定+提炼合一 prompt（非 forced）
 
 
 def test_mixed_dir_code_suffixes_route_to_llm(cfg, dl):
@@ -377,18 +414,19 @@ def test_mixed_dir_code_suffixes_route_to_llm(cfg, dl):
 
 
 def test_office_suffix_mix_not_mixed(cfg, dl):
-    """办公后缀混杂（docx/xlsx/pdf）≠ 杂烩：同项目工作流，仍零 LLM integral。"""
+    """办公后缀混杂（docx/xlsx/pdf）≠ 杂烩：同项目工作流，仍 integral 提炼（不判定）。"""
     [_folder(dl, "Data/百卓/PECOS", f"方案{i}", sfx)
      for i, sfx in enumerate([".docx", ".xlsx", ".pdf"])]
-    llm = FakeLlm([])
+    llm = FakeLlm([_INTEGRAL_REFINE_REPLY] * 3)
     stats = run_points_extract(cfg, dl, limit=10, llm=llm)
     assert stats["mixed_dir"] == 0
     assert stats["integral"] == 3
-    assert llm.calls == []                  # 零 LLM（真实库教训：PECOS 79 条方案防误伤）
+    assert len(llm.calls) == 3 and all("形态判定" not in c for c in llm.calls)
+    # （真实库教训：PECOS 79 条方案防误伤——只整条提炼，不进判定）
 
 
 def test_emmx_and_manual_immune_to_dir_rule(cfg, dl):
-    """目录规则只作用于 folder 源：emmx（自有判定缓存）/manual（无目录信号）免疫。"""
+    """目录规则只作用于 folder 源：emmx（自有判定缓存口径）/manual（无目录信号）免疫。"""
     _folder(dl, "Data/测试/其他", "脑图", ".emmx")   # emmx 在杂烩目录 → 不参与
     batch = uuid.uuid4().hex[:6]
     m = Entry.build(source_type="manual", source_key=f"pt:mm:{batch}",
@@ -396,27 +434,27 @@ def test_emmx_and_manual_immune_to_dir_rule(cfg, dl):
                     inline_content="手动正文内容足够长，超过最短门槛要求。" * 4,
                     meta={"source_type": "manual"})
     dl.upsert_entries([m])
-    llm = FakeLlm([])
+    llm = FakeLlm([_INTEGRAL_REFINE_REPLY] * 2)  # 两条都 integral 提炼（不判定）
     stats = run_points_extract(cfg, dl, limit=10, llm=llm)
     assert stats["mixed_dir"] == 0
-    assert llm.calls == []
+    assert len(llm.calls) == 2 and all("形态判定" not in c for c in llm.calls)
 
 
 # ---- 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则 ----
 
 def test_force_form_integral_overrides_split_rule(cfg, dl):
-    """文学创作条目 force_form=integral → 强制整条一点（零 LLM），理由带覆盖标注。"""
+    """文学创作条目 force_form=integral → 强制整条即一点（LLM 整条提炼），理由带口径标注。"""
     es = _seed_entries(dl, 1, body="小说写法讨论：视角与节奏。示例 " * 8)
     _attach_lit(dl, es)
     dl.merge_meta(es[0].id, {"force_form": "integral"})
-    llm = FakeLlm([])  # 任何 LLM 调用都抛「多余调用」→ 覆盖必须零调用
+    llm = FakeLlm([_INTEGRAL_REFINE_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
     assert stats["integral"] == 1 and stats["split"] == 0
     assert stats["force_overrides"] == 1
-    assert llm.calls == []
+    assert len(llm.calls) == 1 and "形态判定" not in llm.calls[0]
     p = dl.list_points()[0]
     assert p["judge"] == "integral"
-    assert "强制覆盖" in p["meta"]["judge_reason"]
+    assert "整条即点" in p["meta"]["judge_reason"]
 
 
 def test_force_form_split_overrides_integral_rule(cfg, dl):
@@ -434,15 +472,17 @@ def test_force_form_split_overrides_integral_rule(cfg, dl):
 def test_entry_ids_rerun_bypasses_cursor(cfg, dl):
     """entry_ids 指定重抽（批次 70 端点配套）：跳过游标重处理；全量跑仍幂等。"""
     es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
-    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
     # 指定重抽：游标已记该条目，但仍处理（调用方配套 purge_entry_points）
-    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), entry_ids=[es[0].id])
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]),
+                               entry_ids=[es[0].id])
     assert stats["processed"] == 1
     assert stats["points_created"] == 0 and dl.count_points() == 1
     # 同文点 hash 相同 → 幂等归并（created=0，不重复建点）
     # 全量跑不受影响：游标仍在，跳过
     stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]))
-    assert stats2["processed"] == 0 and stats2["skip_counts"]["already_done"] == 1
+    assert stats2["processed"] == 0 and stats2["points_total"] == 1
+    assert stats2["skip_counts"]["already_done"] == 1
 
 
 def test_purge_entry_points_keeps_shared_drops_orphan(cfg, dl):
@@ -463,3 +503,40 @@ def test_purge_entry_points_keeps_shared_drops_orphan(cfg, dl):
     assert dl.point_source_entry_ids() == set()
     # 不存在的条目：0，不报错
     assert dl.purge_entry_points("nonexistent0000", reason="test") == 0
+
+
+# ---- 骨架守门（批次 92 裁决 12：抓来的必须是知识不是页面骨架） ----
+
+def _skeleton_body() -> str:
+    return "\n".join(["Skip to content", "Sign in", "Notifications", "Fork",
+                      "Star", "Pull requests", "Issues", "Actions", "Projects",
+                      "Wiki", "Security", "Insights", "© 2026 All rights reserved"])
+
+
+def test_pipeline_skeleton_body_skipped_and_marked(cfg, dl):
+    """骨架正文不切片：meta.body_flag=skeleton 打标（degraded 等重抓/人工裁决），
+    零点零游标零 LLM 调用——守门在提炼之前，宁缺毋脏。"""
+    es = _seed_entries(dl, 1, body=_skeleton_body())
+    llm = FakeLlm([])  # 任何 LLM 调用都会抛「多余调用」→ 守门必须前置
+    stats = run_points_extract(cfg, dl, limit=5, llm=llm)
+    assert stats["skeleton"] == 1 and stats["processed"] == 0
+    assert stats["points_created"] == 0 and dl.count_points() == 0
+    assert dl.point_source_entry_ids() == set()
+    assert len(llm.calls) == 0
+    assert dl.get_entry(es[0].id).meta["body_flag"] == "skeleton"
+
+
+def test_pipeline_skeleton_dry_run_no_meta_write(cfg, dl):
+    """dry-run：骨架条目计数但不写 body_flag（与不落点同一纪律）。"""
+    es = _seed_entries(dl, 1, body=_skeleton_body())
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), dry_run=True)
+    assert stats["skeleton"] == 1
+    assert "body_flag" not in dl.get_entry(es[0].id).meta
+
+
+def test_normal_body_not_skeleton_flagged(cfg, dl):
+    """正常正文零误伤：无骨架标，照常提炼。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
+    assert "body_flag" not in dl.get_entry(es[0].id).meta
+    assert dl.count_points() == 1

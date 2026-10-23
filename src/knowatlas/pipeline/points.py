@@ -1,27 +1,33 @@
 """知识点抽取流水线（方案 §7.1，0.2.0 第六十二批，Phase 7 批次 61a；
-2026-10-22 用户口径改规则判定——批次 66；目录信号三路规则——批次 67）。
+2026-10-22 用户口径改规则判定——批次 66；目录信号三路规则——批次 67；
+2026-10-23 提炼式重写——批次 92，裁决「入库=知识整理，不是切片」）。
 
-链路：候选条目（active、有正文、未抽过）→ **形态判定=三路确定性规则**：
-- 文学创作类（分类祖先链含锚词）→ forced split：LLM 只切点不判定；
+链路：候选条目（active、有正文、未抽过）→ **骨架守门**（批次 92：页面骨架
+正文 merge_meta body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏）
+→ **形态判定=三路确定性规则**：
+- 文学创作类（分类祖先链含锚词）→ forced split：LLM 只提炼切点不判定；
 - 杂烩目录（目录信号粗规则，批次 67 用户口径：项目内文档≈方案、杂烩≈知识点）
   → 走 LLM 形态判定（宁整勿碎偏置，judge 可 integral 可 split）；
-- 其余 = 方案 integral，整条即点**零 LLM 费用**。
-→ split 走 point_extract（forced split 切点-only prompt）→ 规范化 hash 去重
+- 其余 = 方案 integral → LLM 整条提炼（批次 92：概要/全文照抄 → 整理后的
+  知识陈述；LLM 未启用才降级照抄保真）。
+→ split 走 point_extract（forced split 提炼切点 prompt）→ 规范化 hash 去重
 （点正文 去零宽/压空白/casefold 后 sha1）→ put_point 落库（content_hash 命中
-即合并为一点多溯源——溯源数=可信度信号）。
+即合并为一点多溯源——溯源数=可信度信号）；每点溯源锚点=quote（LLM 逐字摘引
+的原文原句，批次 92）——链接与原文保留以溯源，但产出必须是知识。
 
 口径依据（用户裁决原话）：「基本可以肯定：所有脑图，和文学创作相关的肯定都是
 知识点，剩下的，全是方案」；目录规则（批次 67 输入）：「在某个项目内的文档，
 多半就是方案，其他的多数是知识点（同一目录底下有若干内容相差颇大的文件……
 这个判断很粗疏）」——杂烩信号必须保守（错误成本不对称：误切=灾难），见
-_mixed_dir_entry_ids。
+_mixed_dir_entry_ids。批次 92 裁决（2026-10-23）：「得到的，必须是知识」——
+点正文=LLM 通读整理后的知识文本，非原文照抄、非机械按段落/节点切分。
 
 纪律：
 - 幂等：已产出过溯源指针的条目自动跳过（point_source_entry_ids 游标），
   LLM 失败条目下次重跑自然补抽；
-- 降级：LLM 未启用 → integral 照产（零费用），split/杂烩条目记 error 跳过；
-  单条失败记 error 继续下一条，绝不阻塞；
-- 原文永不动：点 text 是抽取产物，条目与 content_store 零写入。
+- 降级：LLM 未启用 → integral 照抄保真（零费用，meta 注明未经提炼），
+  split/杂烩条目记 error 跳过；单条失败记 error 继续下一条，绝不阻塞；
+- 原文永不动：点 text 是提炼产物，条目与 content_store 零写入。
 """
 
 from __future__ import annotations
@@ -33,6 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ..fetchers.base import is_skeleton_body
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
 from ..semantic.tasks import point_extract
@@ -177,10 +184,10 @@ def _mixed_dir_entry_ids(dl: Any) -> set[str]:
 
 
 def _integral_result(e: Any, body: str, reason: str | None = None) -> dict[str, Any]:
-    """integral（零 LLM）：整条即点，text=正文截断保真，summary=标题。"""
+    """integral 降级路径（批次 92：LLM 未启用才走）：整条即点照抄保真，meta 注明。"""
     text = body if len(body) <= _POINT_BODY_CAP else body[:_POINT_BODY_CAP] + "…[截断]"
     return {"judge": "integral",
-            "reason": reason or "用户口径 2026-10-22：非文学创作=方案整条即点（规则判定，零 LLM）",
+            "reason": reason or "LLM 未启用：整条即点照抄保真（批次 92 提炼口径的降级路径）",
             "summary": str(e.title or "")[:120],
             "points": [{"text": text, "summary": str(e.title or "")[:120]}],
             "llm_used": False}
@@ -202,7 +209,7 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     dl.start_run(run_id, "kpoints")
     stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
                              "processed": 0, "integral": 0, "split": 0,
-                             "mixed_dir": 0, "force_overrides": 0,
+                             "mixed_dir": 0, "force_overrides": 0, "skeleton": 0,
                              "points_created": 0, "points_linked": 0,
                              "body_truncated": 0, "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
@@ -215,17 +222,20 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
         mixed_ids = _mixed_dir_entry_ids(dl)
         for e in cand:
             body = _entry_body(dl, e)
+            # 骨架守门（批次 92 裁决 12「抓来的必须是知识」）：页面骨架正文
+            # 不切片——degraded 打标等待重抓/人工裁决，宁缺毋脏（dry-run 不写）。
+            if is_skeleton_body(body):
+                if not dry_run:
+                    dl.merge_meta(e.id, {"body_flag": "skeleton"})
+                stats["skeleton"] += 1
+                continue
             # 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则——
-            # "integral" 强制合（文学创作/杂烩也整条即点，零 LLM）；
-            # "split" 强制拆（非文学创作也走 LLM 切点）；无/auto → 回归规则。
+            # "integral" 强制合（文学创作/杂烩也整条即点）；"split" 强制拆
+            # （非文学创作也走 LLM 切点）；无/auto → 回归规则。
             force = str(e.meta.get("force_form", "")).strip().lower()
-            if force == "integral":
-                stats["force_overrides"] += 1
-                if len(body) > _POINT_BODY_CAP:
-                    stats["body_truncated"] += 1
-                res = _integral_result(
-                    e, body, reason="用户强制覆盖 meta.force_form=integral（整条即点）")
-            elif force == "split" or e.id in split_ids:
+            is_split = force == "split" or (not force and e.id in split_ids)
+            is_mixed = not force and e.id in mixed_ids
+            if is_split:
                 stats["force_overrides"] += 1 if force == "split" else 0
                 if llm is None:
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
@@ -243,9 +253,9 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": res.get("error", "llm 未产出")})
                     continue
-            elif e.id in mixed_ids:
+            elif is_mixed:
                 # 杂烩目录（批次 67 目录信号）：走 LLM 形态判定（宁整勿碎偏置，
-                # judge 可 integral 可 split）——只取消零 LLM 豁免，不 forced split
+                # judge 可 integral 可 split）——只取消 forced 豁免，不 forced split
                 stats["mixed_dir"] += 1
                 if llm is None:
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
@@ -262,8 +272,24 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": res.get("error", "llm 未产出")})
                     continue
+            elif llm is not None:
+                # integral 提炼（批次 92 裁决 12：概要/全文照抄 → LLM 整理后的
+                # 知识陈述；截断 _BODY_CAP 控费用）
+                stats["force_overrides"] += 1 if force == "integral" else 0
+                if len(body) > _BODY_CAP:
+                    body = body[:_BODY_CAP]
+                    stats["body_truncated"] += 1
+                res = point_extract.run(
+                    {"entry_id": e.id, "title": e.title,
+                     "source_type": e.source_type, "body": body,
+                     "forced_judge": "integral"},
+                    TaskContext(run_id=run_id, llm=llm))
+                if not res.get("llm_used"):
+                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
+                                            "error": res.get("error", "llm 未产出")})
+                    continue
             else:
-                # integral：零 LLM（用户口径「剩下的全是方案」，整条即点）
+                # 降级：LLM 未启用 → 照抄保真（原文零风险；理由注明未经提炼）
                 if len(body) > _POINT_BODY_CAP:
                     stats["body_truncated"] += 1
                 res = _integral_result(e, body)
@@ -273,13 +299,17 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                 ph = point_hash(p["text"])
                 if not normalize_point_text(p["text"]):
                     continue  # 防御：规范化后为空的点不落库
+                # 溯源锚点（批次 92）：quote=LLM 逐字摘引的原文原句，定位精度
+                # 优于提炼文本（提炼文本在原文中找不到——改写是本职）
+                quote = str(p.get("quote") or "").strip()
+                anchor_src = quote or p["text"]
                 point = {"content_hash": ph, "text": p["text"],
                          "summary": p.get("summary", ""),
                          "source_type": e.source_type, "judge": res["judge"],
                          "meta": {"judge_reason": res.get("reason", "")}}
                 source = {"entry_id": e.id,
-                          "char_offset": _offset_of(p["text"], body),
-                          "anchor": p["text"][:80]}
+                          "char_offset": _offset_of(anchor_src[:50], body),
+                          "anchor": anchor_src[:120]}
                 if dry_run:
                     if ph in dry_seen:
                         stats["points_linked"] += 1

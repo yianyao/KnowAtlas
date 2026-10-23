@@ -1384,11 +1384,34 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/search")
     def search(q: str = "", mode: str = "fts"):
-        def _points_payload():
-            # 知识点主通道（批次 86）：点卡片在前端聚合页顶部，条目降为溯源
-            return [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
-                     "sources": p.sources, "rank": p.rank}
-                    for p in dl.search_points(q)]
+        # 知识点主通道（批次 86）+ 条目区从点反查（批次 92，裁决 #13：搜概念
+        # 词应出该概念论述点非全文概要；条目区=命中点的溯源条目去重为主 +
+        # 标题/路径直击保留——词越精确条目越少，正文级全文命中不再单独出条目卡）
+        pts = [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
+                "sources": p.sources, "rank": p.rank}
+               for p in dl.search_points(q)]
+
+        def _hits_from_points_then_direct() -> list[dict]:
+            hits: list[dict] = []
+            seen: set[str] = set()
+            for p in pts:
+                for s in p["sources"]:
+                    eid = s["entry_id"]
+                    if eid in seen:
+                        continue
+                    seen.add(eid)
+                    hits.append({"entry_id": eid, "title": s["title"],
+                                 "locator": s["locator"], "snippet": "",
+                                 "via": "point"})
+            for h in dl.search_entries_direct(q):
+                if h.entry_id in seen:
+                    continue
+                seen.add(h.entry_id)
+                hits.append({"entry_id": h.entry_id, "title": h.title,
+                             "locator": h.locator, "snippet": h.snippet,
+                             "via": "title"})
+            return hits
+
         if mode == "hybrid":
             # 混合检索（第五十六批，M4）：FTS + 向量余弦 RRF 融合，reasons 可解释；
             # embedder 未启用（配置关/依赖缺）→ 降级 fts + note（探针钉住）
@@ -1397,23 +1420,27 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
             result = hybrid_search(dl, embedder_from_config(cfg), q)
             if result is not None:
-                result["points"] = _points_payload()
+                result["points"] = pts
+                # 批次 92：条目区与 fts 同口径（点反查+直击为主），hybrid 的
+                # sim reasons 挂回对应条目（前端通道合并），语义独有条目殿后
+                by_id = {h["entry_id"]: h for h in result.get("hits", [])}
+                merged = _hits_from_points_then_direct()
+                for h in merged:
+                    src = by_id.get(h["entry_id"])
+                    if src:
+                        h["reasons"] = src.get("reasons", [])
+                merged_ids = {m["entry_id"] for m in merged}
+                merged += [h for h in result.get("hits", [])
+                           if h["entry_id"] not in merged_ids]
+                result["hits"] = merged
                 return result
-            hits = dl.search_fts(q)
             return {"mode": mode, "effective_mode": "fts", "note":
                     "hybrid 依赖向量索引（ksync --embed，需 [embedding] enabled"
                     " + requirements-optional），本次已降级 fts",
-                    "points": _points_payload(),
-                    "hits": [
-                        {"entry_id": h.entry_id, "title": h.title,
-                         "locator": h.locator, "snippet": h.snippet,
-                         "rank": h.rank} for h in hits]}
-        hits = dl.search_fts(q)
-        return {"mode": mode, "effective_mode": "fts", "points": _points_payload(),
-                "hits": [
-                    {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
-                     "snippet": h.snippet, "rank": h.rank} for h in hits
-                ]}
+                    "points": pts,
+                    "hits": _hits_from_points_then_direct()}
+        return {"mode": mode, "effective_mode": "fts", "points": pts,
+                "hits": _hits_from_points_then_direct()}
 
     @app.get("/api/sets/group")
     def sets_group(ids: str = ""):

@@ -407,11 +407,14 @@ def client(cfg, dl, registries, monkeypatch):
 
 def test_search_hybrid_endpoint_degrades_without_embedder(client, cfg, dl):
     es = _seed(dl, 1)
-    r = client.get("/api/search", params={"q": "正文", "mode": "hybrid"})
+    # 批次 92（裁决 #13）：fts 条目区=点反查+标题直击，正文级命中不再出条目卡——
+    # 降级路径用标题直击验证条目区仍可用
+    r = client.get("/api/search", params={"q": "条目1", "mode": "hybrid"})
     assert r.status_code == 200
     body = r.json()
     assert body["effective_mode"] == "fts" and "note" in body
-    assert any(h["entry_id"] == es[0].id for h in body["hits"])
+    assert any(h["entry_id"] == es[0].id and h["via"] == "title"
+               for h in body["hits"])
 
 
 def test_search_hybrid_endpoint_with_embedder(cfg, dl, registries, monkeypatch):

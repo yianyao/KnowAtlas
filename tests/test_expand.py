@@ -1,4 +1,5 @@
-"""书签扩散抓取测试（0.2.0 第四十批）：同目录系列提取、L0 拦截、canonical 去重、上限。"""
+"""书签扩散抓取测试（0.2.0 第四十批）：同目录系列提取、L0 拦截、canonical 去重、上限；
+第九十二批：GitHub 仓库树扩散（blob 文件页豁免 L0、tree 子目录下钻、raw 直链抓取）。"""
 
 from __future__ import annotations
 
@@ -8,7 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from knowatlas.models import Entry
-from knowatlas.pipeline.expand import expand_seed
+from knowatlas.pipeline import expand as expand_mod
+from knowatlas.pipeline.expand import _gh_blob_dir, _gh_in_scope, _github_scope, expand_seed
 
 PAGES = {
     "/series/01.html": ("<h1>系列文章一：入门</h1>" + "<p>本系列讲消息队列的入门概念与实战，从零搭一个可用队列。" * 10
@@ -116,3 +118,122 @@ def test_expand_rejects_non_http_seed(cfg, dl, registries):
     dl.upsert_entries([e])
     with pytest.raises(Exception, match="http"):
         expand_seed(cfg, dl, locators, semantics, e.id)
+
+
+# ---- 批次 92：GitHub 仓库树扩散（裁决补充：链接要探「真正的知识」） ----
+
+def test_github_scope_parsing():
+    assert _github_scope("https://github.com/u/r") == ("u", "r", "", "")
+    assert _github_scope("https://github.com/u/r/") == ("u", "r", "", "")
+    assert _github_scope("https://github.com/u/r/tree/main/cn-book") == \
+        ("u", "r", "main", "cn-book")
+    assert _github_scope("https://github.com/u/r/tree/dev/a/b") == \
+        ("u", "r", "dev", "a/b")
+    # 非 tree 多段路径（issues/pull）→ None（回落同目录规则）
+    assert _github_scope("https://github.com/u/r/issues/1") is None
+    assert _github_scope("https://github.com/u/r/pull/9") is None
+    # 站内特殊段不是仓库名
+    assert _github_scope("https://github.com/topics/ai") is None
+
+
+def test_gh_scope_dir_and_blob_dir():
+    assert _gh_in_scope("", "cn-book/README.md")
+    assert _gh_in_scope("cn-book", "cn-book/README.md")
+    assert _gh_in_scope("cn-book", "cn-book")
+    assert not _gh_in_scope("cn-book", "other/x.md")
+    assert _gh_blob_dir(
+        "https://github.com/u/r/blob/main/cn-book/ch/1.md") == "u/r/cn-book/ch"
+    assert _gh_blob_dir("https://github.com/u/r/blob/main/README.md") == "u/r"
+
+
+_GH_ROOT = ('<a href="/u/r/blob/main/cn-book/README.md">说明</a>'
+            '<a href="/u/r/tree/main/cn-book">书稿目录</a>'
+            '<a href="/u/r/blob/main/LICENSE">许可</a>'
+            '<a href="/u/r/issues/1">issue</a>'
+            '<a href="/u/r/blob/dev/other.md">异分支</a>')
+_GH_SUBDIR = ('<a href="/u/r/blob/main/cn-book/ch1.md">第一章</a>'
+              '<a href="/u/r/blob/main/cn-book/ch2.md">第二章</a>')
+_GH_RAW = {  # blob → raw 直链内容（≥ min_content_chars）
+    "cn-book/README.md": "# AI Agents 实战（中文版）\n\n" + "本书讲解智能体架构设计，覆盖规划、工具调用与记忆机制。" * 12,
+    "LICENSE": "MIT License\n\n" + "版权所有，允许自由使用、修改与分发，须保留版权声明。" * 12,
+    "cn-book/ch1.md": "# 第一章 智能体基础\n\n" + "智能体是能感知环境并采取行动的系统，核心循环为规划-执行-反思。" * 12,
+    "cn-book/ch2.md": "# 第二章 工具调用\n\n" + "工具调用让模型突破纯文本限制，通过函数签名与 JSON 约束完成结构化输出。" * 12,
+}
+
+
+class _FakeGHClient:
+    """模拟 github.com（tree 页 HTML）与 raw.githubusercontent.com（纯文本）。"""
+
+    def __init__(self):
+        self.calls: list[str] = []
+
+    def get(self, url, **k):
+        self.calls.append(url)
+        return _FakeResp(url)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class _FakeResp:
+    def __init__(self, url: str):
+        if "raw.githubusercontent.com" in url:
+            rel = url.split("main/", 1)[1]
+            self.status_code = 200 if rel in _GH_RAW else 404
+            self.text = _GH_RAW.get(rel, "")
+        elif url.rstrip("/") == "https://github.com/u/r/tree/main/cn-book":
+            self.status_code = 200
+            self.text = _GH_SUBDIR
+        elif url.rstrip("/") == "https://github.com/u/r":
+            self.status_code = 200
+            self.text = _GH_ROOT
+        else:
+            self.status_code = 404
+            self.text = ""
+
+
+def _gh_seed(dl) -> Entry:
+    e = Entry.build(source_type="bookmark", source_key="edge:9002",
+                    title="AI Agents 实战（中文版）",
+                    locator="https://github.com/u/r",
+                    locator_canonical="https://github.com/u/r",
+                    meta={"source_type": "bookmark", "browser": "edge"})
+    dl.upsert_entries([e])
+    return e
+
+
+def test_expand_github_repo_tree(cfg, dl, registries, monkeypatch):
+    """仓库根种子：blob 候选跨 tree 子目录下钻（BFS ≤2 层）、异分支/issue 排除、
+    blob 豁免 L0、locator 保留 blob 原链、native_path 记仓库目录。"""
+    locators, semantics = registries
+    monkeypatch.setattr(expand_mod.httpx, "Client", _FakeGHClient)
+    seed = _gh_seed(dl)
+    stats = expand_seed(cfg, dl, locators, semantics, seed.id)
+    entries = {e.locator: e for e in _expand_entries(dl)}
+    assert stats["created"] == 4                      # README/LICENSE/ch1/ch2
+    assert len(entries) == 4
+    assert all("/blob/" in loc for loc in entries)    # locator=blob 原链（与书签一致）
+    readme = entries["https://github.com/u/r/blob/main/cn-book/README.md"]
+    assert readme.meta["expand_reason"] == "github_repo_tree"
+    assert readme.meta["seed_entry_id"] == seed.id
+    assert readme.native_path == "u/r/cn-book"        # 仓库目录溯源
+    ch1 = entries["https://github.com/u/r/blob/main/cn-book/ch1.md"]
+    assert ch1.native_path == "u/r/cn-book"
+    # raw 直链正文进 content_store（blob→raw 重写链路）
+    assert "智能体" in dl.get_content(readme.content_hash)
+    # 异分支/issue 不入候选
+    assert not any("dev/" in loc or "issues" in loc for loc in entries)
+
+
+def test_expand_github_idempotent(cfg, dl, registries, monkeypatch):
+    """重复扩散：canonical 去重零新建（blob 原链 canonical 命中）。"""
+    locators, semantics = registries
+    monkeypatch.setattr(expand_mod.httpx, "Client", _FakeGHClient)
+    seed = _gh_seed(dl)
+    assert expand_seed(cfg, dl, locators, semantics, seed.id)["created"] == 4
+    second = expand_seed(cfg, dl, locators, semantics, seed.id)
+    assert second["created"] == 0 and second["already_known"] >= 4
+    assert len(_expand_entries(dl)) == 4

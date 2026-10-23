@@ -2,6 +2,31 @@
 
 格式参考 Keep a Changelog。本项目纪律（K3 定稿）：变更工单自 2026-10-19 起不再新增文件，一律追加进本文件。
 
+## [0.2.0] - 2026-10-23
+
+### 变更工单 · 第九十二批：知识整理管线（裁决 12「入库=知识整理，不是切片」）
+
+- **背景与裁决**（2026-10-23 用户原话）：「对于书签收藏或手动录入的外部链接……要提取其知识，可能还包含其目录内其他兄弟页面的知识，而不是提一个链接，或一个骨架，要来何用？……链接地址（或原文内容）允许保留并且应该保留以溯源，但得到的，必须是知识」「入库之前，需要先做知识整理」。GitHub README 抓成页面骨架（Notifications/Fork/Star 按钮墙）与 JS 数组脑图 15 个 API 节点碎切均为此裁决的病灶。
+- **① 抓取层正文清洗**（fetchers/base.py + http_simple.py）：
+  - `github_raw_url`：github.com blob/raw 页面 → raw.githubusercontent.com 直链重写（readability 对 blob 页必提取按钮墙，raw 直链是纯文本、免费且精确；fetch_with_fallback 两后端共用）；
+  - http_simple 对 raw 直链纯文本直取（不经 readability——markdown/代码是知识本体，readability 只会破坏它），title 取 URL 末段文件名；
+  - `is_skeleton_body` 骨架检测双模式：行级（≥8 行且骨架行 ≥8 且占比 ≥60%，中英导航词全行匹配）+ 短语级兜底（readability text_content 压行时：<1500 字符、互异英文导航短语 ≥8、句读 <2）；提取结果判骨架 → 抛 FetchError → 升级 DeepSeek Fetch 重抓（误判零数据损失）。
+- **② 提炼式切片**（semantic/tasks/point_extract.py v2.0.0 + pipeline/points.py）：
+  - point_extract 重写为「知识提炼」：LLM 通读全文，输出整理后的知识文本（合并同类、剔除寒暄/口号/导航废话、硬信息原样保留），**不是原文照抄、不是按段落/章节/节点机械切分**；每点附 quote（原文逐字引句 ≤60 字）作溯源锚点——链接与原文保留以溯源，但产出必须是知识；
+  - 三路 prompt：判定+提炼合一（杂烩目录）/ forced split 提炼-only（文学创作规则判定）/ forced integral 整条提炼-only（方案类——概要/全文照抄升级为 LLM 整理后的知识陈述）；宁全勿碎纪律写死 prompt（2-8 点上限，相邻同类必须合并）；
+  - pipeline 骨架守门：正文判骨架 → merge_meta body_flag=skeleton 跳过切片（degraded 不切片、不游标、可清标重抽，宁缺毋脏）；
+  - integral 降级路径（LLM 未启用才走）：照抄保真，理由注明未经提炼。
+- **③ 条目精度联动**（datalayer/db.py + web/api.py + static/index.html，裁决 #13 检索漏斗）：
+  - 新增 `search_entries_direct`：只匹配 title/display_name/native_path（正文级命中由点层承接）；
+  - /api/search 条目区重构：**命中点的溯源条目去重（via=point）为主** + 标题/路径直击（via=title）保留；正文级全文命中不再单独出条目卡——词越精确条目越少，搜概念词出该概念论述点而非全文概要；
+  - 前端条目卡加「◆ 点反查」徽标（via=point 的条目标明来自点溯源反查）。
+- **契约**：point_extract 1.x → 2.0.0（input/output contract 重定义），canary capabilities 相应更新。
+- **测试**：test_points.py 提炼式重写（forced integral 提炼、骨架守门 4 项、杂烩/办公后缀/emmx 免疫断言迁移、截断口径、幂等、purge）；test_fetch_deepseek.py 增 github raw 重写/骨架阈值/raw 直取/骨架升级 4 项；test_embed.py 降级路径断言改 via=title。
+- **补充裁决三点（2026-10-23 用户追加）**：
+  1. **书签要探「真正的知识」**（例：收藏仓库根 `…/ai-agents-in-action-2nd-edition-cn`，知识在 `/tree/main/cn-book` 子目录）→ expand.py 新增 **GitHub 仓库树扩散**：种子为仓库根或 `/tree/<分支>/<目录>` 页时，候选=页内 blob 文件链接（同仓库、同分支、种子目录范围内；tree 子目录下钻一层，BFS ≤2 层、树页 ≤10 页、候选受 limit 封顶）；blob 是确定性文件页**豁免 L0 价值守卫**；抓取走 blob→raw 直链重写链路；locator 保留 blob 原链（与书签一致），native_path 记 `owner/repo/目录` 溯源，meta.expand_reason=github_repo_tree；canonical 去重幂等（test_expand.py 新增 5 项：scope 解析、范围/目录纯函数、仓库树扩散集成、幂等）；
+  2. **中文优先** → 提炼 prompt 全路（判定合一/forced split/forced integral）写死：**全部用简体中文输出**，外语原文译写为中文整理，命令/代码/API 名/版本号/专有名词保留原文；
+  3. **注意去重** → 三层既有：入库 canonical 去重（find_by_canonical/find_by_locator，扩散重复跑零新建）、点层 content_hash 规范化去重（同观点一点多溯源）、提炼 prompt 显式「同一知识只产出一个点，不得在不同点里重复」。
+
 ## [0.1.0] - 2026-10-19
 
 ### 定稿

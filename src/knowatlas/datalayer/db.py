@@ -2433,6 +2433,32 @@ class DataLayer:
                 break
         return out
 
+    def search_entries_direct(self, q: str, limit: int = 20) -> list[SearchHit]:
+        """条目标题/路径直击（批次 92，裁决 #13：条目区=命中点溯源反查为主，
+        直击为补充）。
+
+        只匹配 title / display_name 覆盖层 / native_path——正文级命中由点层
+        承接（词越精确条目越少；全文命中不再单独出条目卡，经点卡溯源 chips
+        反查条目）。rank 固定 0.5 排在点反查条目之后。
+        """
+        like = f"%{self._escape_like(q)}%"
+        dn = ("(instr(e.meta,'display_name')>0"
+              " AND json_extract(e.meta,'$.display_name') LIKE ? ESCAPE '\\')")
+        rows = self._conn.execute(
+            "SELECT e.id,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+            " e.locator,"
+            " substr(COALESCE(e.inline_content,''),1,80) AS snip, 0.5 AS rank"
+            " FROM entries e"
+            " WHERE e.status='active'" + _consumable("e") +
+            "   AND (e.title LIKE ? ESCAPE '\\'"
+            "      OR e.native_path LIKE ? ESCAPE '\\'"
+            "      OR " + dn + ") LIMIT ?",
+            (like, like, like, limit),
+        ).fetchall()
+        return [SearchHit(r["id"], r["title"], r["locator"], r["snip"], r["rank"])
+                for r in rows]
+
     def search_points(self, query: str, limit: int = 20) -> list[PointHit]:
         """知识点检索（批次 86：点升格为检索主体）。
 
