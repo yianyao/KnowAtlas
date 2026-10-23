@@ -693,6 +693,35 @@ function _escHtml(s) {
   return String(s).replace(/[&<>"]/g,
     c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
+// 释疑按钮绑定（批次 90 共享：条目视图 pt-item + 检索结果 point-hit 两处渲染面）。
+// innerHTML 重建后按钮失效——每次渲染后重新调用；data-bound 防重。
+function _bindExplainBtns() {
+  document.querySelectorAll(".pt-explain:not([data-bound])").forEach(btn => {
+    btn.dataset.bound = "1";
+    btn.onclick = async () => {
+      const box = btn.closest(".pt-item, .point-hit").querySelector(".pt-explain-box");
+      if (!box.hidden) { box.hidden = true; return; }   // 再点收起
+      box.hidden = false;
+      if (box.dataset.loaded === "1") return;
+      box.textContent = "释疑中…（LLM 生成，几秒）";
+      try {
+        const r = await fetch(`/api/points/${btn.dataset.pid}/explain`,
+                              {method: "POST", headers: {"Content-Type": "application/json"}});
+        const d = await r.json();
+        if (!r.ok) {
+          box.textContent = `释疑失败：${(d.error && d.error.message) || r.status}`;
+          return;
+        }
+        box.innerHTML = `<div class="pe-line">💬 ${_escHtml(d.explanation)}</div>`
+          + (d.examples ? `<div class="pe-line pe-ex">例：${_escHtml(d.examples)}</div>` : "")
+          + (d.cached ? `<small style="opacity:.5">（缓存）</small>` : "");
+        box.dataset.loaded = "1";
+      } catch (err) {
+        box.textContent = "释疑失败：网络错误";
+      }
+    };
+  });
+}
 let _ptChipsToken = 0;  // 令牌+幂等守卫（同 attachCatChips 徽标竞态教训）
 async function attachPointChips() {
   const divs = [...document.querySelectorAll(
@@ -730,33 +759,8 @@ async function attachPointChips() {
       t.textContent = `◆ ${t.textContent.match(/\d+/)?.[0] || ""} 点 ${list.hidden ? "▸" : "▾"}`;
     };
   });
-  // 释疑按钮（批次 90）：缓存命中（p.explain 透出）直接渲染；否则 POST 换取。
-  // 按钮点击走事件委托挂在 pt-block 外层不安全（innerHTML 重建）——逐按钮绑定。
-  document.querySelectorAll(".pt-explain:not([data-bound])").forEach(btn => {
-    btn.dataset.bound = "1";
-    btn.onclick = async () => {
-      const box = btn.closest(".pt-item").querySelector(".pt-explain-box");
-      if (!box.hidden) { box.hidden = true; return; }   // 再点收起
-      box.hidden = false;
-      if (box.dataset.loaded === "1") return;
-      box.textContent = "释疑中…（LLM 生成，几秒）";
-      try {
-        const r = await fetch(`/api/points/${btn.dataset.pid}/explain`,
-                              {method: "POST", headers: {"Content-Type": "application/json"}});
-        const d = await r.json();
-        if (!r.ok) {
-          box.textContent = `释疑失败：${(d.error && d.error.message) || r.status}`;
-          return;
-        }
-        box.innerHTML = `<div class="pe-line">💬 ${_escHtml(d.explanation)}</div>`
-          + (d.examples ? `<div class="pe-line pe-ex">例：${_escHtml(d.examples)}</div>` : "")
-          + (d.cached ? `<small style="opacity:.5">（缓存）</small>` : "");
-        box.dataset.loaded = "1";
-      } catch (err) {
-        box.textContent = "释疑失败：网络错误";
-      }
-    };
-  });
+  // 释疑按钮（批次 90）：绑定共享化（检索结果点卡同款，_bindExplainBtns）。
+  _bindExplainBtns();
 }
 // ---- ④一键合并/拆开（批次 67）：emmx 形态人工裁决——判定缓存即裁决入口。
 // 整图条目（#map）给「⧉切分」；节点条目（#page/N）给「◫整图」；降级条目
@@ -1469,12 +1473,14 @@ function renderAggTab() {
     for (const p of wb.points) {
       html += `<div class="entry point-hit"><div class="entry-main">`
         + `<span class="badge">◆ 知识点</span>`
+        + (p.point_id ? `<button class="pt-explain" data-pid="${p.point_id}"`
+          + ` title="大白话解释这条知识+给上手示例（LLM，结果缓存）">💬 释疑</button>` : "")
         + `</div><div class="entry-snippet">${p.text || p.summary}</div>`
         + (p.sources && p.sources.length
           ? `<div class="point-sources">来源：` + p.sources.map(s =>
               `<a href="#" class="pt-src" data-id="${s.entry_id}">${s.title}</a>`).join("、")
             + `</div>` : "")
-        + `</div>`;
+        + `<div class="pt-explain-box" hidden></div></div>`;
     }
     html += `<small class="set-note">文件条目 ${wb.merged.length} 条（补充——找同观点全部出处时用）：</small>`;
   }
@@ -1504,6 +1510,7 @@ function renderAggTab() {
     b.onclick = () => { wb.focusId = b.dataset.id; wb.tab = "radiate"; renderWorkbench(); });
   body.querySelectorAll(".pt-src").forEach(a =>
     a.onclick = (e) => { e.preventDefault(); openPreview(a.dataset.id); });  // 溯源 → 预览面板
+  _bindExplainBtns();  // 检索结果点卡释疑（批次 90）
   attachCatChips();  // 分类定位徽标
   bindEntryButtons();
 }
