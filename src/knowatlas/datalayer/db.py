@@ -2335,7 +2335,9 @@ class DataLayer:
             match = '"' + q.replace('"', '""') + '"'
             try:
                 rows = self._conn.execute(
-                    "SELECT e.id, e.title, e.locator,"
+                    "SELECT e.id,"
+                    " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+                    " e.locator,"
                     " snippet(entries_fts, 0, '[', ']', '…', 12) AS snip,"
                     " bm25(entries_fts) AS rank"
                     " FROM entries_fts JOIN entries e ON e.rowid = entries_fts.rowid"
@@ -2367,7 +2369,11 @@ class DataLayer:
         约百毫秒级，已实测）。语义与原 UNION 等价（Python 去重 + LIMIT）。
         """
         like = f"%{self._escape_like(q)}%"
-        sel = ("SELECT e.id, e.title, e.locator,"
+        # title 显示走 display_name 覆盖层（批次 71 追修：检索/聚合视图曾显示旧名——
+        # SQL 直读 e.title 绕过 _row_to_entry）；WHERE 匹配仍按原文 title（FTS 索引同）。
+        sel = ("SELECT e.id,"
+               " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+               " e.locator,"
                " substr(COALESCE(e.inline_content,''),1,80) AS snip, 1.0 AS rank")
         rows = self._conn.execute(
             f"{sel} FROM entries e"

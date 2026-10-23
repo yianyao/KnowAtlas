@@ -129,6 +129,20 @@ def test_two_char_query_finds_content(dl):
     assert any(hit.entry_id == e.id for hit in hits)
 
 
+def test_search_hits_apply_display_name(dl):
+    """批次 71 追修：检索/聚合视图的标题走 display_name 覆盖层——
+    search_fts 两分支（FTS match + LIKE 兜底）都不得直读 SQL e.title。"""
+    e = make_entry(source_type="bookmark", source_key="https://x.com/a",
+                   title="以MVP思维，解析最小的进销存业务流程| 人人都是产品经理",
+                   locator="https://x.com/a")
+    dl.upsert_entries([e])
+    dl.merge_meta(e.id, {"display_name": "进销存MVP思维"})
+    for q in ("MVP思维", "进销存"):     # FTS match（≥3 字）与 LIKE 兜底（两字）两路
+        hits = dl.search_fts(q)
+        hit = [h for h in hits if h.entry_id == e.id][0]
+        assert hit.title == "进销存MVP思维"
+
+
 def test_get_content_preview_prefix(dl):
     """正文前缀读取（第三十七批）：SQL substr 只取头部，不整段进内存。"""
     text = "0123456789" * 1000  # 1 万字符
