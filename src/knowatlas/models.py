@@ -129,6 +129,21 @@ class SearchHit:
 
 
 @dataclass(frozen=True)
+class PointHit:
+    """知识点检索命中（批次 86：点升格为检索主体，条目降为溯源）。
+
+    text 为点正文截断摘要；sources 为溯源条目（一点多源，含 display_name
+    覆盖层标题）——前端点卡片展开「来源」chips 跳条目预览。
+    """
+
+    point_id: str
+    text: str
+    summary: str
+    sources: tuple[dict[str, str], ...]
+    rank: float
+
+
+@dataclass(frozen=True)
 class ThreadItem:
     """线索内条目与顺序（完整方案 §9.4）。id 由数据层生成，禁止手工指定。"""
 

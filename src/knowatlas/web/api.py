@@ -1384,6 +1384,11 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/search")
     def search(q: str = "", mode: str = "fts"):
+        def _points_payload():
+            # 知识点主通道（批次 86）：点卡片在前端聚合页顶部，条目降为溯源
+            return [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
+                     "sources": p.sources, "rank": p.rank}
+                    for p in dl.search_points(q)]
         if mode == "hybrid":
             # 混合检索（第五十六批，M4）：FTS + 向量余弦 RRF 融合，reasons 可解释；
             # embedder 未启用（配置关/依赖缺）→ 降级 fts + note（探针钉住）
@@ -1392,20 +1397,23 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
             result = hybrid_search(dl, embedder_from_config(cfg), q)
             if result is not None:
+                result["points"] = _points_payload()
                 return result
             hits = dl.search_fts(q)
             return {"mode": mode, "effective_mode": "fts", "note":
                     "hybrid 依赖向量索引（ksync --embed，需 [embedding] enabled"
                     " + requirements-optional），本次已降级 fts",
+                    "points": _points_payload(),
                     "hits": [
                         {"entry_id": h.entry_id, "title": h.title,
                          "locator": h.locator, "snippet": h.snippet,
                          "rank": h.rank} for h in hits]}
         hits = dl.search_fts(q)
-        return {"mode": mode, "effective_mode": "fts", "hits": [
-            {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
-             "snippet": h.snippet, "rank": h.rank} for h in hits
-        ]}
+        return {"mode": mode, "effective_mode": "fts", "points": _points_payload(),
+                "hits": [
+                    {"entry_id": h.entry_id, "title": h.title, "locator": h.locator,
+                     "snippet": h.snippet, "rank": h.rank} for h in hits
+                ]}
 
     @app.get("/api/sets/group")
     def sets_group(ids: str = ""):

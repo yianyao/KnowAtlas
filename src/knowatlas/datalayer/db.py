@@ -21,7 +21,8 @@ from typing import Any, Iterable, Iterator, Sequence
 from ..errors import ContractError, LocatorFormatError
 from ..models import (
     SCHEMES, SOURCE_TYPES, STATUSES, THREAD_TYPES,
-    Category, Entry, FetchResult, SearchHit, Thread, ThreadItem, UpsertResult,
+    Category, Entry, FetchResult, PointHit, SearchHit, Thread, ThreadItem,
+    UpsertResult,
 )
 from .schema import latest_version, load_migration
 
@@ -2428,6 +2429,68 @@ class DataLayer:
             seen.add(r["id"])
             out.append(SearchHit(r["id"], r["title"], r["locator"],
                                  r["snip"], r["rank"]))
+            if len(out) >= limit:
+                break
+        return out
+
+    def search_points(self, query: str, limit: int = 20) -> list[PointHit]:
+        """知识点检索（批次 86：点升格为检索主体）。
+
+        points_fts（迁移 008，trigram external content + 触发器同步）为主，
+        <3 字 trigram 零命中 → points 表 LIKE 兜底；两路都过滤可消费溯源——
+        点只随其可消费条目出现（溯源全不可消费的点不露面）。每点带溯源条目
+        （display_name 覆盖层标题），rank：FTS 用 bm25、兜底 1.0。
+        """
+        q = query.strip()
+        if not q:
+            return []
+        like = f"%{self._escape_like(q)}%"
+        cons = _consumable("e")
+        rows = []
+        if len(q) >= 3:
+            match = '"' + q.replace('"', '""') + '"'
+            try:
+                rows = self._conn.execute(
+                    "SELECT p.id, substr(p.text,1,200) AS text, p.summary,"
+                    " bm25(points_fts) AS rank"
+                    " FROM points_fts JOIN points p ON p.rowid = points_fts.rowid"
+                    " WHERE points_fts MATCH ?"
+                    "   AND EXISTS (SELECT 1 FROM point_sources ps"
+                    "               JOIN entries e ON e.id = ps.entry_id"
+                    "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
+                    " ORDER BY rank LIMIT ?",
+                    (match, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                pass  # 语法异常 → LIKE 兜底
+        if len(rows) < limit:
+            rows += self._conn.execute(
+                "SELECT p.id, substr(p.text,1,200) AS text, p.summary, 1.0 AS rank"
+                " FROM points p"
+                " WHERE (p.text LIKE ? ESCAPE '\\' OR p.summary LIKE ? ESCAPE '\\')"
+                "   AND EXISTS (SELECT 1 FROM point_sources ps"
+                "               JOIN entries e ON e.id = ps.entry_id"
+                "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
+                " LIMIT ?",
+                (like, like, limit),
+            ).fetchall()
+        seen: set[str] = set()
+        out: list[PointHit] = []
+        for r in rows:
+            if r["id"] in seen:
+                continue
+            seen.add(r["id"])
+            srcs = self._conn.execute(
+                "SELECT e.id AS entry_id,"
+                " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+                " e.locator"
+                " FROM point_sources ps JOIN entries e ON e.id = ps.entry_id"
+                " WHERE ps.point_id = ? AND e.status='active'" + cons +
+                " ORDER BY ps.created_at LIMIT 6",
+                (r["id"],),
+            ).fetchall()
+            out.append(PointHit(r["id"], r["text"], r["summary"],
+                                tuple(dict(x) for x in srcs), r["rank"]))
             if len(out) >= limit:
                 break
         return out

@@ -1105,7 +1105,7 @@ function chLabel(ch) {
 async function doWorkbench(q) {
   showView("search");
   wb.q = q; wb.focusId = null; wb.tab = "agg";
-  wb.groups = null; wb.singles = null; wb.gmode = "";
+  wb.groups = null; wb.singles = null; wb.gmode = ""; wb.points = null;
   const box = document.getElementById("hits");
   box.innerHTML = "<small>聚合中…</small>";
   const [fts, rec, hyb] = await Promise.all([
@@ -1144,6 +1144,12 @@ async function doWorkbench(q) {
     }
   }
   wb.merged = [...map.values()];
+  // 知识点主通道（批次 86）：fts 响应自带 points（点 FTS + 溯源）——
+  // 点卡片聚合页置顶，条目降为补充
+  wb.points = (fts.points || []).map(p => ({
+    ...p, text: (p.text || "").replace(/</g, "&lt;"),
+    summary: (p.summary || "").replace(/</g, "&lt;"),
+  }));
   // 知识集聚合（第六十批，§7.3 分层查询）：命中多（>5）先给集概览，
   // 少则直接给点。聚合失败/不成组 → 平铺兜底。
   if (wb.merged.length > 5) {
@@ -1377,11 +1383,28 @@ const SIG_TITLE = { word: "成员共享词（组内每条正文均可验证，�
 
 function renderAggTab() {
   const body = document.getElementById("wb-body");
-  if (!wb.merged.length) {
+  if (!wb.merged.length && !(wb.points && wb.points.length)) {
     body.innerHTML = "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 语义相似 ∪ 主题多路召回）。</small>";
     return;
   }
   let html = "";
+  // 知识点主通道（批次 86，用户裁决「检索出来的应该是具体的知识点，而不是文件
+  // 标题」）：点卡片置顶——点摘要 + 来源条目 chips（点击进预览面板溯源）；
+  // 条目结果降为补充（文件维度找同观点全部出处时仍有用）。
+  if (wb.points && wb.points.length) {
+    html += `<small class="set-note">◆ 知识点 ${wb.points.length} 条（点正文摘要；点「来源」看出处原文）：</small>`;
+    for (const p of wb.points) {
+      html += `<div class="entry point-hit"><div class="entry-main">`
+        + `<span class="badge">◆ 知识点</span>`
+        + `</div><div class="entry-snippet">${p.text || p.summary}</div>`
+        + (p.sources && p.sources.length
+          ? `<div class="point-sources">来源：` + p.sources.map(s =>
+              `<a href="#" class="pt-src" data-id="${s.entry_id}">${s.title}</a>`).join("、")
+            + `</div>` : "")
+        + `</div>`;
+    }
+    html += `<small class="set-note">文件条目 ${wb.merged.length} 条（补充——找同观点全部出处时用）：</small>`;
+  }
   if (wb.groups && wb.groups.length) {
     // 集分组列表（第六十批，§7.3）：组头信号非人工命名，点组内条目即下钻
     const note = wb.gmode === "semantic"
@@ -1400,12 +1423,14 @@ function renderAggTab() {
       html += `<div class="set-group"><div class="set-head"><span class="badge">未成组</span>`
         + `<span class="badge">${wb.singles.length} 条</span></div>`
         + wb.singles.map(entryCard).join("") + `</div>`;
-  } else {
-    html = wb.merged.map(entryCard).join("");
+  } else if (wb.merged.length) {
+    html += wb.merged.map(entryCard).join("");
   }
   body.innerHTML = html;
   body.querySelectorAll(".wb-focus-btn").forEach(b =>
     b.onclick = () => { wb.focusId = b.dataset.id; wb.tab = "radiate"; renderWorkbench(); });
+  body.querySelectorAll(".pt-src").forEach(a =>
+    a.onclick = (e) => { e.preventDefault(); openPreview(a.dataset.id); });  // 溯源 → 预览面板
   attachCatChips();  // 分类定位徽标
   bindEntryButtons();
 }

@@ -7,6 +7,7 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
+from knowatlas.ids import content_hash
 from knowatlas.web.app import create_app
 
 
@@ -22,6 +23,26 @@ def client(cfg, dl, registries, monkeypatch):
 
 def _auth():
     return {"X-KnowAtlas-Token": "test-token-123", "Origin": "http://127.0.0.1:8420"}
+
+
+def test_search_points_channel(client, dl):
+    """批次 86：/api/search 响应带 points 主通道（点摘要 + 溯源条目），fts/hybrid 同构。"""
+    from knowatlas.models import Entry
+    e = Entry.build(source_type="manual", source_key="https://s.com/a",
+                    title="会话设计", locator="https://s.com/a",
+                    meta={"source_type": "manual"})
+    dl.upsert_entries([e])
+    text = "上下文窗口超限时启用增量摘要兜底"
+    dl.put_point({"content_hash": content_hash(text), "text": text, "summary": "",
+                  "source_type": "manual", "judge": "integral", "meta": {}},
+                 {"entry_id": e.id, "char_offset": None, "anchor": None})
+    r = client.get("/api/search?q=增量摘要", headers=_auth())
+    assert r.status_code == 200
+    d = r.json()
+    assert d["points"] and d["points"][0]["point_id"]
+    assert "兜底" in d["points"][0]["text"]
+    assert d["points"][0]["sources"][0]["entry_id"] == e.id
+    assert d["points"][0]["sources"][0]["title"] == "会话设计"
 
 
 def test_category_crud_flow(client):

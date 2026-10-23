@@ -2860,3 +2860,37 @@ win-ctrls 初始化同步查 window.pywebview，而 pywebview 桥是页面加载
 **验证**：浏览器实测（搜「管理」7 节点分布散开/24 字标签截为 18 字/
 hideOverlap 生效）三项 PASS + 截图。壳检查结论同批记录。UTF-8 无 BOM + LF。
 按用户指令暂不推送远程。
+
+### 第八十六批：知识点检索主通道（Phase 7 批次 86，2026-10-23）
+
+**背景**：用户截图方向性裁决——「做检索的时候，应该出来的是具体的知识点，
+而不是一个文件标题」「我做这个的最主要目的，是希望搜索某个知识的时候，能把
+散落各处的知识点聚起来，而不是给我各个文件的条目，还要逐个点进去看」「那和
+普通的搜索有啥区别？」「包括关系图，你呈现的方式全错了」。点层 92 点自 62 批
+建成以来从未进检索主链路——知识碎片的价值悬空。三批路线：86 点检索主通道
+（本轮）→ 87 点向量 hybrid → 88 关系图知识点模式。
+
+**迁移 008**：points_fts（trigram external content，text+summary 列）+
+三触发器（ai/ad/au 同步）+ 存量回填 INSERT SELECT。schema v7→v8；
+test_canary ddl 更新（7c7cc3f65c18）；test_threads 版本断言 7→8。
+
+**数据层**：models.PointHit（point_id/text/summary/sources/rank——sources
+含 display_name 覆盖层标题与 locator）；db.search_points——FTS ≥3 字 MATCH
+（bm25 排序）+ <3 字/异常 LIKE 兜底（text/summary 两列），EXISTS 子查询过滤
+可消费溯源（点只随可消费条目露面，rejected/archived 条目的点隐身），每点
+溯源 LIMIT 6（point_sources JOIN entries）。
+
+**API**：/api/search 三分支（fts/混合成功/hybrid 降级）全部带 points 通道
+（同构，前端单路取用）。
+
+**前端**（index.html + components.css）：doWorkbench 取 fts.points（HTML
+转义）；renderAggTab 重排——◆ 知识点卡片区置顶（点摘要 + 蓝左缘线 +
+「来源：」chips 点击 openPreview 原地溯源），文件条目区降为补充（标注
+「找同观点全部出处时用」）；空态判空含 points。
+
+**测试** +4：search_points（FTS+兜底双路/溯源覆盖层标题）、可消费过滤
+（rejected 隐身→active 恢复）、一点多源合并（两文档同观点 → 一点双 chips）；
+test_web_api +1（points 通道结构含 sources.title）。全量 pytest 通过
+（exit 0）。真库：迁移 v8 + 「进销存」3 点命中；浏览器验收三项 PASS
+（点卡置顶/来源 chip 原地预览不跳转/文件条目降级区）。UTF-8 无 BOM + LF。
+按用户指令暂不推送远程。

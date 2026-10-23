@@ -168,6 +168,63 @@ def test_three_char_query_uses_fts(dl):
     assert any(hit.entry_id == e.id for hit in hits)
 
 
+# ---- 知识点检索主通道（批次 86，迁移 008 points_fts） ----
+
+def _put_point(dl, e, text, ch=None):
+    """put_point 返回 status（created/linked）；点 id 是确定性 content_hash[:16]。"""
+    ch = ch or content_hash(text)
+    dl.put_point(
+        {"content_hash": ch, "text": text, "summary": "", "source_type": "manual",
+         "judge": "integral", "meta": {}},
+        {"entry_id": e.id, "char_offset": None, "anchor": None})
+    return ch[:16]
+
+
+def test_search_points_fts_and_fallback(dl):
+    """点 FTS 命中（≥3 字 trigram）+ 溯源条目标题（display_name 覆盖层）+ 两字兜底。"""
+    e = make_entry(source_key="https://e.com/pt",
+                   title="会话管理设计", locator="https://e.com/pt")
+    dl.upsert_entries([e])
+    pid = _put_point(dl, e, "长会话采用增量摘要兜底策略，上下文超限时压缩历史")
+    # ≥3 字：points_fts MATCH 命中
+    hits = dl.search_points("增量摘要")
+    assert [h.point_id for h in hits] == [pid]
+    assert "兜底策略" in hits[0].text
+    assert hits[0].sources[0]["entry_id"] == e.id
+    assert hits[0].sources[0]["title"] == "会话管理设计"
+    # 两字词：trigram 零命中 → LIKE 兜底仍命中
+    hits2 = dl.search_points("兜底")
+    assert any(h.point_id == pid for h in hits2)
+
+
+def test_search_points_consumable_filter(dl):
+    """溯源全不可消费的点不露面（rejected 过滤）；转正后恢复。"""
+    e = make_entry(source_key="https://e.com/rj", locator="https://e.com/rj")
+    dl.upsert_entries([e])
+    pid = _put_point(dl, e, "独立部署模式支持离线运行全部检索功能")
+    assert any(h.point_id == pid for h in dl.search_points("离线运行"))  # active 可见
+    dl.set_status([e.id], "rejected")
+    assert not dl.search_points("离线运行")            # 溯源不可消费 → 点隐身
+    dl.set_status([e.id], "active")
+    assert any(h.point_id == pid for h in dl.search_points("离线运行"))
+
+
+def test_search_points_multi_source_merge(dl):
+    """一点多溯源：同观点两条文档 → 一点带两个来源 chips。"""
+    e1 = make_entry(source_key="https://e.com/m1", locator="https://e.com/m1")
+    e2 = make_entry(source_key="https://e.com/m2", locator="https://e.com/m2")
+    dl.upsert_entries([e1, e2])
+    ch = content_hash("会话超时自动保存草稿避免内容丢失")
+    dl.put_point({"content_hash": ch, "text": "会话超时自动保存草稿避免内容丢失",
+                  "summary": "", "source_type": "manual", "judge": "integral",
+                  "meta": {}}, {"entry_id": e1.id, "char_offset": None, "anchor": None})
+    dl.put_point({"content_hash": ch, "text": "会话超时自动保存草稿避免内容丢失",
+                  "summary": "", "source_type": "manual", "judge": "integral",
+                  "meta": {}}, {"entry_id": e2.id, "char_offset": None, "anchor": None})
+    hits = dl.search_points("草稿")
+    assert len(hits) == 1 and len(hits[0].sources) == 2   # 一点多源合并
+
+
 # ---- 删除检测（H3 §3.6） ----
 
 def test_archive_missing(dl):
