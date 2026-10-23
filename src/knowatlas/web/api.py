@@ -614,6 +614,18 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                     if top:
                         word_tops.setdefault(kw, {})
                         word_tops[kw][top] = word_tops[kw].get(top, 0) + 1
+            # 点词元同池（批次 89，词云点化：点层是知识主体后词云反映知识分布）
+            # ——点 text 是提炼后的知识陈述，词频即知识分布；条目词元保留作兜底
+            # （未抽点的条目仍出词）。点文本短，topK 6。
+            point_rows = dl.cloud_point_data(category_id)
+            for ptext, ptop in point_rows:
+                for kw, _w in jieba.analyse.extract_tags(ptext, topK=6, withWeight=True):
+                    if not _cloud_word_ok(kw):
+                        continue
+                    word_counts[kw] = word_counts.get(kw, 0) + 1
+                    if ptop:
+                        word_tops.setdefault(kw, {})
+                        word_tops[kw][ptop] = word_tops[kw].get(ptop, 0) + 1
         # 主导顶层分类：该词出现条目中最多的顶层分类；按词元总量降序分配色板槽位
         top_total: dict[str, int] = {}
         for kw, tops in word_tops.items():
@@ -638,6 +650,9 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         }
         if word and word.strip():
             payload["word"] = word.strip()
+            # 点 facet 优先（批次 89：词云点化——点击词元出知识点而非条目，
+            # 裁决 #13 检索漏斗同构）；条目 facet 保留作兜底（未抽点条目）。
+            payload["points"] = dl.cloud_facet_points(category_id, word.strip())
             payload["entries"] = [
                 {"id": e.id, "title": e.title, "locator": e.locator,
                  "source_type": e.source_type,

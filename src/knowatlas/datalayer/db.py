@@ -1478,6 +1478,81 @@ class DataLayer:
                 focus = {"id": frow["id"], "name": frow["name"]}
         return {"focus": focus, "categories": children, "entries": entries}
 
+    def cloud_point_data(self, category_id: str | None, *,
+                         sample: int = 800) -> list[tuple[str, str | None]]:
+        """词云点词元样本（批次 89，词云点化：点层是知识主体后词云反映知识分布）。
+
+        focus 子树内可消费条目（_consumable 同口径）的**非 stale 点**；
+        返回 [(point_text, top_cat_id)]（top 口径与 cloud_data.entries 同——
+        溯源条目直挂分类的顶层根，多根取最小 id；一点多溯源取第一条）。
+        """
+        if category_id:
+            sub_ids = self._cat_descendants(category_id)
+            if category_id not in sub_ids:
+                return []
+        else:
+            sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
+        if not sub_ids:
+            return []
+        marks = ",".join("?" * len(sub_ids))
+        rows = self._conn.execute(
+            "SELECT DISTINCT p.id, p.text,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+            " e.id AS entry_id"
+            " FROM points p"
+            " JOIN point_sources ps ON ps.point_id = p.id"
+            " JOIN entries e ON e.id = ps.entry_id AND e.status='active'"
+            " JOIN entry_categories ec ON ec.entry_id = e.id"
+            f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+            "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
+            + _consumable("e") +
+            " ORDER BY ps.created_at DESC LIMIT ?",
+            (*sub_ids, sample)).fetchall()
+        has_parent = {r["category_id"]
+                      for r in self._conn.execute("SELECT category_id FROM category_parents")}
+        out: list[tuple[str, str | None]] = []
+        for r in rows:
+            cats = [x["category_id"] for x in self._conn.execute(
+                "SELECT category_id FROM entry_categories WHERE entry_id=?",
+                (r["entry_id"],))]
+            roots = []
+            for cid in cats:
+                anc = self._cat_ancestors(cid)
+                roots.extend([a for a in anc if a not in has_parent]
+                             or ([cid] if cid not in has_parent else []))
+            out.append((r["text"], min(roots) if roots else None))
+        return out
+
+    def cloud_facet_points(self, category_id: str | None, word: str,
+                           limit: int = 30) -> list[dict[str, Any]]:
+        """词云点 facet（批次 89）：子树内非 stale 点 text 含该词 → 点卡列表
+        （词云点词元点击出知识点而非条目——裁决 #13 检索漏斗同构）。"""
+        if category_id:
+            sub_ids = self._cat_descendants(category_id)
+            if category_id not in sub_ids:
+                return []
+        else:
+            sub_ids = [r["id"] for r in self._conn.execute("SELECT id FROM categories")]
+        if not sub_ids:
+            return []
+        marks = ",".join("?" * len(sub_ids))
+        like = f"%{self._escape_like(word)}%"
+        rows = self._conn.execute(
+            "SELECT DISTINCT p.id AS point_id, substr(p.text,1,200) AS text, p.summary,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+            " e.id AS entry_id, e.locator"
+            " FROM points p"
+            " JOIN point_sources ps ON ps.point_id = p.id"
+            " JOIN entries e ON e.id = ps.entry_id AND e.status='active'"
+            " JOIN entry_categories ec ON ec.entry_id = e.id"
+            f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
+            "   AND p.aging_flag != 'stale'"
+            + _consumable("e") +
+            "   AND (p.text LIKE ? ESCAPE '\\' OR p.summary LIKE ? ESCAPE '\\')"
+            " ORDER BY p.created_at LIMIT ?",
+            (*sub_ids, like, like, limit)).fetchall()
+        return [dict(r) for r in rows]
+
     def cloud_facet(self, category_id: str | None, word: str,
                     limit: int = 50) -> list[Entry]:
         """词云 facet：focus 子树内可消费且标题/内联正文含该词的条目

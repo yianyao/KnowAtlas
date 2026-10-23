@@ -1281,8 +1281,18 @@ async function renderCloudTab() {
     const d2 = await (await fetch("/api/cloud" + q2)).json();
     const facet = document.getElementById("cloud-facet");
     if (!facet) return;
+    // 知识点优先（批次 89 词云点化：点词元点击出知识点卡——裁决 #13 检索漏斗
+    // 同构），溯源条目保留兜底（未抽点条目走条目 facet）
+    const pts = d2.points || [];
     facet.innerHTML = `<div style="font-size:13px;margin:6px 0">范围「${(d2.focus && d2.focus.name) || "全库"}」
-      含「<b>${cloudWord}</b>」的可消费条目 ${d2.entries.length} 条：</div>`
+      含「<b>${cloudWord}</b>」的知识点 ${pts.length} 个：</div>`
+      + (pts.length ? pts.map(p =>
+          `<div class="entry" data-id="${p.entry_id}"><span class="badge">◆ 知识点</span>`
+          + `<a href="#" class="pt-open" data-eid="${p.entry_id}">${p.title}</a>`
+          + `<div style="margin:4px 0;line-height:1.6">${(p.text || "").slice(0, 160)}</div>`
+          + `<small style="opacity:.6">溯源：${p.title}</small></div>`).join("")
+        : "")
+      + `<div style="font-size:13px;margin:10px 0 6px">含「<b>${cloudWord}</b>」的可消费条目 ${d2.entries.length} 条：</div>`
       + (d2.entries.length ? d2.entries.map(x =>
           `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
           + `<span class="badge">${srcLabel(x.source_type)}</span>`
@@ -1290,6 +1300,10 @@ async function renderCloudTab() {
           + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
           + (x.snippet ? `<br><small>${x.snippet}</small>` : "") + `</div>`).join("")
         : "<small>无匹配。</small>");
+    facet.querySelectorAll(".pt-open").forEach(a => a.onclick = (e) => {
+      e.preventDefault();
+      openPreview(a.dataset.eid);       // 站内预览（脑图出大纲树）
+    });
     bindEntryButtons();
   });
 }
