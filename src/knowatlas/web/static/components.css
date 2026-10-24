@@ -316,14 +316,18 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
 /* 知识梳理合成层（批次 69）：点卡勾选 + 浮动梳理条 + 提示词面板 */
 .pt-pick { display: inline-flex; align-items: center; margin-right: 8px; cursor: pointer; }
 .pt-pick input { accent-color: var(--accent); cursor: pointer; }
+/* #synthBar/#synthModal 的 display 由 :not([hidden]) 控制——直接写 display:flex
+   会覆盖 hidden 属性（UA 的 display:none 优先级更低），导致弹层永远可见关不掉 */
 #synthBar { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
-            z-index: 60; display: flex; align-items: center; gap: 10px;
+            z-index: 60; display: none; align-items: center; gap: 10px;
             padding: 8px 14px; background: var(--bg-2);
             border: 1px solid var(--border-2); border-radius: var(--radius-card);
             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); font-size: var(--fs-12);
             color: var(--text-2); }
+#synthBar:not([hidden]) { display: flex; }
 #synthModal { position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, 0.45);
-              display: flex; align-items: center; justify-content: center; }
+              display: none; align-items: center; justify-content: center; }
+#synthModal:not([hidden]) { display: flex; }
 .synth-panel { width: min(720px, 92vw); max-height: 84vh; overflow: auto;
                padding: 14px 16px; background: var(--bg-1);
                border: 1px solid var(--border-2); border-radius: var(--radius-card);
