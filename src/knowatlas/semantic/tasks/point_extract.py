@@ -39,11 +39,12 @@ SPEC = CapabilitySpec(
     input_contract={"item": "dict（entry_id/title/source_type/body/forced_judge?）"},
     output_contract={"judge": "integral|split", "reason": "一句话判定理由",
                      "summary": "整条一句话摘要",
-                     "points": "list[{text, summary, quote?}]",
+                     "points": "list[{text, summary, quote?}]（可为空：确认无可独立成点的知识）",
                      "llm_used": "bool", "error": "str（可空）"},
-    version="2.0.0",
+    version="2.1.0",
     description="知识提炼（批次 92，裁决 12：入库=知识整理不是切片）：通读全文"
-                "归纳为整理后的知识点，quote 留原文锚点；llm 不可用静默降级",
+                "归纳为整理后的知识点，quote 留原文锚点；自洽性纪律（8.5）禁裸名词/"
+                "残缺步骤、允许零产出；llm 不可用静默降级",
 )
 
 _MAX_POINTS = 8  # split 切点硬上限（防 LLM 失控刷点）
@@ -58,6 +59,23 @@ _REFINE_RULES = (
     "- 相邻内容同属一个观点时必须合并——宁全勿碎，按段落/章节机械切分是错误做法；"
     "同一知识只产出一个点，不得在不同点里重复；\n"
     "- 每点带 quote：从原文逐字摘引一句能定位该点的原句（≤60 字），供溯源定位。"
+)
+
+# 自洽性纪律（TODO 8.5，用户裁决 1，2026-10-24）：点是"能自洽的完整内容"，
+# 不是名词碎片或截断片段。三份 prompt 共用同一段（生成层），确定性守门在
+# pipeline/point_gate.py（入库层）——两层口径必须一致，改这里要同步那边。
+_SELF_CONSISTENCY_RULES = (
+    "自洽性纪律（用户裁决 2026-10-24：每个点必须能脱离原文独立读懂）：\n"
+    "- 只允许四种合格形态：带论据的观点/结论、概念解释或术语描述、"
+    "独立完整的步骤、独立数据；\n"
+    "- 禁裸名词（如「JavaScript 数组」不是点）：概念点必须带解释"
+    "（是什么/怎么用/为什么），至少是一句有主谓的完整表述；\n"
+    "- 禁无支撑的单句结论：观点要带理由、条件或例子，否则并入相邻点；\n"
+    "- 步骤必须首尾完整、编号连续（第 1 步到最后一步）；原文本身残缺时只陈述"
+    "可确认的内容，不得把中间步骤包装成完整流程；代码块必须闭合；\n"
+    "- 独立数据必须带口径（条件/单位/来源）；\n"
+    "- 一个文件只产出 1 个合格点是合法输出，不得为凑数碎切；确认没有可独立"
+    "成点的知识时，points 输出空数组 []。"
 )
 
 _SYSTEM_PROMPT = (
@@ -77,7 +95,8 @@ _SYSTEM_PROMPT = (
     "3. judge=split 时 points 给 2-8 个点：每个点自包含（脱离原文可独立阅读，"
     "补齐必要主语与背景），text≤500 字。\n"
     "4. " + _REFINE_RULES + "\n"
-    "5. 不要输出 JSON 以外的任何文字。"
+    "5. " + _SELF_CONSISTENCY_RULES + "\n"
+    "6. 不要输出 JSON 以外的任何文字。"
 )
 
 # forced split（2026-10-22 用户口径）：形态已由确定性规则判定（文学创作类
@@ -92,7 +111,8 @@ _SPLIT_ONLY_PROMPT = (
     "2. 切 2-8 个点：每个点 = 一个独立可复用的知识点，自包含（脱离原文可独立"
     "阅读，补齐必要主语与背景），text≤500 字。\n"
     "3. " + _REFINE_RULES + "\n"
-    "4. 不要输出 JSON 以外的任何文字。"
+    "4. " + _SELF_CONSISTENCY_RULES + "\n"
+    "5. 不要输出 JSON 以外的任何文字。"
 )
 
 # forced integral（批次 92）：形态已由规则/用户覆盖判定，LLM 只做整条提炼。
@@ -109,7 +129,8 @@ _INTEGRAL_REFINE_PROMPT = (
     "保留；用整理后的语言重写，不逐字照抄；全部用简体中文输出（外语原文译写为"
     "中文，代码/命令/专有名词保留原文）。\n"
     "3. quote 从原文逐字摘引一句核心句（≤60 字）。\n"
-    "4. 不要输出 JSON 以外的任何文字。"
+    "4. " + _SELF_CONSISTENCY_RULES + "\n"
+    "5. 不要输出 JSON 以外的任何文字。"
 )
 
 _FORCED_SPLIT_REASON = "用户口径 2026-10-22：文学创作类=知识点集合（规则判定，非 LLM）"
@@ -127,9 +148,11 @@ def _user_prompt(item: dict[str, Any], body: str) -> str:
 def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
     """返回 {"judge","reason","summary","points","llm_used"}（失败带 error）。
 
-    points 恒为 list[{text, summary, quote?}]：integral 归一为单元素列表，调用方
-    无需分支。forced_judge（item 键）："split"/"integral" 跳过 LLM 判定直接提炼，
-    judge 与 reason 固定口径理由——形态已由规则判定；缺省走判定+提炼合一。
+    points 为 list[{text, summary, quote?}]：integral 归一为单元素列表，调用方
+    无需分支；**允许空列表**（LLM 明确判定无可独立成点的知识，llm_used=True，
+    2026-10-24 自洽性裁决）——调用方据此阻断重抽，不当故障。forced_judge
+    （item 键）："split"/"integral" 跳过 LLM 判定直接提炼，judge 与 reason
+    固定口径理由——形态已由规则判定；缺省走判定+提炼合一。
     """
     empty = {"judge": "", "reason": "", "summary": "", "points": [], "llm_used": False}
     body = str(item.get("body") or "").strip()
@@ -156,8 +179,15 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
             return {**empty, "error": f"LLM 形态判定非法：{judge!r}"}
         reason = str(obj.get("reason", "")).strip()
     raw_points = obj.get("points")
-    if not isinstance(raw_points, list) or not raw_points:
-        return {**empty, "error": "LLM 未返回任何点"}
+    if not isinstance(raw_points, list):
+        return {**empty, "error": "LLM 返回的 points 不是数组"}
+    if not raw_points:
+        # 自洽性纪律允许 LLM 明确判定"没有可独立成点的知识"（TODO 8.5）：
+        # 这不是故障——由 pipeline 记 points_gate 阻断重抽，避免反复花钱。
+        return {"judge": judge,
+                "reason": reason or "无可独立成点的知识",
+                "summary": str(obj.get("summary", "")).strip(),
+                "points": [], "llm_used": True}
     points: list[dict[str, str]] = []
     for p in raw_points[:_MAX_POINTS]:
         if not isinstance(p, dict):

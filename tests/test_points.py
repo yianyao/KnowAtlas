@@ -540,3 +540,104 @@ def test_normal_body_not_skeleton_flagged(cfg, dl):
     run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
     assert "body_flag" not in dl.get_entry(es[0].id).meta
     assert dl.count_points() == 1
+
+
+# ---- 自洽性闸门（TODO 8.5，用户裁决 1，2026-10-24） ----
+
+_BARE_NOUN_REPLY = ('{"summary":"数组与对象，没有展开说明",'
+                    '"points":[{"text":"JavaScript 数组","summary":"数组"}]}')
+_EMPTY_POINTS_REPLY = '{"summary":"原文只有名词与目录，没有可独立成点的知识","points":[]}'
+_MIXED_GATE_REPLY = ('{"summary":"一好一坏",'
+                    '"points":[{"text":"JavaScript 数组","summary":"数组"},'
+                    '{"text":"SQLite 慢查询排查：先用 EXPLAIN QUERY PLAN 看计划，'
+                    '再补统计信息。","summary":"排查两步"}]}')
+
+
+def test_point_extract_prompts_carry_self_consistency_rules():
+    """生成层纪律：三份 prompt（判定/切点/整条提炼）都带自洽性与零产出许可。"""
+    for prompt in (point_extract._SYSTEM_PROMPT, point_extract._SPLIT_ONLY_PROMPT,
+                   point_extract._INTEGRAL_REFINE_PROMPT):
+        assert "自洽性纪律" in prompt
+        assert "裸名词" in prompt and "空数组" in prompt
+
+
+def test_point_extract_empty_points_is_legal_not_error():
+    """LLM 明确判定"无可独立成点"：llm_used=True、points=[]、不记 error（8.5）。"""
+    res = point_extract.run({"body": "a" * 60, "forced_judge": "integral"},
+                            TaskContext(run_id="r1",
+                                        llm=FakeLlm([_EMPTY_POINTS_REPLY])))
+    assert res["llm_used"] is True and res["points"] == []
+    assert not res.get("error")
+
+
+def test_pipeline_gate_rejects_bare_noun_and_blocks_entry(cfg, dl):
+    """裸名词点不落库；整条全拒 → meta.points_gate；二次运行零 LLM 调用（不重复烧钱）。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_BARE_NOUN_REPLY]))
+    assert stats["points_rejected"] == 1 and stats["gate_blocked"] == 1
+    assert stats["points_created"] == 0 and dl.count_points() == 0
+    assert stats["reject_reasons"] == {"bare_noun": 1}
+    assert stats["rejected"][0]["reason"] == "bare_noun"
+    gate = dl.get_entry(es[0].id).meta["points_gate"]
+    assert gate["status"] == "blocked" and gate["reasons"] == {"bare_noun": 1}
+
+    llm2 = FakeLlm([])  # 多余调用必抛 → 阻断生效的硬断言
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2)
+    assert stats2["processed"] == 0
+    assert stats2["skip_counts"]["gate_blocked"] == 1
+    assert len(llm2.calls) == 0
+
+
+def test_pipeline_gate_keeps_valid_points_from_mixed_reply(cfg, dl):
+    """一好一坏：只丢坏点，好点照常落库；有条目产出时不打阻断标记。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_MIXED_GATE_REPLY]))
+    assert stats["points_rejected"] == 1 and stats["gate_blocked"] == 0
+    assert stats["points_created"] == 1 and dl.count_points() == 1
+    assert "points_gate" not in dl.get_entry(es[0].id).meta
+
+
+def test_pipeline_gate_dry_run_counts_but_does_not_block(cfg, dl):
+    """dry-run：闸门计数照出，但不写 points_gate（改口径后可重跑观察，不锁死条目）。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_BARE_NOUN_REPLY]),
+                               dry_run=True)
+    assert stats["gate_blocked"] == 1 and stats["points_rejected"] == 1
+    assert stats["points_created"] == 0 and dl.count_points() == 0
+    assert "points_gate" not in dl.get_entry(es[0].id).meta
+
+
+def test_pipeline_llm_empty_points_blocks_with_no_point_reason(cfg, dl):
+    """LLM 明确返回空点：算"无点"而非故障——阻断重抽，meta 原因记 no_point。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    stats = run_points_extract(cfg, dl, limit=5,
+                               llm=FakeLlm([_EMPTY_POINTS_REPLY]))
+    assert stats["gate_blocked"] == 1 and stats["points_rejected"] == 0
+    assert stats["points_created"] == 0
+    gate = dl.get_entry(es[0].id).meta["points_gate"]
+    assert gate["reasons"] == {"no_point": 1}
+    assert len(stats["errors"]) == 0          # 不当故障记录
+
+
+def test_pipeline_retry_blocked_reclears_and_reextracts(cfg, dl):
+    """--retry-blocked：清标记后重抽，产出合格点即解除阻断。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_BARE_NOUN_REPLY]))
+    assert "points_gate" in dl.get_entry(es[0].id).meta
+
+    stats = run_points_extract(cfg, dl, limit=5,
+                               llm=FakeLlm([_INTEGRAL_REFINE_REPLY]),
+                               retry_blocked=True)
+    assert stats["processed"] == 1 and stats["points_created"] == 1
+    assert "points_gate" not in dl.get_entry(es[0].id).meta
+
+
+def test_pipeline_entry_ids_clears_gate_marker(cfg, dl):
+    """Web 条目级重抽（entry_ids）同样清标记：合/拆之后能立刻恢复自动抽取。"""
+    es = _seed_entries(dl, 1, body="一套完整的排查方案，" + "细节 " * 60)
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_BARE_NOUN_REPLY]))
+    stats = run_points_extract(cfg, dl, limit=5,
+                               llm=FakeLlm([_INTEGRAL_REFINE_REPLY]),
+                               entry_ids=[es[0].id])
+    assert stats["points_created"] == 1
+    assert "points_gate" not in dl.get_entry(es[0].id).meta

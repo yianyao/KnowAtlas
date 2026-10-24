@@ -103,6 +103,9 @@ def build_parser() -> argparse.ArgumentParser:
     kpoints.add_argument("--purge-points", action="store_true",
                          help="先清空点层（points/point_sources）再抽取——形态判定口径"
                               "变更后的推倒重来；条目与原文零影响")
+    kpoints.add_argument("--retry-blocked", action="store_true",
+                         help="把被自洽性闸门拦下的条目（meta.points_gate）清标记后"
+                              "重抽——口径/prompt 调整后的重试入口")
 
     kaging = sub.add_parser(
         "kaging", help="老化三级：L2 LLM 复核 suspect（升级 stale/否决/下沉人裁）；"
@@ -464,7 +467,8 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
             if args.limit == 0:
                 return _EXIT_OK
         stats = run_points_extract(cfg, dl, limit=max(1, args.limit),
-                                   dry_run=args.dry_run)
+                                   dry_run=args.dry_run,
+                                   retry_blocked=args.retry_blocked)
     finally:
         dl.close()
     if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）；跳过计数器在 skip_counts
@@ -476,6 +480,12 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
     print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
     for err in stats.get("errors", [])[:5]:
         print(f"  ERROR {err['entry_id']} {err['title']}：{err['error']}")
+    if stats.get("points_rejected") or stats.get("gate_blocked"):
+        reasons = "、".join(f"{k}×{v}" for k, v in
+                            (stats.get("reject_reasons") or {}).items())
+        print(f"  GATE 拦下 {stats.get('points_rejected', 0)} 点（{reasons or '无明细'}）；"
+              f"整条阻断 {stats.get('gate_blocked', 0)} 条"
+              f"（meta.points_gate；改口径后用 --retry-blocked 重抽）")
     if not args.dry_run:
         print("（点列表：points 表；溯源数=可信度信号；判定理由在点 meta.judge_reason）")
     return _EXIT_OK

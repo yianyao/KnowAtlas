@@ -117,6 +117,14 @@ min_keep_ratio = 0.80                    # 删除行数超过 20% 时整篇放�
 # 分源原则：按"数据形态"分，不按"目录"分。同一个目录（如 D:/Data/百卓）既有普通文档
 # 又有 .emmx 脑图时，folders 和 emmx 两个源都把该目录填进各自的 roots 即可，互不冲突。
 # 目前已实现：manual / bookmarks / folders / emmx / mail；其余源为后续版本占位。
+#
+# 入库前置审（批次 68 机制，用户 2026-10-24 采纳）：任一源加一行
+#   new_entries = "pending"
+# 后，该源新条目只进管理页「🆕 待审」队列——不抓正文、不分类、不抽点，等你
+# 批量转正/舍弃后才进消费面。适合书签、邮件、AI 会话、聊天记录这类体量大或
+# 噪音多的源（省抓取与 LLM 费用）；本地文件目录一般不用（抓取几乎零成本）。
+# 缺省 "active"（零行为变化）。大体量源请同时做适配器层范围筛选（联系人/时间窗/
+# 关键词），不要指望在待审列表里翻几万条。
 
 [sources.bookmarks]
 # 浏览器书签。browsers 里列了哪个浏览器，paths 里就要给哪个浏览器的 Bookmarks 文件路径
@@ -158,6 +166,7 @@ roots = []
 # 与一层子文件夹（文件夹名入 meta.mailbox），也兼容目录直落 .eml 的导出形态。
 # 会自动还原会话线程（In-Reply-To/Subject 归一）落线索库 thread_type='source'。
 enabled = false
+# new_entries = "pending"                # 体量大/引用链多：建议启用（见上方说明）
 accounts = { work = { path = "" } }      # 示例：accounts = { work = { path = "D:/Mail/work" } }
 
 [sources.db]
@@ -185,6 +194,7 @@ app_id_env = "KNOWATLAS_TXDOC_APP_ID"
 
 [sources.session]
 enabled = false
+# new_entries = "pending"                # 会话体量大：建议启用（见上方说明）
 harvester_dirs = []                     # session-harvester 产物目录
 
 [sources.bilibili]
@@ -199,6 +209,7 @@ enabled = true                          # kadd 常开
 
 [sources.wx]
 enabled = false
+# new_entries = "pending"                # 聊天记录必须先范围筛（联系人/时间窗）再进待审
 fav_export_dir = ""
 chat_export_dir = ""
 article_export_dir = ""

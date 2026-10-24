@@ -1253,6 +1253,11 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         resp: dict[str, Any] = {"entry_id": entry_id, "form": form,
                                 "purged_sources": purged,
                                 "points_created": stats.get("points_created", 0),
+                                # 自洽性闸门附加字段（TODO 8.5）：整条被拦时前端
+                                # 可提示原因；老前端忽略此键不受影响。
+                                "gate": {"blocked": bool(stats.get("gate_blocked")),
+                                         "rejected": stats.get("points_rejected", 0),
+                                         "reasons": stats.get("reject_reasons") or {}},
                                 "errors": stats.get("errors", [])}
         pts = dl.points_of_entries([entry_id])
         resp["points"] = pts.get(entry_id, []) if isinstance(pts, dict) else pts

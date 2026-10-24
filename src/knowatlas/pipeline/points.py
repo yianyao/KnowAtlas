@@ -10,7 +10,9 @@
   → 走 LLM 形态判定（宁整勿碎偏置，judge 可 integral 可 split）；
 - 其余 = 方案 integral → LLM 整条提炼（批次 92：概要/全文照抄 → 整理后的
   知识陈述；LLM 未启用才降级照抄保真）。
-→ split 走 point_extract（forced split 提炼切点 prompt）→ 规范化 hash 去重
+→ split 走 point_extract（forced split 提炼切点 prompt）→ **自洽性闸门**
+（TODO 8.5，用户裁决 1：裸名词/步骤残缺/截断/未闭合代码块不落库；全拒条目记
+meta.points_gate 不再重复烧钱，`--retry-blocked` 重抽）→ 规范化 hash 去重
 （点正文 去零宽/压空白/casefold 后 sha1）→ put_point 落库（content_hash 命中
 即合并为一点多溯源——溯源数=可信度信号）；每点溯源锚点=quote（LLM 逐字摘引
 的原文原句，批次 92）——链接与原文保留以溯源，但产出必须是知识。
@@ -35,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -43,6 +46,7 @@ from ..fetchers.base import is_skeleton_body
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
 from ..semantic.tasks import point_extract
+from .point_gate import gate_point
 
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _WS = re.compile(r"\s+")
@@ -64,6 +68,14 @@ _CODE_SUFFIXES = frozenset({
 _MIXED_DIR_MIN_CODE_TYPES = 3
 
 JUDGES = ("integral", "split")
+
+# 闸门拦截明细进 run stats 的上限（审计够用；不随条目数膨胀）
+_REJECTED_DETAIL_CAP = 20
+
+
+def _now_iso() -> str:
+    """本机时区 ISO 时间（points_gate 阻断时间，抽检归因用）。"""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def normalize_point_text(text: str) -> str:
@@ -90,14 +102,18 @@ def _entry_body(dl: Any, entry: Any) -> str:
 
 
 def _candidates(dl: Any, limit: int,
-                only_ids: list[str] | None = None) -> tuple[list[Any], dict[str, int]]:
+                only_ids: list[str] | None = None,
+                retry_blocked: bool = False) -> tuple[list[Any], dict[str, int]]:
     """候选条目：active + 有正文 + 非待清理 + 未抽过。返回 (列表, 跳过统计)。
 
     only_ids（批次 70 条目级形态覆盖）：指定条目直取——跳过游标检查（调用方
     已 purge_entry_points 清溯源，重抽即视为新候选）；仍要求 active + 有正文。
+    gate_blocked（TODO 8.5）：自洽性闸门判"无可独立成点"的条目默认跳过（不重复
+    烧 LLM）；retry_blocked=True 时放回候选，由调用方清标记后重抽。
     """
     done = dl.point_source_entry_ids()
-    skipped = {"no_body": 0, "not_knowledge": 0, "already_done": 0, "too_short": 0}
+    skipped = {"no_body": 0, "not_knowledge": 0, "already_done": 0,
+               "too_short": 0, "gate_blocked": 0}
     out: list[Any] = []
     pool = ([dl.get_entry(eid) for eid in only_ids] if only_ids
             else dl.list_entries(status="active", limit=10000))
@@ -106,6 +122,10 @@ def _candidates(dl: Any, limit: int,
             continue
         if only_ids is None and e.id in done:
             skipped["already_done"] += 1
+            continue
+        if (only_ids is None and not retry_blocked
+                and e.meta.get("points_gate")):
+            skipped["gate_blocked"] += 1
             continue
         if str(e.meta.get("value_flag", "")) == "not_knowledge":
             skipped["not_knowledge"] += 1
@@ -195,13 +215,16 @@ def _integral_result(e: Any, body: str, reason: str | None = None) -> dict[str, 
 
 def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False,
                        llm: Any = None,
-                       entry_ids: list[str] | None = None) -> dict[str, Any]:
+                       entry_ids: list[str] | None = None,
+                       retry_blocked: bool = False) -> dict[str, Any]:
     """跑一批知识点抽取；返回统计（CLI 打印 / 测试断言）。
 
     llm 参数为测试注入口；缺省从 cfg 构建（未启用 → split 条目记 error，
     integral 照产——零费用不依赖 LLM）。
     entry_ids（批次 70 条目级形态覆盖）：只抽指定条目——配套调用方先
     purge_entry_points 清溯源；覆盖判定见主循环 force_form。
+    retry_blocked（TODO 8.5）：把被自洽性闸门拦下的条目放回候选并清
+    meta.points_gate 后重抽（口径/prompt 调整后的唯一重试入口）。
     """
     if llm is None:
         llm = LlmClient.from_config(cfg)
@@ -211,10 +234,13 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                              "processed": 0, "integral": 0, "split": 0,
                              "mixed_dir": 0, "force_overrides": 0, "skeleton": 0,
                              "points_created": 0, "points_linked": 0,
+                             "points_rejected": 0, "gate_blocked": 0,
+                             "reject_reasons": {}, "rejected": [],
                              "body_truncated": 0, "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
     try:
-        cand, skipped = _candidates(dl, limit, only_ids=entry_ids)
+        cand, skipped = _candidates(dl, limit, only_ids=entry_ids,
+                                    retry_blocked=retry_blocked)
         stats["skip_counts"] = skipped
         stats["pool_remaining"] = max(0, dl.count_entries("active")
                                       - len(cand) - sum(skipped.values()))
@@ -229,6 +255,11 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     dl.merge_meta(e.id, {"body_flag": "skeleton"})
                 stats["skeleton"] += 1
                 continue
+            # 显式重抽（Web 合/拆 / --retry-blocked）：先清闸门标记——即使这次
+            # LLM 失败也允许下一轮自动重试，不把条目锁死（宁多一次调用，不丢条目）。
+            if (not dry_run and (entry_ids or retry_blocked)
+                    and e.meta.get("points_gate")):
+                dl.merge_meta(e.id, {"points_gate": None})
             # 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则——
             # "integral" 强制合（文学创作/杂烩也整条即点）；"split" 强制拆
             # （非文学创作也走 LLM 切点）；无/auto → 回归规则。
@@ -293,6 +324,37 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                 if len(body) > _POINT_BODY_CAP:
                     stats["body_truncated"] += 1
                 res = _integral_result(e, body)
+            # 自洽性闸门（TODO 8.5，用户裁决 1）：LLM 产出的每个点独立复核——
+            # 裸名词/步骤残缺/截断/未闭合代码块不落库（不污染检索·词云·关系图），
+            # 只留统计与审计。降级照抄（llm_used=False）不过闸：那不是"抽出来的
+            # 点"，且 LLM 恢复后必须允许重抽（否则长文 [截断] 会被永久阻断）。
+            entry_reasons: dict[str, int] = {}
+            if res.get("llm_used"):
+                accepted: list[dict[str, Any]] = []
+                for p in res["points"]:
+                    gate = gate_point(p["text"])
+                    if gate.ok:
+                        accepted.append(p)
+                        continue
+                    stats["points_rejected"] += 1
+                    entry_reasons[gate.reason] = entry_reasons.get(gate.reason, 0) + 1
+                    stats["reject_reasons"][gate.reason] = (
+                        stats["reject_reasons"].get(gate.reason, 0) + 1)
+                    if len(stats["rejected"]) < _REJECTED_DETAIL_CAP:
+                        stats["rejected"].append({
+                            "entry_id": e.id, "title": str(e.title)[:40],
+                            "reason": gate.reason, "text": str(p["text"])[:40]})
+                if not accepted:
+                    # 全拒 / LLM 明确返回空点：记 points_gate 防下一轮重复烧钱；
+                    # dry-run 不写库（改口径后可重跑观察，不锁死条目）。
+                    if not dry_run:
+                        dl.merge_meta(e.id, {"points_gate": {
+                            "status": "blocked",
+                            "reasons": entry_reasons or {"no_point": 1},
+                            "at": _now_iso()}})
+                    stats["gate_blocked"] += 1
+                    continue
+                res = {**res, "points": accepted}
             stats["processed"] += 1
             stats[res["judge"]] = stats.get(res["judge"], 0) + 1
             for p in res["points"]:

@@ -4,6 +4,18 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第一百零一批（TODO 8.5）：知识点自洽性闸门（`point_gate.py` + prompt 纪律）
+
+- **生成层**（`semantic/tasks/point_extract.py`）：三份 prompt（判定+提炼 / 切点-only / 整条提炼）统一拼 `_SELF_CONSISTENCY_RULES`——只允许四种合格形态（带论据观点/结论、概念解释或术语描述、完整步骤、独立数据）；禁裸名词、禁无支撑单句、步骤必须首尾完整且编号连续、代码块闭合、数据带口径；一个文件只产 1 点合法；确认无可独立成点时 `points` 输出空数组。空数组不再判"LLM 未返回点"故障（`llm_used=True`），能力版本 2.0.0 → **2.1.0**。
+- **守门层**（新增 `pipeline/point_gate.py`）：确定性闸门，7 个原因码（过短/裸名词/步骤缺首/跳号/缺尾/尾部截断/代码块未闭合）。判据保守：裸名词=无标点+无数字+无代码+<40 字；步骤标记必须出现在行首或 `；。：，` 之后、且数字后不跟数字（防 `Gemini 3、`、`3.13` 误报）；不确定一律放行。**"一句干巴巴结论"不做机器判定**（与单句术语定义不可分），交 prompt + 20 点人工抽检。
+- **流水线**（`pipeline/points.py`）：LLM 产出的每个点先过闸，不合格点**不落库**（不污染检索/词云/关系图）；整条全拒或 LLM 明确无点 → `meta.points_gate = {status,reasons,at}`，自动运行跳过（不重复烧 LLM）；`kpoints --retry-blocked` 清标记重抽；Web 条目级合/拆（`entry_ids`）重抽前也清标记；降级照抄（LLM 未启用）不过闸（那不是抽出来的点，且 LLM 恢复后必须允许重抽，否则长文 `[截断]` 会被永久阻断）。新增统计键 `points_rejected` / `gate_blocked` / `reject_reasons` / `rejected`（明细上限 20）。
+- **CLI/Web**：`kpoints --retry-blocked`；报告打印闸门原因分布与重抽提示；`POST /api/entries/{id}/form` 响应附加 `gate`（老前端忽略即可）。
+- **契约**：表结构/迁移/配置键**零变更**（canary 前五项指纹不变）；`capabilities` 指纹因 `point_extract` 版本升 2.1.0 更新为 `62e4f6231165`；条目 meta 新增 `points_gate`；工单 `docs/design/变更工单-2026-10-24-8.5自洽性闸门.md`。
+- **测试**：新增 `tests/test_point_gate.py`（23 例）+ `tests/test_points.py` 追加 8 例（裸名词阻断/部分合格/空点/dry-run 不落标/`retry_blocked`/`entry_ids` 清标/三份 prompt 纪律）；全量 **566 passed, 1 skipped**。
+- **真库探针**（`temp/point_gate_probe.py`，只读）：现有 27 点 **0 误杀**；6 类反例全拦、4 类正例全放行（含产品枚举 `Gemini 3、Claude 4.8` 与版本号 `3.13` 的误报防护）。`kpoints --limit 2` 实跑：零拦截、新增 2 点（592/683 字），库内 points 27 → 29。
+- **20 点人工抽检（Phase 8 Gate，2026-10-24）**：全量补抽 11 条（新增 18 点，points 29 → 47，零拦截/零阻断）后随机抽 20 点判"脱离原文能否独立读懂"——**19/20 = 95%**，达到 ≥90%。唯一不合格点：LLM 把提示词约束写进正文（"该方法以中文输出，定位为短篇/都市小说创作指导"），闸门无法确定性区分"方法规定用中文写作"与"模型复述指令"，已记入下一步 prompt 修正（不属闸门可判项）。
+- **入库前置审口径落文档**（用户 2026-10-24 采纳）：`new_entries="pending"` 用法写进示例配置与 TODO 阶段 B——大体量源"适配器范围筛选 → 待审 → 抽样反哺规则"，禁止全量直灌；未改默认行为。
+
 ### 变更工单 · 第一百批（打包）：可分发 wheel + `knowatlas` 命令 + 静态资源入包
 
 - **打包产物**：`uv build` → `knowatlas-0.2.0-py3-none-any.whl`（0.7 MB，99 个文件）+ sdist。安装即为命令 `knowatlas`，不必再记 `python -m knowatlas`。
