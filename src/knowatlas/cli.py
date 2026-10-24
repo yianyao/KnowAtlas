@@ -161,6 +161,7 @@ def _cmd_kadd(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "kadd")
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     run_id = uuid.uuid4().hex[:16]
@@ -184,6 +185,7 @@ def _cmd_kadd(args: argparse.Namespace) -> int:
 def _cmd_ksync(args: argparse.Namespace) -> int:
     cfg = load_config()
     setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "ksync")
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     try:
@@ -240,11 +242,52 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _apply_serve_overrides(cfg, host: str, port: int) -> None:
+    """把 serve 实际监听的 host/port 回写进 cfg（R8，2026-10-24 对账修复）。
+
+    为什么必须回写：安全中间件的 Host 白名单是按 ``cfg.general.server_port`` 生成的
+    （web/api.py::install_security_middleware），而 ``serve --port 9000`` 只改 uvicorn
+    的监听端口、不动 cfg —— 浏览器访问 http://127.0.0.1:9000 会带 Host: 127.0.0.1:9000，
+    不在白名单内，直接被 FORBIDDEN_HOST 拒掉（表现为"换了端口就打不开"）。
+    桌面壳 desktop/main.py 早就是同口径（create_app 之前覆盖 cfg 值），CLI 这条补齐。
+    """
+    general = cfg.raw.setdefault("general", {})
+    general["server_host"] = host
+    general["server_port"] = int(port)
+
+
+def _warn_if_llm_unavailable(cfg, command: str) -> None:
+    """R10：LLM 声明启用却读不到任何 key —— 语义层会静默降级，必须显式告知。
+
+    真实踩坑（2026-10-24 样本验证）：key 配在用户级环境变量，进程早于 `setx` 启动
+    读不到，`kpoints` 安安静静产出「整篇 4023 字 integral」点、split 文档归零，
+    用户与 agent 都看不出"其实没连上 LLM"。降级本身可以接受，**沉默**不行。
+    """
+    if not bool(cfg.get("llm.enabled", False)):
+        return
+    names: list[str] = []
+    for backend in cfg.get("llm.backends", []) or []:
+        if isinstance(backend, dict):
+            names.extend(str(backend.get("api_key_env", "")).split(","))
+    ordered = list(dict.fromkeys(n.strip() for n in names if n.strip()))
+    if not ordered:
+        ordered = ["KNOWATLAS_LLM_API_KEY"]
+    if any(os.environ.get(name) for name in ordered):
+        return
+    print(f"WARN 语义层降级：{command} 需要 LLM，但 [llm] enabled=true 且这些环境变量全为空"
+          f"（{'/'.join(ordered)}）——分类停在规则级、点抽取退化为「整篇照抄 integral」、"
+          "split 文档归零。配好 key 后重跑即可。")
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     import secrets
 
     cfg = load_config()
+    host = args.host or str(cfg.get("general.server_host", "127.0.0.1"))
+    port = int(args.port or cfg.get("general.server_port", 8420))
+    _apply_serve_overrides(cfg, host, port)
     setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "serve")
     dl = _open(cfg)
     locators, semantics = build_registries(cfg)
     from .web.app import create_app
@@ -260,8 +303,6 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         auto_generated = True
 
     app = create_app(cfg, dl, locators, semantics)
-    host = args.host or str(cfg.get("general.server_host", "127.0.0.1"))
-    port = int(args.port or cfg.get("general.server_port", 8420))
     import uvicorn
 
     print(f"KnowAtlas 服务：http://{host}:{port}")
@@ -397,6 +438,7 @@ def _cmd_kcheck(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "kcheck")
     dl = _open(cfg)
     try:
         stats = run_health_check(cfg, dl, limit=args.limit, qps=args.qps)
@@ -412,6 +454,7 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "kpoints")
     dl = _open(cfg)
     try:
         if args.purge_points:  # 口径变更推倒重来（2026-10-22）：只清点层，原文零影响

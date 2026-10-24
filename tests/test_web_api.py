@@ -784,3 +784,20 @@ def test_linkage_mind_paths(client, dl):
     assert r["mind_paths"][m.id] == "PECOS进度/采购/供应商管理"
     assert o.id not in r["mind_paths"]
     assert client.get("/api/entries/linkage?ids=").json() == {"linkage": {}, "mind_paths": {}}
+
+
+def test_serve_port_override_updates_host_whitelist(cfg, dl, registries):
+    """R8（2026-10-24 对账修复）：serve --port 换端口后，Host 白名单必须跟着换。
+
+    修复前：白名单按 cfg.general.server_port(8420) 生成，--port 9100 只改监听端口，
+    浏览器带 Host: 127.0.0.1:9100 会被 FORBIDDEN_HOST 拒（表现为"换端口打不开"）。
+    """
+    from knowatlas.cli import _apply_serve_overrides
+
+    locators, semantics = registries
+    _apply_serve_overrides(cfg, "127.0.0.1", 9100)
+    app = create_app(cfg, dl, locators, semantics)
+    ok = TestClient(app, headers={"Host": "127.0.0.1:9100"})
+    assert ok.get("/api/stats").status_code == 200
+    old = TestClient(app, headers={"Host": "127.0.0.1:8420"})
+    assert old.get("/api/stats").status_code == 403

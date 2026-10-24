@@ -9,7 +9,7 @@ from pathlib import Path
 from .errors import ConfigError
 
 # 顶层节（环境变量覆盖识别用）
-_TOP_SECTIONS = ("general", "web", "llm", "embedding", "fetch")
+_TOP_SECTIONS = ("general", "web", "llm", "embedding", "fetch", "clean")
 
 # config schema 键集（canary 覆盖项：改动必须先写工单）
 CONFIG_SCHEMA_KEYS = (
@@ -24,6 +24,7 @@ CONFIG_SCHEMA_KEYS = (
     "fetch.fallback_backend", "fetch.max_fetch_per_run",
     "fetch.max_retries", "fetch.min_content_chars", "fetch.on_sync",
     "fetch.rate_limit_qps", "fetch.timeout_seconds",
+    "clean.enabled", "clean.min_keep_ratio", "clean.redact_enabled",
     "sources.bilibili", "sources.bookmarks", "sources.db", "sources.emmx",
     "sources.folders", "sources.ima", "sources.mail", "sources.manual",
     "sources.opml", "sources.session", "sources.txdoc", "sources.wx",

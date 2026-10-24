@@ -4,6 +4,43 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十八批（97a）：通用清洗段落地（`clean.py` + 内容收口 + R10 降级告警）
+
+- **新增 `src/knowatlas/pipeline/clean.py`**：`CleanThresholds`（阈值注入）/ `CleanResult` / `clean_common()` / `redact()` / `is_navigation_doc()`。五条规则全部按真实样本形态设计：页码行（占比 ≥2% 才删）、目录点线块（≥3 条 + 末尾页码）、重复页眉页脚（三重判据：像散文 + **行距周期性** + 非结构性）、推广尾（末尾 25 行 + 总量 ≤5%）、空白归一；`redact` 独立于清洗（手机/证件/邮箱/`sk-*` 密钥，证件规则先于手机号——否则身份证里的 11 位数字会被截断）。**双闸门防误杀**：规则自带占比门槛 + `min_keep_ratio`（删除超 20% 整篇放弃、保留原文）。
+- **`sync.py` 单一收口**：新增 `_ingest_content()`（清洗 → 脱敏 → SHA-256 → content_store → 条目回写），`_fetch_missing` 的正文入库改走它；`content_hash` 一律按**清洗后**文本计算。适配器自产正文（mail/session/emmx）经 `_store_bodies()` 走同一清洗口径，但**只清正文库那份**、不动 `inline_content`——邮件 inline 是去引用的增量摘要，用全量正文重建会破坏既有契约（`test_maildir` 当场抓住）。
+- **配置契约变更（工单 `变更工单-2026-10-24-97a清洗层.md`）**：新增 `[clean]` 顶层节与 3 键 `clean.enabled` / `clean.redact_enabled` / `clean.min_keep_ratio`；`_TOP_SECTIONS` 增加 `clean`；canary `config_keys` 指纹 `e672d0a323eb` → `508b22311668`。
+- **R10 静默降级告警**：`cli._warn_if_llm_unavailable()` 在 `kadd`/`ksync`/`serve`/`kcheck`/`kpoints` 启动时检查 `[llm] enabled=true` 但所有 `api_key_env` 为空 → 打印 WARN 并说明后果（点抽取退化为「整篇照抄 integral」、split 文档归零）。真实踩坑：key 配在用户级环境变量，进程早于 `setx` 启动读不到，两次跑批都没人发现。
+- **测试**：新增 `tests/test_clean.py`（27 例：页码占比上下界、目录块/单条点线/中文省略号、重复行三重判据与结构性豁免、代码块保护、推广窗口与上限、空白归一、幂等、放弃闸门、脱敏顺序、导航文件）；全量 `pytest` **508 passed / 1 skipped**。
+- **实测（20 份真实正文 105,846 行）**：识别噪声 4,896 行（页码 2,578 / 目录 1,555 / 重复行 751 / 推广 10 / 目录标题 2），正文行保留率 **0.9999**（差额为空白与分隔线归一）；`agentic-design-patterns` 页码 1,347 行、目录 273 行清零；`agentic-ai-guide` 目录 994 行清零；`Harness`/`Obsidian-AI` 推广尾清零；`雪花写作法` 零删除。5 篇留有 ≤1% 的低占比独立数字行——**按设计保留**（低于 2% 阈值时可能是数据/编号，宁可不洗）。
+- **真库重灌（97a-3，2026-10-24 20:1x–20:4x）**：`--purge-source folders` + 逐文件重抓 28 份（`temp/reingest.py` 计时），正文 5.91 M → 6.19 M 字符、条目 27/30 有正文。`agentic-design-patterns` 重灌后 484,488 → **454,559** 字符（删 29,929 字噪声），开头不再是 `ii` + 目录，直接进「第1章」。LLM 可用时点抽取产出 1.3–1.6 K 字的结构化摘要（`judge_reason` 走"整体型文档整条即点"口径），不再是 4,023 字整篇照抄。
+- **实施中修掉的两个自身 bug**：① `_clean_options` 兜底值抄成 `0.90`，与 `CleanThresholds` 默认 0.80 脱节 → 配置里没写 `[clean]` 时 `agentic-design-patterns`（保留率 0.856）每次都被判"洗太狠"退回原文，重灌表现为"洗了但库没变"；改为兜底取 `CleanThresholds().min_keep_ratio`。② 重复行规则第一版把代码符号当页眉（见上）。两者都由真实重灌暴露，已进单测。
+- **未完成**：两个巨型 PDF 未重灌（`Hello-Agents` 97.9 MB 单文件实测 **25 分钟**、`厦门大学…882页` 51 MB 跑 8 分钟未完被中止）——现有 pdfplumber 链路对百 MB 级 PDF 没有上限，需要 97b 加大文件闸门（页数/大小阈值 + 超时 + 跳过打标）。
+- **偏离（用户 2026-10-24 认可）**：① trafilatura 换装移出本批（单列 97a+，用同批样本 A/B，避免同时改「进来的正文」与「洗掉的噪音」两个变量）；② IMA 接入验收顺延至 8.12（本机无凭证）。
+
+### 变更工单 · 对账修复 R7/R8（2026-10-24，用户授权「顺手做吧」）
+
+- **R7 版本号统一**：`src/knowatlas/__init__.py` `0.1.0` → **`0.2.0`**，`--version` 与 `pyproject.toml` 对齐（canary 不校验包版本，无契约影响）。
+- **R8 `serve --port` 被 Host 白名单拒**：新增 `cli._apply_serve_overrides(cfg, host, port)`，`_cmd_serve` 在 `load_config` 之后、`create_app` 之前把实际监听的 host/port 回写 `general.server_host/server_port`。根因：`web/api.py::install_security_middleware` 按 `cfg.general.server_port` 生成白名单，而 `--port` 只改 uvicorn 监听端口、不动 cfg；桌面壳 `desktop/main.py` 早就是回写口径，CLI 这条补齐。同时删除原先重复的 host/port 计算。
+- **测试**：新增 `tests/test_web_api.py::test_serve_port_override_updates_host_whitelist`（白名单换到 9100 后 9100 通、8420 拒）；全量 `pytest` 绿。
+- **探针**：`serve --port 9101` 起服务 → `GET /api/stats` 200、`GET /` 200（修复前为 403 FORBIDDEN_HOST）。
+- **附（配置，不入库）**：用户提供的真实 `config/knowatlas.toml` 中 `roots = [D:/sData/KnowLedge]` 未加引号，TOML 在第 85 行报 `Invalid value`，所有命令会 `ConfigError`；已改为 `roots = ["D:/sData/KnowLedge"]`（`[sources.folders]` 与 `[sources.emmx]` 两处）。
+
+### 变更工单 · 第九十七批：清洗层方案立项（设计交付，无代码）
+
+- **交付物**：新增 `docs/design/知识索引工具-清洗层方案.md`（213 行）。两段式设计——**通用段**（`clean_common` + `CleanThresholds` 阈值注入 + `redact` 脱敏独立于清洗）+ **分源段**（办公/PDF/emmx/AI 会话/邮件/HTML·网页/腾讯文档·IMA/微信/B站/OPML/folder 共 11 类）。
+- **核心原则**：只保留知识，其余全丢；导航/按钮墙/页眉页脚/目录索引/模板骨架/签名/寒暄/重复内容不进库；重复内容按内容 SHA-256 去重收口（「垃圾不进库」与「重复不进库」同一条纪律）。
+- **落地序**：97a 通用段 + redact + 收口 + trafilatura 换装（含 IMA 一并验收）→ 97b 办公/PDF 解析器 → 97c 邮件 furniture + emmx 剪枝 → 97d AI 会话 → 97e 微信。每批固定验收：真实数据清洗前后 diff（入夹具前必过 redact）、误杀用例固化、全量 pytest + 字节扫描、真库重同步探针。
+- **评审与备查**：本轮采纳 P0/P1/P2 三级评审意见（全部采纳或有条件采纳）；trafilatura 质量不达标且 GPU 可用时升级 MinerU-HTML/Dripper（WebMainBench 领先约 20 ROUGE 点），暂不立项；`quote_strip` 加「剥离率 >90% 告警抽检」随 97c 落。
+- **状态**：**设计完成、代码零落地**。97a 起另行排期，纳入 TODO Phase 8.1–8.5。
+
+### 变更工单 · 第九十六批：知识集组头 host 信号降级为解释注记（补记账）
+
+- **病灶**：既有裁决「域名不作为关联节点，仅保留为解释信息」（2026-10-22 用户批注）在知识集组头 chips 有落地缺口——host 与 `agent`/`智能`/`ai` 等语义词并列成同权 chip，用户指认「github.com 也是知识？」。
+- **后端**（`pipeline/embed_index.py`）：`semantic` 与 `structural` 两组头的 host 移出 `signals` 数组，改独立 `header.host` 字段——组头不再把域名当共享词。
+- **前端**（`index.html` ×2 + `components.css`）：渲染为组头尾部灰字注记「源：github.com」，移除 `sig-host` chip 样式。
+- **测试**：`test_embed.py` 两处断言同步新契约；全量回归绿。
+- **记账补正**：代码提交 `2f8fc23`（2026-10-24 10:08）当时未追加本 CHANGELOG，违反夜跑纪律第 4 条；2026-10-24 对账时补记，非新实现。
+
 ### 变更工单 · 第九十五批：条目级去重归一 + GitHub 模板骨架拦截（2026-10-24 用户截图五张继续指认）
 
 - **病灶**（真库截图 + 探针实锤）：①bojieli/ai-agent-book 根页与 /tree/main 变体书签各建条目（canonical 只去尾斜杠没归一 GitHub 仓库页）；②docsify 家具 coverpage/navbar/sidebar 入库产点（「你给我这种页面我来干嘛？」）；③You-Dont-Know-JS 三页正文是 226-656 字符纯 GitHub 页面模板（Skip to content/Navigation Menu/Repository navigation/File metadata and controls）——四路骨架信号全漏网，产出的「点」就是标题；④存量条目落库 canonical 过时，scan_and_merge 只读落库值不重算。

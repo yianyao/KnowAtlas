@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +35,7 @@ from ..ids import content_hash
 from ..models import Entry, FetchResult
 from ..registry.capability import FetchContext
 from ..semantic.base import SemanticInput, TaskContext
+from .clean import CleanThresholds, clean_common
 from .kadd import ensure_category_path
 from .dedupe import dedupe_entries, scan_and_merge
 from .mail_threads import rebuild_mail_threads
@@ -146,7 +148,8 @@ def _categorize(dl: Any, semantics: Any, cfg: Any, entries: list[Entry], new_ids
 
 
 def _apply_content(entry: Entry, text: str, content_hash_hex: str,
-                   fetcher: str, fetched_at: str) -> Entry:
+                   fetcher: str, fetched_at: str,
+                   clean_meta: dict | None = None) -> Entry:
     """补抓成功后重建条目（同 id upsert 更新正文；截断规则与 manual 源一致）。"""
     inline: str | None
     if len(text) <= _INLINE_LIMIT:
@@ -157,6 +160,8 @@ def _apply_content(entry: Entry, text: str, content_hash_hex: str,
     meta["fetch_backend"] = fetcher
     meta["fetched_at"] = fetched_at
     meta["fetch_status"] = "ok"
+    if clean_meta is not None:
+        meta["clean"] = clean_meta   # 批 97a：清洗统计（删了多少行、保留率、是否放弃）
     return Entry(
         id=entry.id, source_type=entry.source_type, title=entry.title,
         locator=entry.locator, locator_canonical=entry.locator_canonical,
@@ -164,6 +169,76 @@ def _apply_content(entry: Entry, text: str, content_hash_hex: str,
         content_hash=content_hash_hex, meta=meta, created_at=entry.created_at,
         exported_at=entry.exported_at, status=entry.status,
     )
+
+
+def _clean_options(cfg: Any) -> tuple[bool, bool, CleanThresholds]:
+    """读 [clean] 段：是否清洗 / 是否脱敏 / 阈值。
+
+    兜底值**必须**取 `CleanThresholds()` 的默认值，不能另抄一份数字——
+    否则配置里没写 [clean] 时，这里的兜底会静默覆盖掉默认阈值
+    （真实踩坑：这里抄了 0.90，导致 0.856 的书被判"洗太狠"整篇退回原文）。
+    """
+    defaults = CleanThresholds()
+    try:
+        keep = float(cfg.get("clean.min_keep_ratio", defaults.min_keep_ratio))
+    except (TypeError, ValueError):
+        keep = defaults.min_keep_ratio
+    return (bool(cfg.get("clean.enabled", True)),
+            bool(cfg.get("clean.redact_enabled", True)),
+            CleanThresholds(min_keep_ratio=keep))
+
+
+def _ingest_content(cfg: Any, dl: Any, entry: Entry, raw_text: str,
+                    fetcher: str, fetched_at: str) -> Entry:
+    """**唯一正文收口**（批 97a）：清洗 → 脱敏 → 内容 SHA-256 → content_store。
+
+    所有正文入库路径都必须过这里，否则库里会同时存在"洗过的"和"没洗的"正文，
+    点层无法解释。`content_hash` 一律按**清洗后**文本计算——同一篇文不会因清洗前后
+    变成两条记录。返回重建后的条目（调用方负责 upsert）。
+    """
+    enabled, redact_on, thresholds = _clean_options(cfg)
+    if enabled:
+        result = clean_common(raw_text, thresholds, redact_enabled=redact_on)
+        text, clean_meta = result.text, result.as_meta()
+    else:
+        text, clean_meta = raw_text, None
+    fhash = content_hash(text)
+    dl.put_content(FetchResult(text=text, content_hash=fhash,
+                               fetcher=fetcher, fetched_at=fetched_at))
+    return _apply_content(entry, text, fhash, fetcher, fetched_at,
+                          clean_meta=clean_meta)
+
+
+def _store_bodies(cfg: Any, dl: Any, bodies: dict[str, str],
+                  fetcher: str) -> list[Entry]:
+    """适配器产出的全量正文（mail/session/emmx）走同一清洗口径。
+
+    与 `_ingest_content` 的差别：这些源的 `inline_content` 是适配器算好的增量摘要
+    （例如邮件要去掉引用块），**不能**用全量正文重建——这里只清正文库那一份，
+    条目仅更新 `content_hash` 与 `meta.clean`（批 97a）。
+    """
+    enabled, redact_on, thresholds = _clean_options(cfg)
+    out: list[Entry] = []
+    for eid, text in bodies.items():
+        e = dl.get_entry(eid)
+        if e is None:
+            continue
+        if e.content_hash and dl.get_content(e.content_hash) is not None:
+            continue  # 已入库（幂等：重复同步不重建）
+        body, clean_meta = text, None
+        if enabled:
+            result = clean_common(text, thresholds, redact_enabled=redact_on)
+            body, clean_meta = result.text, result.as_meta()
+        fhash = content_hash(body)
+        dl.put_content(FetchResult(text=body, content_hash=fhash,
+                                   fetcher=fetcher, fetched_at=_now_iso()))
+        meta = dict(e.meta)
+        if clean_meta is not None:
+            meta["clean"] = clean_meta
+        out.append(replace(e, content_hash=fhash, meta=meta))
+    if out:
+        dl.upsert_entries(out)
+    return out
 
 
 def _is_timeout(exc: Exception) -> bool:
@@ -263,13 +338,9 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
         if is_garbled(text):
             _flag(e, "garbled")  # 乱码正文不入库不进 FTS，直接进待清理候选
             continue
-        fhash = content_hash(text)
-        dl.put_content(FetchResult(text=text, content_hash=fhash,
-                                   fetcher=str(cfg.get("fetch.default_backend", "simple")),
-                                   fetched_at=datetime.now().astimezone().isoformat(timespec="seconds")))
-        updates.append(_apply_content(e, text, fhash,
-                                      str(cfg.get("fetch.default_backend", "simple")),
-                                      datetime.now().astimezone().isoformat(timespec="seconds")))
+        updates.append(_ingest_content(
+            cfg, dl, e, text, str(cfg.get("fetch.default_backend", "simple")),
+            _now_iso()))
         fetched_ids.append(e.id)
         done += 1
     if updates:
@@ -601,48 +672,24 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         if name == "mail":
             full_bodies: dict[str, str] = out.stats.pop("_full_bodies", {})
             convs = out.stats.pop("conv_messages", [])
-            stored_count = 0
-            for eid, text in full_bodies.items():
-                e = dl.get_entry(eid)
-                if e is not None and e.content_hash \
-                        and dl.get_content(e.content_hash) is None:
-                    dl.put_content(FetchResult(
-                        text=text, content_hash=e.content_hash,
-                        fetcher="maildir", fetched_at=_now_iso()))
-                    stored_count += 1
-            mail_stats["contents_stored"] = stored_count
+            stored = _store_bodies(cfg, dl, full_bodies, "maildir")
+            mail_stats["contents_stored"] = len(stored)
             mail_stats.update(rebuild_mail_threads(dl, convs, run_id))
         # session 源附加处理（第五十七批）：全量对话正文进 content_store +
         # 轮次落 conv_messages + 每会话一条 source 线程（与 mail 同约定，幂等）
         if name == "sessions":
             full_bodies: dict[str, str] = out.stats.pop("_full_bodies", {})
             convs = out.stats.pop("conv_messages", [])
-            stored_count = 0
-            for eid, text in full_bodies.items():
-                e = dl.get_entry(eid)
-                if e is not None and e.content_hash \
-                        and dl.get_content(e.content_hash) is None:
-                    dl.put_content(FetchResult(
-                        text=text, content_hash=e.content_hash,
-                        fetcher="harvester_export", fetched_at=_now_iso()))
-                    stored_count += 1
-            mail_stats = {"contents_stored": stored_count}
+            stored = _store_bodies(cfg, dl, full_bodies, "harvester_export")
+            mail_stats = {"contents_stored": len(stored)}
             mail_stats.update(
                 rebuild_session_threads(dl, convs, run_id))
         # emmx 源附加处理（第六十五批，方案 §7.8）：integral 整图大纲超 4096 的
         # 全文入 content_store（适配器 inline 留截断摘要 + content_hash 指向）
         if name == "emmx":
             full_bodies = out.stats.pop("_full_bodies", {})
-            stored_count = 0
-            for eid, text in full_bodies.items():
-                e = dl.get_entry(eid)
-                if e is not None and e.content_hash \
-                        and dl.get_content(e.content_hash) is None:
-                    dl.put_content(FetchResult(
-                        text=text, content_hash=e.content_hash,
-                        fetcher="emmx_outline", fetched_at=_now_iso()))
-                    stored_count += 1
-            mail_stats = {"contents_stored": stored_count}
+            stored = _store_bodies(cfg, dl, full_bodies, "emmx_outline")
+            mail_stats = {"contents_stored": len(stored)}
         if revived_ids:
             dl.set_status(revived_ids, "active")  # upsert 不写 status；源里重现即恢复
             dl.log_task(_now_iso(), "sync", "revive", ",".join(revived_ids),
