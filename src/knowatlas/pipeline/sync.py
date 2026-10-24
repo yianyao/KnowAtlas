@@ -35,7 +35,7 @@ from ..ids import content_hash
 from ..models import Entry, FetchResult
 from ..registry.capability import FetchContext
 from ..semantic.base import SemanticInput, TaskContext
-from .clean import CleanThresholds, clean_common
+from .clean import CleanThresholds, clean_text
 from .kadd import ensure_category_path
 from .dedupe import dedupe_entries, scan_and_merge
 from .mail_threads import rebuild_mail_threads
@@ -198,7 +198,9 @@ def _ingest_content(cfg: Any, dl: Any, entry: Entry, raw_text: str,
     """
     enabled, redact_on, thresholds = _clean_options(cfg)
     if enabled:
-        result = clean_common(raw_text, thresholds, redact_enabled=redact_on)
+        # clean_text 会按有无页分隔符（\f）自动选 clean_paged / clean_common：
+        # PDF 快速通道带页边界，能无条件删页边页码与跨页页眉（批 97b）
+        result = clean_text(raw_text, thresholds, redact_enabled=redact_on)
         text, clean_meta = result.text, result.as_meta()
     else:
         text, clean_meta = raw_text, None
@@ -227,7 +229,7 @@ def _store_bodies(cfg: Any, dl: Any, bodies: dict[str, str],
             continue  # 已入库（幂等：重复同步不重建）
         body, clean_meta = text, None
         if enabled:
-            result = clean_common(text, thresholds, redact_enabled=redact_on)
+            result = clean_text(text, thresholds, redact_enabled=redact_on)
             body, clean_meta = result.text, result.as_meta()
         fhash = content_hash(body)
         dl.put_content(FetchResult(text=body, content_hash=fhash,

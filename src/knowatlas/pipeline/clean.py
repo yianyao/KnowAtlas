@@ -15,7 +15,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+
+# 页分隔符：与 `fetchers/pdf_fast.PAGE_BREAK` 同一个字符（那边是来源，这里只认值）
+PAGE_BREAK = "\f"
 
 # ---- 规则用到的形态 ----
 _PAGE_NUM_RE = re.compile(r"^\s*(?:[ivxlcdm]{1,7}|\d{1,4})\s*$", re.IGNORECASE)
@@ -56,6 +59,9 @@ class CleanThresholds:
     promo_max_ratio: float = 0.05     # 推广行最多删全篇这么多比例
     min_keep_ratio: float = 0.80      # 低于此保留率整篇放弃（页码重的书正常删 10–15%）
     min_lines_for_ratio: int = 40     # 少于这么多非空行，不做占比类规则（短文档不猜）
+    page_edge_lines: int = 3          # 页边界规则：每页首/尾各看几行（97b）
+    page_furniture_ratio: float = 0.5  # 跳页重复率 ≥ 此值才算页眉页脚（97b）
+    page_min_pages: int = 3           # 少于这么多页不做页边界规则（97b）
 
 
 @dataclass
@@ -66,15 +72,19 @@ class CleanResult:
     abandoned: bool = False
     redacted: int = 0
     is_navigation: bool = False
+    paged: bool = False          # True = 走过页边界规则（说明来源带页分隔符，如 PDFium）
 
     def as_meta(self) -> dict:
         """进 Entry.meta['clean'] 的可解释统计（不含正文内容）。"""
-        return {
+        meta = {
             "removed": {k: v for k, v in self.removed.items() if v},
             "keep_ratio": round(self.keep_ratio, 3),
             "abandoned": self.abandoned,
             "redacted": self.redacted,
         }
+        if self.paged:
+            meta["paged"] = True
+        return meta
 
 
 def _nonempty_lines(text: str) -> int:
@@ -308,3 +318,109 @@ def clean_common(text: str, thresholds: CleanThresholds | None = None,
     if redact_enabled:
         result.text, result.redacted = redact(result.text)
     return result
+
+
+# ---- 页边界规则（批 97b）：只有 PDF 快速通道会给页分隔符 ----
+
+def _edge_indexes(lines: list[str], edge: int) -> list[int]:
+    """每页首/尾各取 edge 个非空行（页眉页脚只可能长在页边界上）。"""
+    idx = [i for i, line in enumerate(lines) if line.strip()]
+    if len(idx) <= edge * 2:
+        return idx
+    return idx[:edge] + idx[-edge:]
+
+
+def _drop_page_furniture(pages: list[list[str]], removed: dict[str, int],
+                         thresholds: CleanThresholds) -> list[list[str]]:
+    """页边界清洗：删页边页码（无条件）+ 跨页重复的页眉页脚。
+
+    与 `clean_common` 的分工：那边靠"占全篇比例"猜（<2% 不敢删，怕误删数据行）；
+    这里有页边界，**页边上的独立数字必然是页码**，不需要再猜。
+    """
+    if len(pages) < thresholds.page_min_pages:
+        return pages
+
+    # ① 页边独立数字/罗马数字 → 无条件删（页码）
+    numbers = 0
+    for lines in pages:
+        for i in _edge_indexes(lines, thresholds.page_edge_lines):
+            if _PAGE_NUM_RE.match(lines[i]):
+                lines[i] = ""
+                numbers += 1
+    if numbers:
+        removed["page_number_edge"] = removed.get("page_number_edge", 0) + numbers
+
+    # ② 出现在 ≥页数×比例 的页边行 = 页眉页脚（章节标题只出现在自己那几页，比例不够）
+    per_page: list[set[str]] = []
+    for lines in pages:
+        per_page.append({lines[i].strip() for i in _edge_indexes(lines, thresholds.page_edge_lines)
+                         if lines[i].strip()})
+    seen: dict[str, int] = {}
+    for names in per_page:
+        for name in names:
+            seen[name] = seen.get(name, 0) + 1
+    threshold = max(2, int(len(pages) * thresholds.page_furniture_ratio))
+    furniture = {
+        name for name, count in seen.items()
+        if count >= threshold
+        and len(name) <= thresholds.repeat_max_len
+        and _furniture_candidate(name, thresholds)
+    }
+    if not furniture:
+        return pages
+    dropped = 0
+    for lines in pages:
+        for i in _edge_indexes(lines, thresholds.page_edge_lines):
+            if lines[i].strip() in furniture:
+                lines[i] = ""
+                dropped += 1
+    if dropped:
+        removed["page_furniture"] = removed.get("page_furniture", 0) + dropped
+    return pages
+
+
+def clean_paged(text: str, thresholds: CleanThresholds | None = None,
+                *, redact_enabled: bool = True) -> CleanResult:
+    """带页边界的清洗（PDF 快速通道）：页边规则 → 通用段 → 闸门 → 脱敏。
+
+    落库前一定去掉 `\\f`（换成换行），避免控制符进正文库与检索结果。
+    """
+    th = thresholds or CleanThresholds()
+    if PAGE_BREAK not in text:
+        return clean_common(text, thresholds=th, redact_enabled=redact_enabled)
+
+    original_total = _nonempty_lines(text)
+    result = CleanResult(text=text, paged=True)
+    if is_navigation_doc(text):
+        result.is_navigation = True
+        result.removed["navigation_doc"] = original_total
+        result.keep_ratio = 0.0
+        return result
+
+    pages = [page.splitlines() for page in text.split(PAGE_BREAK)]
+    pages = _drop_page_furniture(pages, result.removed, th)
+    joined = "\n".join(line for page in pages for line in page)
+    # 内层先不过闸门（阈值 0.0），闸门放到"页边删除 + 通用段删除"都算完再判一次，
+    # 否则两段各自守 0.80、合起来可能已经删掉 30%。
+    inner = clean_common(joined, thresholds=replace(th, min_keep_ratio=0.0),
+                         redact_enabled=False)
+    result.removed.update(inner.removed)
+    result.is_navigation = inner.is_navigation
+    cleaned = inner.text.replace(PAGE_BREAK, "\n")
+    kept = _nonempty_lines(cleaned)
+    result.keep_ratio = (kept / original_total) if original_total else 1.0
+    if original_total >= th.min_lines_for_ratio and result.keep_ratio < th.min_keep_ratio:
+        result.abandoned = True
+        cleaned = text.replace(PAGE_BREAK, "\n")
+    result.text = cleaned
+    if redact_enabled:
+        result.text, result.redacted = redact(result.text)
+    return result
+
+
+def clean_text(text: str, thresholds: CleanThresholds | None = None,
+               *, redact_enabled: bool = True) -> CleanResult:
+    """清洗统一入口：有页分隔符走 `clean_paged`，否则走 `clean_common`。"""
+    if PAGE_BREAK in text:
+        return clean_paged(text, thresholds=thresholds, redact_enabled=redact_enabled)
+    return clean_common(text, thresholds=thresholds, redact_enabled=redact_enabled)

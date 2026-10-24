@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 from knowatlas.pipeline.clean import (
+    PAGE_BREAK,
     CleanThresholds,
     clean_common,
+    clean_paged,
+    clean_text,
     is_navigation_doc,
     redact,
 )
@@ -253,3 +256,68 @@ def test_toc_sample_keeps_body_and_reports_ratio():
     assert result.keep_ratio > 0.90
     assert len(result.text.splitlines()) >= 45  # 45 行正文都还在
     assert result.as_meta()["removed"]["toc_line"] == 4
+
+
+# ---------------------------------------------------------------- 页边界（97b）
+
+def _paged(pages: list[list[str]]) -> str:
+    return PAGE_BREAK.join("\n".join(page) for page in pages)
+
+
+def _page(n: int, header: str | None = None, footer: str | None = None) -> list[str]:
+    lines = [header] if header else []
+    lines += _body(n, prefix=f"P{n}-第")
+    lines += [footer] if footer else []
+    return lines
+
+
+def test_paged_drops_edge_page_numbers():
+    pages = [_page(3, footer=str(i + 1)) for i in range(4)]
+    result = clean_paged(_paged(pages))
+    assert result.abandoned is False
+    assert result.removed.get("page_number_edge") == 4
+    for number in ("1", "2", "3", "4"):
+        assert f"\n{number}\n" not in f"\n{result.text}\n"
+
+
+def test_paged_drops_repeated_header():
+    pages = [_page(3, header="某某手册 · 内部资料") for _ in range(4)]
+    result = clean_paged(_paged(pages))
+    assert result.removed.get("page_furniture") == 4
+    assert "某某手册" not in result.text
+
+
+def test_paged_keeps_one_off_top_line():
+    """只在某一页顶部出现一次的标题不是页眉，必须保留。"""
+    pages = [_page(3), _page(3), _page(3)]
+    pages[1][0] = "第二章 路由模式"
+    result = clean_paged(_paged(pages))
+    assert "第二章 路由模式" in result.text
+    assert result.removed.get("page_furniture") is None
+
+
+def test_paged_strips_page_break_from_output():
+    result = clean_paged(_paged([_page(2), _page(2)]))
+    assert PAGE_BREAK not in result.text
+
+
+def test_paged_falls_back_without_page_break():
+    text = "\n".join(_body(50))
+    paged = clean_paged(text)
+    common = clean_common(text)
+    assert paged.text == common.text
+
+
+def test_clean_text_dispatches_on_page_break():
+    with_breaks = _paged([_page(3), _page(3), _page(3)])
+    assert clean_text(with_breaks).removed.get("page_number_edge") is None  # 无页码时不报
+    assert PAGE_BREAK not in clean_text(with_breaks).text
+    assert clean_text("\n".join(_body(10))).text == clean_common("\n".join(_body(10))).text
+
+
+def test_paged_gate_counts_edge_removals():
+    """页边删除也算进保留率：删太狠整篇放弃，且放弃时也不能把 \\f 落库。"""
+    pages = [[f"页眉 {i}", "正文一行"] for i in range(40)]   # 每页 2 行，页边删除占一半
+    result = clean_paged(_paged(pages), thresholds=CleanThresholds(page_edge_lines=1))
+    assert result.abandoned is True
+    assert PAGE_BREAK not in result.text

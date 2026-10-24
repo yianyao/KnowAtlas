@@ -4,6 +4,16 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十九批（97b）：PDF 解析双通道（PDFium 逃生通道 + 页边界清洗 + 大文件闸门）
+
+- **新增 `fetchers/pdf_fast.py`**：`extract_pages()` 用 pypdfium2 按页取文本、页间用 `\f` 分隔；`pdf_gate()`（300 MB / 2000 页上限）、`is_scanned()`（平均每页 <20 字符判扫描件）、`prefers_fast()`（auto 策略判定）。实测 `Hello-Agents` 97.9 MB/720 页 **25 分钟 → 2.2 秒**，`厦大讲义` 51 MB/882 页 **8 分钟未完 → 1.2 秒**。
+- **PDF 双通道**（`fetchers/file_reader.py::_read_pdf`，配置键 `fetch.pdf_backend`，默认 `auto`）：`auto` 只在 markitdown 跑不动时（>30 MB 或 >1500 页）走 PDFium，其余留在 markitdown 保表格的 markdown 结构；`markitdown` 档逐字节等同 97b 之前的行为（可回滚）。扫描件在 `auto` 下直接降级、不回落（图片页对 markitdown 同样无文本，回落只会白等几分钟）。
+- **页边界清洗**（`pipeline/clean.py::clean_paged`）：有 `\f` 时先按页删**页边独立数字**（有页边界就不再需要 2% 占比门槛来猜页码）与**跨页重复的页眉页脚**（≥50% 页的页边重复），再做通用段清洗、统一过一次保留率闸门；落库前去掉 `\f`。`sync._ingest_content`/`_store_bodies` 改用 `clean_text`（有分隔符自动选路）。**实测页边删掉厦大 60 个页码 + 410 行重复讲义标题**，正文残留的独立数字抽样确认全是数据（`01/03` 步骤号、公式里的 `6`、`0.333`）。
+- **配置契约**：新增 `fetch.pdf_backend`（`auto`|`pdfium`|`markitdown`），canary `config_keys` 指纹 `508b22311668` → `213c47faed24`；表结构/CLI/REST 不动。
+- **实施中否掉了自己的第一版策略**：最初按"≤300 页且 ≤10 MB 走 markitdown"落地，重灌发现 pdfium 把 `agentic-ai-guide` 的正文砍到 **30%**、`AI-Agents-in-Depth` 砍到 **43%**（行数没少多少、字符少 3 倍——pdfium 按文本片段返回并丢失整段）。阈值因此收到 30 MB / 1500 页：pdfium 定位为**逃生通道**，只服务 markitdown 真正跑不动的百 MB 级文件。
+- **测试**：新增 `tests/test_pdf_fast.py`（11 例，含手写最小 PDF 夹具，不引新依赖：闸门、页数上限、扫描件、`\f` 拼接、auto 判定）+ `tests/test_clean.py` 追加 7 例页边界用例；全量 `pytest` 全绿（519 个 test 函数）。
+- **遗留**：`content_store` 有 6 行孤儿正文（反复 `--force` 重灌留下），回收入口记入 TODO 8.8。
+
 ### 变更工单 · 第九十八批（97a）：通用清洗段落地（`clean.py` + 内容收口 + R10 降级告警）
 
 - **新增 `src/knowatlas/pipeline/clean.py`**：`CleanThresholds`（阈值注入）/ `CleanResult` / `clean_common()` / `redact()` / `is_navigation_doc()`。五条规则全部按真实样本形态设计：页码行（占比 ≥2% 才删）、目录点线块（≥3 条 + 末尾页码）、重复页眉页脚（三重判据：像散文 + **行距周期性** + 非结构性）、推广尾（末尾 25 行 + 总量 ≤5%）、空白归一；`redact` 独立于清洗（手机/证件/邮箱/`sk-*` 密钥，证件规则先于手机号——否则身份证里的 11 位数字会被截断）。**双闸门防误杀**：规则自带占比门槛 + `min_keep_ratio`（删除超 20% 整篇放弃、保留原文）。

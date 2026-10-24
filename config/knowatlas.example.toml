@@ -88,6 +88,12 @@ rate_limit_qps    = 4
 max_retries       = 3
 on_sync           = false               # K1：同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
 max_fetch_per_run = 50
+# PDF 解析通道（0.2.0 批 97b）。实测：Hello-Agents（97.9 MB / 720 页）
+#   markitdown(pdfplumber) 25 分钟 vs PDFium 2.2 秒；厦大讲义（51 MB / 882 页）8 分钟未完 vs 1.2 秒。
+#   auto：页数 ≤300 且 ≤10 MB 走 markitdown（保表格的 markdown 结构），更大的走 PDFium
+#         （快、且带页边界，清洗层能据此删页眉页脚与页码；代价是表格竖线退化）
+#   pdfium：一律快速通道；markitdown：一律老通道（逐字节等同 97b 之前）
+pdf_backend       = "auto"              # auto | pdfium | markitdown
 
 # DeepSeek Fetch 升级后端（0.2.0 第二十四批接入；2026-10-17 官方上线）：
 # simple 失败（HTTP≥400 / 正文过短 / 提取失败）的 URL 自动升级到这里，

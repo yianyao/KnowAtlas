@@ -1,5 +1,6 @@
 """file:// 获取器：txt/md 直读；旧版 .doc/.ppt 走 office_legacy 后端链；
-其余 Office/PDF 走 markitdown（缺失即降级报错）。"""
+PDF 双通道（批 97b：大文件走 PDFium 保速度与页边界，小文件走 markitdown 保表格结构）；
+其余 Office 走 markitdown（缺失即降级报错）。"""
 
 from __future__ import annotations
 
@@ -45,16 +46,46 @@ def fetch_file(locator: str, ctx: FetchContext) -> tuple[str, str]:
     elif suffix in _LEGACY_SUFFIXES:
         from .office_legacy import convert_legacy
         text = convert_legacy(candidate, suffix)
+    elif suffix == ".pdf":
+        text = _read_pdf(candidate, ctx)
     else:
-        try:
-            from markitdown import MarkItDown
-        except ImportError as exc:
-            raise DegradedParseError(
-                f"markitdown 未安装，无法解析 {suffix}",
-                hint="pip install -r requirements-core.txt",
-            ) from exc
-        try:
-            text = MarkItDown().convert(str(candidate)).text_content
-        except Exception as exc:
-            raise DegradedParseError(f"markitdown 解析失败：{exc}") from exc
+        text = _markitdown(candidate)
     return text, candidate.stem
+
+
+def _markitdown(path: Path) -> str:
+    """markitdown 通道：Office 与（小）PDF 的主力，保表格的 markdown 结构。"""
+    try:
+        from markitdown import MarkItDown
+    except ImportError as exc:
+        raise DegradedParseError(
+            f"markitdown 未安装，无法解析 {path.suffix.lower()}",
+            hint="pip install -r requirements-core.txt",
+        ) from exc
+    try:
+        return MarkItDown().convert(str(path)).text_content
+    except Exception as exc:
+        raise DegradedParseError(f"markitdown 解析失败：{exc}") from exc
+
+
+def _read_pdf(path: Path, ctx: FetchContext) -> str:
+    """PDF 双通道（工单 97b §2 方案 A + §4）：
+
+    - `fetch.pdf_backend = "markitdown"`：老行为，逐字节一致；
+    - `"pdfium"`：强制快速通道，失败即降级报错；
+    - `"auto"`（默认）：大文件/多页走 PDFium（实测 500–700 倍），小文件走 markitdown 保表格。
+      快速通道因"疑似扫描件"失败时**不再回退**——markitdown 对图片页同样无文本，只会白等几分钟。
+    """
+    from .pdf_fast import extract_pages, prefers_fast
+
+    backend = str(ctx.config.get("fetch.pdf_backend", "auto") or "auto").lower()
+    if backend == "markitdown":
+        return _markitdown(path)
+    if backend == "pdfium" or (backend == "auto" and prefers_fast(path)):
+        try:
+            return extract_pages(path).to_text()
+        except DegradedParseError as exc:
+            if backend != "auto" or "scanned_pdf" in str(exc):
+                raise
+            # 其它失败（坏文件/字体异常）→ 给 markitdown 一次机会
+    return _markitdown(path)

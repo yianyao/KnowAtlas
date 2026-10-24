@@ -23,6 +23,7 @@ CONFIG_SCHEMA_KEYS = (
     "fetch.default_backend", "fetch.deepseek_api_key_env", "fetch.deepseek_base_url",
     "fetch.fallback_backend", "fetch.max_fetch_per_run",
     "fetch.max_retries", "fetch.min_content_chars", "fetch.on_sync",
+    "fetch.pdf_backend",
     "fetch.rate_limit_qps", "fetch.timeout_seconds",
     "clean.enabled", "clean.min_keep_ratio", "clean.redact_enabled",
     "sources.bilibili", "sources.bookmarks", "sources.db", "sources.emmx",
