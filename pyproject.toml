@@ -41,11 +41,24 @@ optional = [
     "pywin32; sys_platform == 'win32'",
 ]
 
+# 命令行入口（0.2.0 批 100 打包）：装完 wheel 后直接 `knowatlas serve`，
+# 不用再记 `python -m knowatlas`。
+[project.scripts]
+knowatlas = "knowatlas.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-knowatlas = ["datalayer/migrations/*.sql"]
+# 迁移 SQL + Web 静态资源都必须进包：`web/app.py` 按 `Path(__file__).parent/"static"`
+# 挂载，漏打时 wheel 装完 `serve` 能起但页面 404（0.2.0 批 100 打包时补全）。
+knowatlas = [
+    "datalayer/migrations/*.sql",
+    "web/static/*.html",
+    "web/static/*.css",
+    "web/static/*.js",
+    "web/static/vendor/*.js",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -39,6 +39,23 @@ cp config/knowatlas.example.toml config/knowatlas.toml
 .venv/Scripts/python -m knowatlas serve
 ```
 
+## 打包与分发（0.2.0 批 100）
+
+```bash
+uv build                     # 产出 dist/knowatlas-0.2.0-py3-none-any.whl 与 .tar.gz
+# 在干净环境里安装并运行（不需要源码树）：
+uv venv /tmp/ka && uv pip install --python /tmp/ka/bin/python dist/knowatlas-0.2.0-py3-none-any.whl
+/tmp/ka/bin/knowatlas --version        # 装完即有 knowatlas 命令（[project.scripts] 入口）
+KNOWATLAS_CONFIG=config/knowatlas.toml /tmp/ka/bin/knowatlas serve
+```
+
+- **wheel 里带什么**：全部 Python 包 + `datalayer/migrations/*.sql` + `web/static/**`
+  （页面、样式、`vendor/echarts.min.js`）——静态资源漏打时 `serve` 能起但页面 404，已由 `package-data` 钉住。
+- **不带什么**：`config/`（含真实路径与凭证引用）、`data/`、`dist/`、`temp/`、`tests/`、`desktop/`。
+  首次运行仍需自己写 `config/knowatlas.toml`（`cp config/knowatlas.example.toml`）。
+- **可选依赖不进 wheel**：`sentence-transformers`（语义向量）、`psycopg`（PG 后端）、`pywin32`（旧版 Office）
+  都在 extra 里，缺哪个就优雅降级哪条能力。
+
 ## 目录速览
 
 | 路径 | 说明 |

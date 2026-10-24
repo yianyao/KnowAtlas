@@ -4,6 +4,13 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第一百批（打包）：可分发 wheel + `knowatlas` 命令 + 静态资源入包
+
+- **打包产物**：`uv build` → `knowatlas-0.2.0-py3-none-any.whl`（0.7 MB，99 个文件）+ sdist。安装即为命令 `knowatlas`，不必再记 `python -m knowatlas`。
+- **修两个会直接毁掉分发的洞**：① `[project.scripts]` 缺失——wheel 装完没有入口命令；② `package-data` 只声明了 `datalayer/migrations/*.sql`，**`web/static/**` 没进包**——`web/app.py` 按 `Path(__file__).parent/"static"` 挂载，装到别处后 `serve` 能起但页面 404。两处都在本批补上（含 `vendor/echarts.min.js`）。
+- **验证（干净 venv，不是源码树）**：`uv venv temp/packvenv` → 装 wheel → `knowatlas --version` = `0.2.0`；静态资源 8 个文件全在；用临时配置跑通 `kinit` → `ksync`（29 条）→ `serve`；`GET /` 200（125.5 KB，title「知道 KnowAtlas」）、`/api/stats`、`/api/search`、`/api/cloud`、`/api/graph/overview` 全部 200。
+- **不进 wheel**：`config/`（真实路径与凭证引用）、`data/`、`dist/`、`temp/`、`tests/`、`desktop/`；可选依赖（`sentence-transformers`/`psycopg`/`pywin32`）留在 extra，缺哪条降级哪条。README 增「打包与分发」一节。
+
 ### 变更工单 · 第九十九批（97b）：PDF 解析双通道（PDFium 逃生通道 + 页边界清洗 + 大文件闸门）
 
 - **新增 `fetchers/pdf_fast.py`**：`extract_pages()` 用 pypdfium2 按页取文本、页间用 `\f` 分隔；`pdf_gate()`（300 MB / 2000 页上限）、`is_scanned()`（平均每页 <20 字符判扫描件）、`prefers_fast()`（auto 策略判定）。实测 `Hello-Agents` 97.9 MB/720 页 **25 分钟 → 2.2 秒**，`厦大讲义` 51 MB/882 页 **8 分钟未完 → 1.2 秒**。
