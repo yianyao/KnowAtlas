@@ -45,6 +45,15 @@ _CHROME_PHRASES = ("skip to content", "sign in", "sign up", "pull requests",
 _STRUCT_TAGS = ("<!doctype", "<html", "<head", "<body", "<meta",
                 "<script", "<title>")
 
+# 骨架信号（GitHub 页面模板标记级，批次 95）：GitHub 页面模板特征串——短骨架
+# （<8 行、导航短语不足 8 个）四路信号全漏网（真库案例：226 字符「Skip to
+# content / Navigation Menu / Repository navigation / File metadata and
+# controls」纯模板）。互异标记 ≥3 即骨架，不限长度；围栏代码块豁免（讲
+# GitHub 抓取的教程会在代码示例里合法引用这些串）。
+_GH_CHROME_MARKERS = ("skip to content", "navigation menu",
+                      "repository navigation", "file metadata and controls",
+                      "you can't perform that action")
+
 
 def github_raw_url(locator: str) -> str:
     """github.com blob/raw 页面 → raw.githubusercontent.com 直链（仅确定性等价）。
@@ -61,16 +70,18 @@ def github_raw_url(locator: str) -> str:
 def is_skeleton_body(text: str) -> bool:
     """正文疑似网页骨架（导航/按钮/版权行占比过高）。
 
-    四路信号（命中其一即骨架）：
+    五路信号（命中其一即骨架）：
     ①行级——≥8 行且骨架行 ≥8 且占比 ≥60%；
     ②短语级（行级失效时的单行兜底）——<1500 字符、互异英文导航短语 ≥8 个、
       且几乎无句读（。或 ". " 少于 2 处）；
     ③结构标签泄漏（批次 94）——字面 HTML 结构标签 ≥3 种且无围栏代码块；
     ④重复行（批次 94）——≥10 行且互异行占比 ≤40% 且某行（≥4 字符）重复
-      ≥5 次。消费方：http_simple 提取后（判提取失败 → 升级 DeepSeek Fetch
-      重抓——误判零数据损失）、http_deepseek 返回守门（批次 94）、expand
-      扩散入库前（批次 94）、points 管线对存量条目（merge_meta
-      body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏；误判可清标
+      ≥5 次；
+    ⑤GitHub 页面模板标记（批次 95）——互异模板特征串 ≥3，不限长度。
+    消费方：http_simple 提取后（判提取失败 → 升级 DeepSeek Fetch
+    重抓——误判零数据损失）、http_deepseek 返回守门（批次 94）、expand
+    扩散入库前（批次 94）、points 管线对存量条目（merge_meta
+    body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏；误判可清标
       重抽）。纯文本内容（raw 直链）不做此检测。
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -87,6 +98,9 @@ def is_skeleton_body(text: str) -> bool:
     low = text.lower()
     if text.count("```") < 2:
         if sum(1 for t in _STRUCT_TAGS if t in low) >= 3:
+            return True
+        # ⑤ GitHub 页面模板标记（批次 95）：互异 ≥3 即骨架（不限长度）
+        if sum(1 for k in _GH_CHROME_MARKERS if k in low) >= 3:
             return True
     # ④ 重复行：目录索引/文件列表页同一行反复出现（互异行占比过低）
     if len(lines) >= 10:

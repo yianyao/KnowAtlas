@@ -4,6 +4,17 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十五批：条目级去重归一 + GitHub 模板骨架拦截（2026-10-24 用户截图五张继续指认）
+
+- **病灶**（真库截图 + 探针实锤）：①bojieli/ai-agent-book 根页与 /tree/main 变体书签各建条目（canonical 只去尾斜杠没归一 GitHub 仓库页）；②docsify 家具 coverpage/navbar/sidebar 入库产点（「你给我这种页面我来干嘛？」）；③You-Dont-Know-JS 三页正文是 226-656 字符纯 GitHub 页面模板（Skip to content/Navigation Menu/Repository navigation/File metadata and controls）——四路骨架信号全漏网，产出的「点」就是标题；④存量条目落库 canonical 过时，scan_and_merge 只读落库值不重算。
+- **① canonical GitHub 仓库页归一**（ids.py）：`github.com/{owner}/{repo}`、`/{repo}/`、`/{repo}/tree/{分支}`、`?tab=` 视图参数 → 统一归到仓库根（新条目落库即归一）；/tree/{分支}/{子目录} 种子与 blob/issues 深链不动。
+- **② 骨架第五路信号**（fetchers/base.py）：GitHub 页面模板特征串（skip to content / navigation menu / repository navigation / file metadata and controls / you can't perform that action）互异 ≥3 即骨架，不限长度；围栏代码块豁免（抓取教程合法引用）。真库 226 字符模板案例判中。
+- **③ docsify 家具入文件名黑名单**（expand.py）：coverpage/_coverpage/navbar/_navbar/sidebar/_sidebar/footer/_footer —— 候选层拦截不抓取。
+- **④ scan_and_merge 现算 canonical**（dedupe.py）：canonical 键不再读落库值，逐条现算——规则演进立刻惠及存量，非 http 回落落库值。
+- **⑤ 清理脚本扩展**（scripts/batch94_cleanup.py → 批 94/95 双工单）：任意源骨架条目 → body_flag=skeleton degraded 标记 + purge_entry_points 清独源点（骨架正文产的点必是垃圾，多源点保留）；--apply 末尾跑 scan_and_merge。
+- **真库结果**：rejected 3（coverpage/navbar/sidebar）；骨架 degraded 6（YDKJS 三页 + LiveAgent/astron README 模板 + redis releases 页）独源点清零；**bojieli/ai-agent-book /tree/main 变体并入根页主条目**（canonical 合并 1 组，可逆 dedupe_master）；垃圾标题点退出检索面（搜「你不懂」「objects-classes」「coverpage」「navbar」点区 0 命中）。
+- **测试 5 项**（test_batch95.py：canonical 归一矩阵/模板骨架信号+正文提及不误伤+围栏豁免/家具黑名单/scan 现算合并存量变体+幂等）；全量回归绿。
+
 ### 变更工单 · 第九十四批：数据质量（垃圾拦截 + 点级语义去重 + 来源标题，2026-10-24 用户截图指认四类问题）
 
 - **病灶**（真库截图 4 张）：①`.nojekyll` 空文件与 HTML 实体骨架（`\xhtml<head>…`）、目录索引页（文件列表同款行重复 20+）经 gh 扩散入库且产点；②来源 chips 显示裸文件名 navbar/index/sidebar/.nojekyll 无上下文；③「Agent = LLM + 上下文 + 工具」同知识两点（改写措辞绕过 content_hash 精确去重）。

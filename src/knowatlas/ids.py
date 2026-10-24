@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # 去除的跟踪参数（§3.3 第 4 步）；发现新跟踪参数在此追加并跑 canary
@@ -58,6 +59,19 @@ def canonical_url(url: str) -> str | None:
     path = parts.path or ""
     if len(path) > 1:
         path = path.rstrip("/") or "/"
+
+    # 5.5 GitHub 仓库页归一（批次 95，真库教训：根页与 /tree/main 变体各建
+    # 条目互不去重）。owner/repo 与 /tree/{分支} 视为同一知识入口，归一到
+    # 仓库根；/tree/{分支}/{子目录} 是有独立导航价值的目录种子，保留；
+    # blob/raw/issues 等深链不动。tab= 仅切视图（readme/starred）非内容差异。
+    if host == "github.com":
+        m = re.match(r"^/([^/]+)/([^/]+)(?:/tree/[^/]+)?/?$", path)
+        if m:
+            path = f"/{m.group(1)}/{m.group(2)}"
+        kept = [(k, v) for k, v in query_pairs if k.lower() != "tab"]
+        if len(kept) != len(query_pairs):
+            kept.sort(key=lambda kv: (kv[0], kv[1]))
+            query_pairs, query = kept, urlencode(kept)
 
     return urlunsplit((scheme, host, path, query, ""))
 

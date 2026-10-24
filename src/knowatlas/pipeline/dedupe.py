@@ -136,7 +136,13 @@ def scan_and_merge(dl: Any, dry_run: bool = False) -> dict[str, Any]:
         for e in rows:
             if not _is_consumable(e):
                 continue
-            key = getattr(e, key_col)
+            if key_col == "locator_canonical" and e.locator:
+                # 批次 95：现算 canonical——canonical_url 规则演进（如 GitHub
+                # 仓库页归一）后存量条目的落库值已过时，现算让 scan 直接受益；
+                # 非 http（locator_canonical 为 None 的本地文件等）回落落库值
+                key = canonical_url(e.locator) or e.locator_canonical
+            else:
+                key = getattr(e, key_col)
             if key:
                 buckets.setdefault(key, []).append(e)
         for key, members in buckets.items():

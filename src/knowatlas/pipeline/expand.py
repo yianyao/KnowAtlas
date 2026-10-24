@@ -49,15 +49,20 @@ _GH_FILE_LINK = re.compile(
     r"^https?://github\.com/([^/]+)/([^/]+)/(blob|tree)/([^/]+)/(.+)$")
 _GH_MAX_TREE_PAGES = 10  # 树页下钻上限（防大仓库失控抓取；候选另有 limit 封顶）
 
-# 文件名黑名单（批次 94，用户截图指认 .nojekyll 空文件入库产点）：仓库元数据
-# 与工程管理文件不是知识——候选层直接拦截，不发起抓取（宁缺毋脏；误拦可手动
-# kadd 单条补录）。
+# 文件名黑名单（批次 94，用户截图指认 .nojekyll 空文件入库产点；批次 95 追加
+# docsify 站点家具——用户截图指认 coverpage/navbar/sidebar「你给我这种页面
+# 我来干嘛？」：导航页正文=链接列表，LLM 无法识别这是导航，必须源头拦截）：
+# 仓库元数据与工程管理/站点家具文件不是知识——候选层直接拦截，不发起抓取
+# （宁缺毋脏；误拦可手动 kadd 单条补录）。
 _GH_FILE_NAME_BLACKLIST = frozenset({
     ".nojekyll", ".gitignore", ".gitattributes", ".gitmodules", ".editorconfig",
     ".npmignore", ".dockerignore", ".babelrc", ".eslintrc", ".prettierrc",
     "license", "license.md", "license.txt", "license.rst", "copying",
     "copying.txt", "notice", "notice.txt", "authors", "contributors",
     "code_of_conduct.md", "contributing.md", "security.md", "funding.yml",
+    # docsify/文档站家具（批次 95）
+    "coverpage.md", "_coverpage.md", "navbar.md", "_navbar.md",
+    "sidebar.md", "_sidebar.md", "footer.md", "_footer.md",
 })
 # 扩展名黑名单：二进制/媒体/字体——文本管线抓回即垃圾（raw 直链也是字节流）。
 _GH_EXT_BLACKLIST = frozenset({
