@@ -293,7 +293,8 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
              border-radius: var(--radius-card); }
 .sig-word { color: #5BC0BE; border-color: rgba(91, 192, 190, 0.35); }
 .sig-category { color: var(--accent-text); border-color: rgba(91, 141, 239, 0.35); }
-.sig-host { color: #C79AEA; border-color: rgba(199, 154, 234, 0.35); }
+/* host 注记（批次 96）：域名仅解释信息不作信号 chip——灰字弱化，不与语义词并列 */
+.set-host { color: var(--text-3); font-size: var(--fs-11); margin-inline-start: 4px; }
 .set-excerpt { color: var(--text-2); }
 .cat-agg-bar button { font-size: var(--fs-11); color: var(--accent-text);
                       background: none; border: 1px solid rgba(91, 141, 239, 0.4);

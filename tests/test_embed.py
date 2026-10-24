@@ -347,7 +347,8 @@ def test_group_hits_structural_fallback_without_vectors(dl):
     assert len(r["groups"]) == 1 and r["groups"][0]["size"] == 2
     g = r["groups"][0]
     sig = {s["kind"]: s["value"] for s in g["signals"]}
-    assert sig["category"] == "技术开发/前端" and sig["host"] == "blog.dev.example"
+    assert sig["category"] == "技术开发/前端"
+    assert g["host"] == "blog.dev.example"       # 批次 96：host 降级为注记字段，不入 signals
     assert {e["id"] for e in g["entries"]} == {es[0].id, es[1].id}
     assert {s["id"] for s in r["singles"]} == {es[2].id}
     # 主分类+同 host 是合取：同分类不同 host 不并入该组
@@ -392,7 +393,7 @@ def test_sets_group_endpoint(client, dl):
     body = r.json()
     assert body["mode"] == "structural" and len(body["groups"]) == 1
     sig = {s["kind"]: s["value"] for s in body["groups"][0]["signals"]}
-    assert sig.get("host") == "k8s.example"      # 无分类无共享词时仍给 host 信号
+    assert body["groups"][0].get("host") == "k8s.example"  # 无分类无共享词时仍给 host 注记（批次 96 独立字段）
     empty = client.get("/api/sets/group", params={"ids": ""})
     assert empty.json()["mode"] == "none" and empty.json()["groups"] == []
 

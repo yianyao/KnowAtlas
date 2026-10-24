@@ -1032,7 +1032,8 @@ function renderCategoryGrouped(box, g, list) {
     html += `<div class="set-group"><div class="set-head">`
       + gr.signals.map(s =>
           `<span class="badge sig-${s.kind}" title="${SIG_TITLE[s.kind] || s.kind}">${s.value}</span>`).join("")
-      + `<span class="badge">${gr.size} 条</span></div>`
+      + `<span class="badge">${gr.size} 条</span>`
+      + (gr.host ? `<small class="set-host">源：${gr.host}</small>` : "") + `</div>`
       + (gr.excerpt ? `<div class="set-excerpt" title="代表条目：${(gr.excerpt_title || "").replace(/"/g, "&quot;")}">「${gr.excerpt}」</div>` : "")
       + gr.entries.map(toCard).map(entryHTML).join("")
       + `</div>`;
@@ -1495,7 +1496,8 @@ function renderAggTab() {
       html += `<div class="set-group"><div class="set-head">`
         + g.signals.map(s =>
             `<span class="badge sig-${s.kind}" title="${SIG_TITLE[s.kind] || s.kind}">${s.value}</span>`).join("")
-        + `<span class="badge">${g.size} 条</span></div>`
+        + `<span class="badge">${g.size} 条</span>`
+        + (g.host ? `<small class="set-host">源：${g.host}</small>` : "") + `</div>`
         + (g.excerpt ? `<div class="set-excerpt" title="代表条目：${(g.excerpt_title || "").replace(/"/g, "&quot;")}">「${g.excerpt}」</div>` : "")
         + g.entries.map(entryCard).join("")
         + `</div>`;

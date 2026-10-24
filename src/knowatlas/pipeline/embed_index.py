@@ -394,11 +394,14 @@ def _semantic_group(dl: Any, cluster: dict[str, Any],
     if common:  # 组内每条都挂着的最短公共路径（确定性：深度升序、同深字典序）
         signals.append({"kind": "category",
                         "value": min(common, key=lambda p: (p.count("/"), p))})
-    hosts = [_entry_host(entries[i].locator) for i in ids]
-    if hosts[0] and all(h == hosts[0] for h in hosts):
-        signals.append({"kind": "host", "value": hosts[0]})
-    rep = max(ids, key=lambda i: _dot(vecs[i], cluster["centroid"]))
-    return _header(signals, entries, texts, rep, ids)
+    hdr = _header(signals, entries, texts,
+                  max(ids, key=lambda i: _dot(vecs[i], cluster["centroid"])), ids)
+    hosts = {_entry_host(entries[i].locator) for i in ids}
+    if len(hosts) == 1 and "" not in hosts:
+        # 域名仅作解释信息（项目裁决：不作关联信号/节点）——独立字段灰字注记，
+        # 不与语义词并列成 chip（批次 96，用户指认「github.com 也是知识？」）
+        hdr["host"] = hosts.pop()
+    return hdr
 
 
 def _structural_group(cat: str, host: str, ids: list[str],
@@ -407,9 +410,10 @@ def _structural_group(cat: str, host: str, ids: list[str],
     signals = _word_signals(texts, ids)
     if cat:
         signals.append({"kind": "category", "value": cat})
+    hdr = _header(signals, entries, texts, ids[0], ids)
     if host:
-        signals.append({"kind": "host", "value": host})
-    return _header(signals, entries, texts, ids[0], ids)
+        hdr["host"] = host
+    return hdr
 
 
 def group_hits(dl: Any, entry_ids: list[str],
