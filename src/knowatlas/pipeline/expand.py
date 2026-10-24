@@ -29,12 +29,12 @@ import re
 import uuid
 from datetime import datetime
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 import httpx
 
 from ..errors import KnowAtlasError
-from ..fetchers.base import fetch_with_fallback
+from ..fetchers.base import fetch_with_fallback, is_skeleton_body
 from ..ids import canonical_url, content_hash
 from ..models import Entry, FetchResult
 from ..registry.capability import FetchContext
@@ -48,6 +48,45 @@ _GH_REPO = re.compile(
 _GH_FILE_LINK = re.compile(
     r"^https?://github\.com/([^/]+)/([^/]+)/(blob|tree)/([^/]+)/(.+)$")
 _GH_MAX_TREE_PAGES = 10  # 树页下钻上限（防大仓库失控抓取；候选另有 limit 封顶）
+
+# 文件名黑名单（批次 94，用户截图指认 .nojekyll 空文件入库产点）：仓库元数据
+# 与工程管理文件不是知识——候选层直接拦截，不发起抓取（宁缺毋脏；误拦可手动
+# kadd 单条补录）。
+_GH_FILE_NAME_BLACKLIST = frozenset({
+    ".nojekyll", ".gitignore", ".gitattributes", ".gitmodules", ".editorconfig",
+    ".npmignore", ".dockerignore", ".babelrc", ".eslintrc", ".prettierrc",
+    "license", "license.md", "license.txt", "license.rst", "copying",
+    "copying.txt", "notice", "notice.txt", "authors", "contributors",
+    "code_of_conduct.md", "contributing.md", "security.md", "funding.yml",
+})
+# 扩展名黑名单：二进制/媒体/字体——文本管线抓回即垃圾（raw 直链也是字节流）。
+_GH_EXT_BLACKLIST = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp", ".tiff",
+    ".psd", ".ai", ".eps", ".pdf", ".epub", ".mobi", ".azw3",
+    ".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z", ".rar",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".mp3", ".mp4", ".webm", ".avi", ".mov", ".mkv", ".flac", ".wav",
+    ".exe", ".dll", ".so", ".dylib", ".jar", ".class", ".bin", ".dat",
+    ".db", ".sqlite", ".sqlite3", ".pyc", ".pyo", ".o", ".a", ".wasm",
+})
+
+
+def _gh_file_blocked(blob_url: str) -> str | None:
+    """GitHub blob 文件拦截判定：命中黑名单返回原因，None=放行（批次 94）。
+
+    文件名黑名单（仓库元数据）+ 扩展名黑名单（二进制/媒体）——两类文件没有
+    文本管线可提炼的知识。
+    """
+    m = _GH_FILE_LINK.match(blob_url)
+    if not m:
+        return None
+    name = unquote(m.group(5).strip("/").rsplit("/", 1)[-1]).lower()
+    if name in _GH_FILE_NAME_BLACKLIST:
+        return f"文件名黑名单：{name}"
+    dot = name.rfind(".")
+    if dot > 0 and name[dot:] in _GH_EXT_BLACKLIST:
+        return f"扩展名黑名单：{name[dot:]}"
+    return None
 
 
 def _now() -> str:
@@ -108,17 +147,19 @@ def _gh_in_scope(scope_dir: str, rest: str) -> bool:
 
 
 def _github_collect(seed_url: str, seed_html: str, client: Any, cfg: Any,
-                    cap: int) -> list[str]:
+                    cap: int) -> tuple[list[str], list[tuple[str, str]]]:
     """GitHub 仓库树扩散候选：页内 blob 链接收集 + tree 子目录下钻（BFS ≤2 层）。
 
     seed_html 复用 expand_seed 已抓的种子页（不重复请求）；树页再逐个抓取
     （失败静默跳过——扩散是非关键增强，不因单个树页失败中止），页数受
-    _GH_MAX_TREE_PAGES 封顶。返回 blob URL 列表（保序去重，≤cap）。
+    _GH_MAX_TREE_PAGES 封顶。返回 (blob URL 列表, 被黑名单拦截的 (url, 原因)
+    列表)（保序去重，≤cap；批次 94 起文件名/扩展黑名单候选层拦截）。
     """
     scope = _github_scope(seed_url)
     assert scope is not None
     _, _, seed_branch, scope_dir = scope
     blobs: list[str] = []
+    blocked: list[tuple[str, str]] = []
     seen: set[str] = set()
     tree_queue: list[tuple[str, str, int]] = [(seed_url, seed_html, 0)]
     tree_seen: set[str] = {seed_url}
@@ -138,11 +179,16 @@ def _github_collect(seed_url: str, seed_html: str, client: Any, cfg: Any,
             if not _gh_in_scope(scope_dir, rest):
                 continue
             if fm.group(3) == "blob":
-                if joined not in seen:
-                    seen.add(joined)
-                    blobs.append(joined)
-                    if len(blobs) >= cap:
-                        break
+                if joined in seen:
+                    continue
+                reason = _gh_file_blocked(joined)
+                if reason is not None:
+                    blocked.append((joined, reason))
+                    continue
+                seen.add(joined)
+                blobs.append(joined)
+                if len(blobs) >= cap:
+                    break
             else:  # tree 子目录：下钻一层取其文件（depth ≤2 防深递归）
                 if depth + 1 <= 2 and joined not in tree_seen:
                     tree_seen.add(joined)
@@ -155,7 +201,7 @@ def _github_collect(seed_url: str, seed_html: str, client: Any, cfg: Any,
                         continue
                     if resp.status_code < 400:
                         tree_queue.append((joined, resp.text, depth + 1))
-    return blobs[:cap]
+    return blobs[:cap], blocked
 
 
 def _gh_blob_dir(blob_url: str) -> str:
@@ -175,7 +221,9 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
     dl.start_run(run_id, "expand")
     stats: dict[str, Any] = {"seed": seed_entry_id, "candidates": 0,
                              "created": 0, "fetch_failed": 0,
-                             "blocked_by_guard": 0, "already_known": 0}
+                             "blocked_by_guard": 0, "already_known": 0,
+                             "blocked_files": 0, "empty_body": 0,
+                             "skeleton": 0}
     try:
         seed = dl.get_entry(seed_entry_id)
         if seed is None:
@@ -207,9 +255,15 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
             gh_scope = _github_scope(seed.locator)
             if gh_scope is not None:
                 # GitHub 仓库树扩散（批次 92）：候选=blob 文件页（确定性知识文件，
-                # 跳过 L0 守卫），locator 保留 blob 原链，native_path 记仓库目录
-                link_pool = [(link, True) for link in _github_collect(
-                    seed.locator, resp.text, client, cfg, cap=max(60, limit * 3))]
+                # 跳过 L0 守卫），locator 保留 blob 原链，native_path 记仓库目录；
+                # 批次 94：黑名单文件候选层拦截（不发起抓取）
+                blob_pool, blocked = _github_collect(
+                    seed.locator, resp.text, client, cfg, cap=max(60, limit * 3))
+                stats["blocked_files"] = len(blocked)
+                for burl, reason in blocked:
+                    dl.log_task(_now(), "expand", "blocked_file", burl,
+                                {"reason": reason, "run_id": run_id})
+                link_pool = [(link, True) for link in blob_pool]
             else:
                 link_pool = [(link, False)
                              for link in _candidate_links(seed.locator, resp.text)]
@@ -243,12 +297,34 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                     dl.log_task(_now(), "expand", "fetch_fail", link,
                                 {"error": str(exc)[:160], "run_id": run_id})
                     continue
+                # 空/骨架守门（批次 94，用户截图指认垃圾条目入库产点）：
+                # 升级后端与非 GitHub 路径的返回不做二次校验——入库前统一守门。
+                if not text.strip():
+                    stats["empty_body"] += 1
+                    dl.log_task(_now(), "expand", "empty_body", link,
+                                {"run_id": run_id})
+                    continue
+                if is_skeleton_body(text):
+                    stats["skeleton"] += 1
+                    dl.log_task(_now(), "expand", "skeleton_skip", link,
+                                {"run_id": run_id})
+                    continue
                 c = canonical_url(link)
                 is_gh = gh_scope is not None
+                # gh 文件条目标题 =「仓库名 · 文件名」（批次 94，用户截图：来源
+                # chips 显示裸文件名 navbar/index 无上下文）。不用种子标题——
+                # gh 书签标题常是 GitHub 全量描述（数百字）；仓库名即书名/项目名，
+                # 短且有定位力。
+                if is_gh:
+                    fname = unquote(link.rsplit("/", 1)[-1])
+                    stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+                    name = f"{gh_scope[1]} · {stem}"[:120] or title or link
+                else:
+                    name = title or link.rsplit("/", 1)[-1] or link
                 entry = Entry.build(
                     source_type="expand",
                     source_key=f"expand:{seed_entry_id}:{c}",
-                    title=title or link.rsplit("/", 1)[-1] or link,
+                    title=name,
                     locator=link,
                     locator_canonical=c,
                     inline_content=text[:4000]

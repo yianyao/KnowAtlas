@@ -4,6 +4,23 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 第九十四批：数据质量（垃圾拦截 + 点级语义去重 + 来源标题，2026-10-24 用户截图指认四类问题）
+
+- **病灶**（真库截图 4 张）：①`.nojekyll` 空文件与 HTML 实体骨架（`\xhtml<head>…`）、目录索引页（文件列表同款行重复 20+）经 gh 扩散入库且产点；②来源 chips 显示裸文件名 navbar/index/sidebar/.nojekyll 无上下文；③「Agent = LLM + 上下文 + 工具」同知识两点（改写措辞绕过 content_hash 精确去重）。
+- **① 抓取/扩散层拦截**：
+  - `is_skeleton_body` 增至四路信号（批次 92 双模式基础上）：+**结构标签泄漏**（字面 HTML 结构标签 ≥3 种且无围栏代码块——教 HTML 的文档在 ``` 代码块里合法出现全套标签，不误伤）；+**重复行**（≥10 行且互异行占比 ≤40% 且某行 ≥4 字符重复 ≥5 次——目录索引/文件列表页）；
+  - http_deepseek 后端补齐 simple 同款守门（min_content_chars + 骨架检测抛 FetchError）——升级后端不再成垃圾旁路；
+  - expand 新增 `_GH_FILE_NAME_BLACKLIST`（.nojekyll/.gitignore/LICENSE/CONTRIBUTING 等仓库元数据 22 项）+ `_GH_EXT_BLACKLIST`（图片/字体/压缩包/媒体/二进制等 50+ 扩展名）：`_gh_file_blocked()` 候选层拦截不发起抓取，拦截记 task_log（action=blocked_file）；
+  - expand 入库前统一守门：空正文（empty_body）/骨架正文（skeleton_skip）不产生条目，task_log 留痕——升级后端与非 GitHub 路径的返回均不豁免。
+- **② 点级语义去重**（`dedup_points`，embed_index.py；content_hash 精确去重的语义兜底）：
+  - 点向量余弦 ≥0.92 贪心归簇（_greedy_clusters 同款；阈值真库校准：真重复对 0.9369/0.9426，最近异知识点 0.8813/0.8932/0.8990——0.92 恰好只并真重复，宁漏勿误），组内留最优（溯源数多 → created_at 早 → id 小，确定性），副点 `meta.dupe_of=<保留点 id>` + `dupe_reason` **可逆退出消费面**（清 meta 即恢复，溯源指针永不移动/删除）；
+  - 消费面 SQL 五处补 `dupe_of` 守卫：search_points FTS/LIKE 双路、get_point_hit、cloud_point_data、cloud_facet_points；
+  - `ksync --embed` 顺带执行去重（向量就绪后自动跑），幂等（已标 dupe/stale 不参与，重跑稳定）；
+  - point_extract prompt 已有条目内防重纪律（「同一知识只产一点」），跨条目去重由本机制承接。
+- **③ 来源 chips 标题**：gh 文件条目标题/display_name =「仓库名 · 文件名」（如「ai-agents-in-action-2nd-edition-cn · 1.AI智能体的崛起」）——不用种子标题（gh 书签标题常是 GitHub 全量描述数百字）；新建条目（expand.py）与存量回填（scripts/batch94_cleanup.py）同口径。
+- **④ 真库清理**（scripts/batch94_cleanup.py，`--scan` 零写入 / `--apply` 裁决生效；仅 expand 源——folder/bookmark 不在自动裁决范围）：blacklist/empty_body/skeleton_body 三类 → set_status rejected + meta.rejected_at（30 天冷却，误裁可 restore）+ task_log 留痕；display_name 缺失回填。真库结果：**rejected 2 条**（.nojekyll、index.html 骨架）+ **回填 18 条**；点级去重真库跑出 **2 组真重复**（「AI Agents in Action 第二版」双源双点 0.9426、「深入理解 AI Agent」双源双点 0.9369——即截图 4 指认的公式书重复），副点退出消费面；点不删——消费面只认 active 溯源，垃圾条目的点自动退出。
+- **测试 6 项**（test_batch94.py：骨架结构标签+围栏豁免/重复行+代码文件不误伤/文件名+扩展黑名单/扩散空正文+骨架守门/黑名单拦截+标题公式/去重标记+消费面过滤+幂等+stale 不参与+向量不足降级）；test_expand.py 仓库改名 ai-agents 并断言新标题公式与 blocked_files。
+
 ### 变更工单 · 第六十九批：知识梳理合成层（勾点合成方案，回灌+隔离+强制溯源）
 
 - **裁决落地**（§7.9，2026-10-22 用户裁决「回灌+隔离」）：勾选若干知识点 → 可修改提示词 → LLM 生成整理后的 Markdown 方案文档 → **预览不落库** → 人确认后落 `source_type=synthesized` 独立条目回灌知识库（active 可检索、可参与聚类），与原始层隔离（独立 source_type 标识）；**强制溯源**：`meta.sources=[point_id...]` 必非空，API 层防幻觉闸门（空 sources/空 markdown 400；所选点不在消费面 404——stale 点不喂给合成）。

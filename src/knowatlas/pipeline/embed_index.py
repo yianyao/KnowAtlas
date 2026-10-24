@@ -119,6 +119,61 @@ def _flush_points(dl: Any, embedder: Any, batch: list[dict[str, Any]]) -> int:
     return len(batch)
 
 
+# ---- 点级语义去重（批次 94，用户截图指认「Agent = LLM+上下文+工具」同知识两点） ----
+
+# 同知识判定阈值（余弦）。真库校准（批次 94，114 点全对实测）：真重复对
+# 0.9369/0.9426（同书双源各产一点），最近的异知识点 0.8813/0.8932/0.8990
+# ——0.92 分界恰好只并真重复；宁漏勿误（漏并下轮可调，误并丢观点）。
+_DEDUP_THRESHOLD = 0.92
+
+
+def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]:
+    """点级语义去重：点向量余弦 ≥threshold 归同组，组内留最优，副点标 dupe_of。
+
+    content_hash 精确去重（规范化文本相同才合并）拦不住改写措辞的同知识——
+    语义向量近似兜底。最优 = 溯源数最多（可信度信号）→ 更早 created_at（知识
+    形成顺序）→ id 小（确定性）；副点 merge_meta dupe_of=<保留点 id> 退出消费
+    面（search_points/get_point_hit/词云点面 SQL 守卫，批次 94）。**可逆**：
+    清 meta.dupe_of 即恢复；溯源指针永不移动/删除，反悔零损失。幂等：已标
+    dupe 与 stale 点不参与聚类，重跑结果稳定。
+    """
+    vecs_raw = dl.all_point_vectors()
+    if len(vecs_raw) < 2:
+        return {"groups": 0, "dupes": 0, "vectors": len(vecs_raw),
+                "threshold": threshold, "note": "点向量不足 2 条"}
+    info: dict[str, dict[str, Any]] = {}
+    for p in dl.list_points(limit=100000):
+        if (p.get("meta") or {}).get("dupe_of"):
+            continue                     # 已是副点：幂等重跑不重复处理
+        if p.get("aging_flag") == "stale":
+            continue                     # 已老化退出消费面：不参与
+        info[p["id"]] = p
+    vecs = {pid: blob_to_vec(b) for pid, b in vecs_raw.items() if pid in info}
+    groups = dupes = 0
+    for c in _greedy_clusters(vecs, threshold):
+        if len(c["ids"]) < 2:
+            continue
+        groups += 1
+        members = c["ids"]
+        best = sorted(members, key=lambda pid: (
+            -int(info[pid].get("source_count") or 0),
+            str(info[pid].get("created_at") or ""), pid))[0]
+        for pid in members:
+            if pid == best:
+                continue
+            dl.merge_meta_of_point(pid, {
+                "dupe_of": best,
+                "dupe_reason": f"点向量余弦≥{threshold} 同知识组（保留 {best}）"})
+            dupes += 1
+    if dupes:
+        from datetime import datetime
+        dl.log_task(datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "dedup_points", "run", "points",
+                    {"groups": groups, "dupes": dupes, "threshold": threshold})
+    return {"groups": groups, "dupes": dupes, "vectors": len(vecs),
+            "threshold": threshold}
+
+
 def search_points_hybrid(dl: Any, embedder: Any, q: str
                          ) -> list[dict[str, Any]] | None:
     """点检索融合（批次 87）：FTS 点命中 + 点向量余弦 → RRF 重排。

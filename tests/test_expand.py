@@ -123,15 +123,15 @@ def test_expand_rejects_non_http_seed(cfg, dl, registries):
 # ---- 批次 92：GitHub 仓库树扩散（裁决补充：链接要探「真正的知识」） ----
 
 def test_github_scope_parsing():
-    assert _github_scope("https://github.com/u/r") == ("u", "r", "", "")
-    assert _github_scope("https://github.com/u/r/") == ("u", "r", "", "")
-    assert _github_scope("https://github.com/u/r/tree/main/cn-book") == \
-        ("u", "r", "main", "cn-book")
-    assert _github_scope("https://github.com/u/r/tree/dev/a/b") == \
-        ("u", "r", "dev", "a/b")
+    assert _github_scope("https://github.com/u/ai-agents") == ("u", "ai-agents", "", "")
+    assert _github_scope("https://github.com/u/ai-agents/") == ("u", "ai-agents", "", "")
+    assert _github_scope("https://github.com/u/ai-agents/tree/main/cn-book") == \
+        ("u", "ai-agents", "main", "cn-book")
+    assert _github_scope("https://github.com/u/ai-agents/tree/dev/a/b") == \
+        ("u", "ai-agents", "dev", "a/b")
     # 非 tree 多段路径（issues/pull）→ None（回落同目录规则）
-    assert _github_scope("https://github.com/u/r/issues/1") is None
-    assert _github_scope("https://github.com/u/r/pull/9") is None
+    assert _github_scope("https://github.com/u/ai-agents/issues/1") is None
+    assert _github_scope("https://github.com/u/ai-agents/pull/9") is None
     # 站内特殊段不是仓库名
     assert _github_scope("https://github.com/topics/ai") is None
 
@@ -142,17 +142,17 @@ def test_gh_scope_dir_and_blob_dir():
     assert _gh_in_scope("cn-book", "cn-book")
     assert not _gh_in_scope("cn-book", "other/x.md")
     assert _gh_blob_dir(
-        "https://github.com/u/r/blob/main/cn-book/ch/1.md") == "u/r/cn-book/ch"
-    assert _gh_blob_dir("https://github.com/u/r/blob/main/README.md") == "u/r"
+        "https://github.com/u/ai-agents/blob/main/cn-book/ch/1.md") == "u/ai-agents/cn-book/ch"
+    assert _gh_blob_dir("https://github.com/u/ai-agents/blob/main/README.md") == "u/ai-agents"
 
 
-_GH_ROOT = ('<a href="/u/r/blob/main/cn-book/README.md">说明</a>'
-            '<a href="/u/r/tree/main/cn-book">书稿目录</a>'
-            '<a href="/u/r/blob/main/LICENSE">许可</a>'
-            '<a href="/u/r/issues/1">issue</a>'
-            '<a href="/u/r/blob/dev/other.md">异分支</a>')
-_GH_SUBDIR = ('<a href="/u/r/blob/main/cn-book/ch1.md">第一章</a>'
-              '<a href="/u/r/blob/main/cn-book/ch2.md">第二章</a>')
+_GH_ROOT = ('<a href="/u/ai-agents/blob/main/cn-book/README.md">说明</a>'
+            '<a href="/u/ai-agents/tree/main/cn-book">书稿目录</a>'
+            '<a href="/u/ai-agents/blob/main/LICENSE">许可</a>'
+            '<a href="/u/ai-agents/issues/1">issue</a>'
+            '<a href="/u/ai-agents/blob/dev/other.md">异分支</a>')
+_GH_SUBDIR = ('<a href="/u/ai-agents/blob/main/cn-book/ch1.md">第一章</a>'
+              '<a href="/u/ai-agents/blob/main/cn-book/ch2.md">第二章</a>')
 _GH_RAW = {  # blob → raw 直链内容（≥ min_content_chars）
     "cn-book/README.md": "# AI Agents 实战（中文版）\n\n" + "本书讲解智能体架构设计，覆盖规划、工具调用与记忆机制。" * 12,
     "LICENSE": "MIT License\n\n" + "版权所有，允许自由使用、修改与分发，须保留版权声明。" * 12,
@@ -184,10 +184,10 @@ class _FakeResp:
             rel = url.split("main/", 1)[1]
             self.status_code = 200 if rel in _GH_RAW else 404
             self.text = _GH_RAW.get(rel, "")
-        elif url.rstrip("/") == "https://github.com/u/r/tree/main/cn-book":
+        elif url.rstrip("/") == "https://github.com/u/ai-agents/tree/main/cn-book":
             self.status_code = 200
             self.text = _GH_SUBDIR
-        elif url.rstrip("/") == "https://github.com/u/r":
+        elif url.rstrip("/") == "https://github.com/u/ai-agents":
             self.status_code = 200
             self.text = _GH_ROOT
         else:
@@ -198,8 +198,8 @@ class _FakeResp:
 def _gh_seed(dl) -> Entry:
     e = Entry.build(source_type="bookmark", source_key="edge:9002",
                     title="AI Agents 实战（中文版）",
-                    locator="https://github.com/u/r",
-                    locator_canonical="https://github.com/u/r",
+                    locator="https://github.com/u/ai-agents",
+                    locator_canonical="https://github.com/u/ai-agents",
                     meta={"source_type": "bookmark", "browser": "edge"})
     dl.upsert_entries([e])
     return e
@@ -207,21 +207,25 @@ def _gh_seed(dl) -> Entry:
 
 def test_expand_github_repo_tree(cfg, dl, registries, monkeypatch):
     """仓库根种子：blob 候选跨 tree 子目录下钻（BFS ≤2 层）、异分支/issue 排除、
-    blob 豁免 L0、locator 保留 blob 原链、native_path 记仓库目录。"""
+    blob 豁免 L0、locator 保留 blob 原链、native_path 记仓库目录；
+    批次 94：LICENSE 命中文件名黑名单候选层拦截，gh 条目标题=种子名·文件名。"""
     locators, semantics = registries
     monkeypatch.setattr(expand_mod.httpx, "Client", _FakeGHClient)
     seed = _gh_seed(dl)
     stats = expand_seed(cfg, dl, locators, semantics, seed.id)
     entries = {e.locator: e for e in _expand_entries(dl)}
-    assert stats["created"] == 4                      # README/LICENSE/ch1/ch2
-    assert len(entries) == 4
+    assert stats["created"] == 3                      # README/ch1/ch2（LICENSE 拦截）
+    assert stats["blocked_files"] == 1
+    assert len(entries) == 3
     assert all("/blob/" in loc for loc in entries)    # locator=blob 原链（与书签一致）
-    readme = entries["https://github.com/u/r/blob/main/cn-book/README.md"]
+    assert not any("LICENSE" in loc for loc in entries)  # 批次 94：黑名单不入库
+    readme = entries["https://github.com/u/ai-agents/blob/main/cn-book/README.md"]
     assert readme.meta["expand_reason"] == "github_repo_tree"
     assert readme.meta["seed_entry_id"] == seed.id
-    assert readme.native_path == "u/r/cn-book"        # 仓库目录溯源
-    ch1 = entries["https://github.com/u/r/blob/main/cn-book/ch1.md"]
-    assert ch1.native_path == "u/r/cn-book"
+    assert readme.native_path == "u/ai-agents/cn-book"        # 仓库目录溯源
+    ch1 = entries["https://github.com/u/ai-agents/blob/main/cn-book/ch1.md"]
+    assert ch1.native_path == "u/ai-agents/cn-book"
+    assert ch1.title == "ai-agents · ch1"   # 批次 94：来源 chips 有上下文（仓库名·文件名）
     # raw 直链正文进 content_store（blob→raw 重写链路）
     assert "智能体" in dl.get_content(readme.content_hash)
     # 异分支/issue 不入候选
@@ -233,7 +237,7 @@ def test_expand_github_idempotent(cfg, dl, registries, monkeypatch):
     locators, semantics = registries
     monkeypatch.setattr(expand_mod.httpx, "Client", _FakeGHClient)
     seed = _gh_seed(dl)
-    assert expand_seed(cfg, dl, locators, semantics, seed.id)["created"] == 4
+    assert expand_seed(cfg, dl, locators, semantics, seed.id)["created"] == 3
     second = expand_seed(cfg, dl, locators, semantics, seed.id)
-    assert second["created"] == 0 and second["already_known"] >= 4
-    assert len(_expand_entries(dl)) == 4
+    assert second["created"] == 0 and second["already_known"] >= 3
+    assert len(_expand_entries(dl)) == 3

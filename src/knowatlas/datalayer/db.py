@@ -49,6 +49,12 @@ def _consumable(alias: str = "e") -> str:
             f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'"
             f" AND COALESCE(json_extract({alias}.meta,'$.dedupe_master'),'')=''"
             f" AND COALESCE(json_extract({alias}.meta,'$.freshness_flag'),'ok')!='stale'")
+
+
+# 点级语义去重副点退出消费面（批次 94，条目级 dedupe_master 的点层对应物）：
+# dupe_of 指向组内保留点——可逆标记（清 meta 即恢复），溯源指针永不动。
+# 消费面 SQL（search_points/get_point_hit/cloud_point_data/cloud_facet_points）
+# 均带 COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''' 守卫，新增消费面须同步。
 # H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
 # meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
 # value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
@@ -1505,6 +1511,7 @@ class DataLayer:
             " JOIN entry_categories ec ON ec.entry_id = e.id"
             f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
             "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
+            "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"  # 语义去重副点（批次 94）
             + _consumable("e") +
             " ORDER BY ps.created_at DESC LIMIT ?",
             (*sub_ids, sample)).fetchall()
@@ -1547,6 +1554,7 @@ class DataLayer:
             " JOIN entry_categories ec ON ec.entry_id = e.id"
             f" WHERE ec.category_id IN ({marks}) AND e.status='active'"
             "   AND p.aging_flag != 'stale'"
+            "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"  # 语义去重副点（批次 94）
             + _consumable("e") +
             "   AND (p.text LIKE ? ESCAPE '\\' OR p.summary LIKE ? ESCAPE '\\')"
             " ORDER BY p.created_at LIMIT ?",
@@ -2631,6 +2639,7 @@ class DataLayer:
                     " FROM points_fts JOIN points p ON p.rowid = points_fts.rowid"
                     " WHERE points_fts MATCH ?"
                     "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
+                    "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"  # 语义去重副点（批次 94）
                     "   AND EXISTS (SELECT 1 FROM point_sources ps"
                     "               JOIN entries e ON e.id = ps.entry_id"
                     "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
@@ -2645,6 +2654,7 @@ class DataLayer:
                 " FROM points p"
                 " WHERE (p.text LIKE ? ESCAPE '\\' OR p.summary LIKE ? ESCAPE '\\')"
                 "   AND p.aging_flag != 'stale'"      # 点级老化退出消费面（批次 93）
+                "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"  # 语义去重副点（批次 94）
                 "   AND EXISTS (SELECT 1 FROM point_sources ps"
                 "               JOIN entries e ON e.id = ps.entry_id"
                 "               WHERE ps.point_id = p.id AND e.status='active'" + cons + ")"
@@ -2677,7 +2687,8 @@ class DataLayer:
         口径——溯源全不可消费的点返回 None 不露面）。"""
         r = self._conn.execute(
             "SELECT id, substr(text,1,200) AS text, summary FROM points"
-            " WHERE id=? AND aging_flag != 'stale'",   # 点级老化退出消费面（批次 93）
+            " WHERE id=? AND aging_flag != 'stale'"   # 点级老化退出消费面（批次 93）
+            "   AND COALESCE(json_extract(meta,'$.dupe_of'),'')=''",  # 语义去重副点（批次 94）
             (point_id,),
         ).fetchone()
         if r is None:

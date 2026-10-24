@@ -73,6 +73,21 @@ def fetch_page(locator: str, ctx: FetchContext) -> tuple[str, str]:
                 raise FetchError(
                     f"DeepSeek Fetch 返回空正文：{locator[:120]}",
                     hint="目标站点反爬或无正文——保持标题级条目（此响应按规范不计费）")
+            # 批次 94：与 simple 后端同口径守门——min_content_chars + 骨架检测。
+            # 缺此守门时升级后端成了垃圾旁路（真库教训：目录索引页/HTML 实体
+            # 骨架经 DeepSeek Fetch 入库且产点）。
+            min_chars = int(ctx.config.get("fetch.min_content_chars", 200))
+            if len(content) < min_chars:
+                raise FetchError(
+                    f"DeepSeek Fetch 正文过短（{len(content)} < {min_chars} 字符）："
+                    f"{locator[:120]}",
+                    hint="目标页无有效正文——保持标题级条目")
+            from .base import is_skeleton_body
+            if is_skeleton_body(content):
+                raise FetchError(
+                    f"DeepSeek Fetch 提取结果疑似页面骨架（导航/索引行占比过高）："
+                    f"{locator[:120]}",
+                    hint="目标页无可提炼正文——不重试不入库")
             return content, title
         if resp.status_code == 429 and attempt < retries:
             time.sleep(delay)

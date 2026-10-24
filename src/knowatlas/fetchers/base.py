@@ -38,6 +38,13 @@ _CHROME_PHRASES = ("skip to content", "sign in", "sign up", "pull requests",
                    "issues", "actions", "projects", "wiki", "privacy",
                    "copyright")
 
+# 骨架信号（结构标签泄漏级，批次 94）：readability/fetch 升级失败时正文常带
+# 字面 HTML 结构标签（真库案例：「\xhtml\r\n<head>…」）。知识正文不该裸露
+# ≥3 种结构标签；含围栏代码块的文档（``` ×2）不算——教 HTML 的 README 会在
+# 代码示例里合法出现全套标签。
+_STRUCT_TAGS = ("<!doctype", "<html", "<head", "<body", "<meta",
+                "<script", "<title>")
+
 
 def github_raw_url(locator: str) -> str:
     """github.com blob/raw 页面 → raw.githubusercontent.com 直链（仅确定性等价）。
@@ -54,12 +61,17 @@ def github_raw_url(locator: str) -> str:
 def is_skeleton_body(text: str) -> bool:
     """正文疑似网页骨架（导航/按钮/版权行占比过高）。
 
-    双模式：①行级——≥8 行且骨架行 ≥8 且占比 ≥60%；②短语级（行级失效时的
-    单行兜底）——<1500 字符、互异英文导航短语 ≥8 个、且几乎无句读（。或
-    ". " 少于 2 处）。消费方：http_simple 提取后（判提取失败 → 升级 DeepSeek
-    Fetch 重抓——误判零数据损失）、points 管线对存量条目（merge_meta
-    body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏；误判可清标重抽）。
-    纯文本内容（raw 直链）不做此检测。
+    四路信号（命中其一即骨架）：
+    ①行级——≥8 行且骨架行 ≥8 且占比 ≥60%；
+    ②短语级（行级失效时的单行兜底）——<1500 字符、互异英文导航短语 ≥8 个、
+      且几乎无句读（。或 ". " 少于 2 处）；
+    ③结构标签泄漏（批次 94）——字面 HTML 结构标签 ≥3 种且无围栏代码块；
+    ④重复行（批次 94）——≥10 行且互异行占比 ≤40% 且某行（≥4 字符）重复
+      ≥5 次。消费方：http_simple 提取后（判提取失败 → 升级 DeepSeek Fetch
+      重抓——误判零数据损失）、http_deepseek 返回守门（批次 94）、expand
+      扩散入库前（批次 94）、points 管线对存量条目（merge_meta
+      body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏；误判可清标
+      重抽）。纯文本内容（raw 直链）不做此检测。
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     if len(lines) >= 8:
@@ -70,6 +82,19 @@ def is_skeleton_body(text: str) -> bool:
         low = text.lower()
         distinct = sum(1 for k in _CHROME_PHRASES if k in low)
         if distinct >= 8 and text.count("。") + text.count(". ") < 2:
+            return True
+    # ③ 结构标签泄漏：无围栏代码块的文本裸露 ≥3 种 HTML 结构标签
+    low = text.lower()
+    if text.count("```") < 2:
+        if sum(1 for t in _STRUCT_TAGS if t in low) >= 3:
+            return True
+    # ④ 重复行：目录索引/文件列表页同一行反复出现（互异行占比过低）
+    if len(lines) >= 10:
+        from collections import Counter
+        counts = Counter(lines)
+        top_ln, top_n = counts.most_common(1)[0]
+        if (top_n >= 5 and len(top_ln) >= 4
+                and len(counts) / len(lines) <= 0.4):
             return True
     return False
 
