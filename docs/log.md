@@ -527,3 +527,77 @@ uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_K
   → P4 点级图 → P5 扩散加固。
 - 排序原则：先立机制（便宜、当天可验收），再改点集（贵、要重抽全库）；点级结论一律用 `content_hash` 做键，
   P3 重抽后同文本的点自动继承结论。
+
+## 2026-10-25 23:05 交付：功能与操作手册（验收版）
+
+- **产物**：`docs/使用手册-2026-10-25.md`（450 行，13 节）——只写「现在真能用」的，
+  没做到的统一收在第 10 节，不与功能混写。
+- **覆盖**：三层结构白话版 / 五分钟启动 / 六个入口 / 条目状态机 / 管理页八个页签 /
+  13 个 CLI 命令逐个（含常用参数与行为坑）/ 12 个源的接通状态 / 13 个语义能力 /
+  数据安全五约束 / **还没做到的 7 条** / 常见故障 9 条 / **验收清单 22 项**。
+- **现场数字**（23:05 取）：条目 241（待审 161 / 在库 30 / 已舍弃 50）、点 4,552、
+  点向量 4,552、条目向量 29、分类 8（5 组父子）、线索 0、正文副本 55。
+- **核过的事实**：`pytest -o addopts="" -q` → **580 passed / 1 skipped**（此前记的 583 是旧数）；
+  8 个管理页签、6 个主视图、68 个 HTTP 路由、`STATUSES` 五值、`SOURCE_TYPES` 16 值。
+- **两个写手册时发现的坑**（已写进手册第 11 节）：
+  1. `pyproject.toml` 的 `addopts="-q"` + 命令再带 `-q` = `-qq`，pytest **连汇总行都不打**，
+     只剩一串点——「看不到 passed 数字」不等于失败，要看退出码（本次差点误判）。
+  2. 管理页「📥 暂存区」**不是一种状态**，它列的是「未挂分类」的条目（`STATUSES` 里没有 `staged`）。
+- 手册未生成 HTML 阅读版（skill 默认会出双版，本次按仓库既有 docs 约定只落 Markdown）；需要再补。
+
+## 交接（2026-10-25 23:10，用户主动切会话做验收）
+
+### 当前目标
+
+用户先验收「当前已实现功能」，验收通过后在**新会话**按 TODO 的 P0→P5 开工。本会话不再动业务代码。
+
+### 已完成（含产物路径与现场数字）
+
+- **验收手册**：`docs/使用手册-2026-10-25.md`（450 行，13 节，含 22 项验收清单）。
+- **勘误全量核查**（4,509 点）：hard 1,579 / opinion 2,016 / unjudgeable 914；
+  hard 里 wrong 37 / suspect 348 / ok 1,194。产物：`temp/errata_full_triage.json`、
+  `temp/errata_full_verify.json`、`temp/errata_full_report.json`、
+  **给人看的清单 `temp/errata_findings.md`**（按书分节，wrong 带理由+依据+point_id）。
+- **TODO 排序**：`docs/design/知识索引工具-TODO.md` 新增「2026-10-25 裁决」P0–P5（提交 `37a72b1`）。
+- **扩散实测**：`ebook-treasure-chest/md` 跑出 20 条，全是书目索引页 → 已 `bulk-status reject`
+  （30 天冷却可 restore）；第二个种子未跑（章节已在库，会造重复）。守卫缺口记入 TODO P5。
+- 现场数字：条目 241（pending 161 / active 30 / rejected 50）、points 4,552、
+  point_vectors 4,552、entry_vectors 29、categories 8、threads 0。
+- 测试：`pytest -o addopts="" -q` → **580 passed / 1 skipped**。
+
+### 下一步（按序，首步可直接执行）
+
+1. **P0 分诊落库**：把 `temp/errata_full_triage.json` 的 kind 写进 `point.meta.kind`
+   （+`kind_why`/`kind_at`/`kind_model`），新增 `kpoints --triage`（幂等，LLM 不通则整批 skip）；
+   后续勘误/老化只吃 `kind=hard`。
+2. **P1 勘误机制**：`kerrata --points`，结论写 `point.meta.fact_check`，以 `content_hash` 为键幂等，
+   wrong 进裁决队列、suspect 只进筛选视图；原因码 `fact_error` / `overclaim`。
+   验收：回放当日 37 条 wrong，队列数 = 37，重跑零新增。
+3. **P2 老化机制**：版本型（抽版本号 + EOL 表，确定性）+ 退场型（LLM 附官方依据），
+   `kaging --lifecycle` 主动扫描，只吃 `kind=hard`，只标不删。
+4. 之后 P3（全文分块抽取，解决「章节名」根因，大件，需用户裁决重抽成本）→ P4（点级图）→ P5（扩散加固）。
+
+### 不要重跑
+
+- **勘误全量核查**（4,509 点，约 25 分钟 + 费用）：结果已在 `temp/errata_full_*.json`，直接读。
+- **`ebook-treasure-chest` 扩散**：已跑完并回退，别再跑（会再造 20 条书目页）。
+- **`ai-agents-in-action-2nd-edition-cn` 扩散**：该书章节已在库，跑了就是重复，别跑。
+- **全量 `pytest`**：刚跑过（580/1）；除非改了业务代码。
+- **`ksync --embed`**：点向量已全覆盖（4,552），条目向量 29 是既知现状，不是故障。
+
+### 验证命令
+
+```bash
+uv run --with zstandard python tools/session_check.py   # 应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                # 580 passed, 1 skipped
+curl http://127.0.0.1:8420/api/stats                    # serve 已起（PID 22144，端口 8420）
+```
+
+### 已知失败 / 注意
+
+- **serve 是本会话早些时候重启的进程**，新会话若改后端代码需再重启才生效；改 HTML 只需用户 `Ctrl+F5`。
+- 手册里的数字是 2026-10-25 23:05 的现场值，会随操作变化，验收时以 `/api/stats` 为准。
+- `pytest` 带 `-q` 会与 `addopts` 叠加成 `-qq`，导致**不打印汇总行**，别误判为失败。
+- 本会话 `effective_pct` 79.2%（baseline 147,059）。
+
+<!-- HANDOFF {"session":"session-599a0405-b8b3-4be2-8ed3-889a97e073ca","compactions":1,"tokens":116432,"at":"2026-10-25T23:10:00+08:00","status":"HANDOFF","goal":"交付验收手册 docs/使用手册-2026-10-25.md；勘误全量已出清单；TODO P0-P5 已排序；用户验完开新会话按 P0 开工","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后 P0 分诊落库（point.meta.kind + kpoints --triage + 领域闸门），再 P1 勘误机制、P2 老化机制"} -->
