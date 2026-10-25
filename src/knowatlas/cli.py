@@ -133,6 +133,21 @@ def build_parser() -> argparse.ArgumentParser:
                          help="跑 L1 确定性错误扫描（完整 Python 代码块语法验证 + 已移除"
                               " API 对照表，零费用；同 ksync --errata-scan）")
 
+    kpeimport = sub.add_parser(
+        "kpeimport", help="导入 KPE 长文抽取产物（manifest.json + points.jsonl）到点层"
+                          "（变更工单-2026-10-25-KPE导入适配器）")
+    kpeimport.add_argument("out_dir", metavar="OUT_DIR",
+                           help="kpe --out 目录（含 manifest.json / points.jsonl）")
+    kpeimport.add_argument("--entry", dest="entry_id", metavar="ENTRY_ID",
+                           help="目标条目 id（最稳；不给则按 manifest.book 精确匹配标题）")
+    kpeimport.add_argument("--match", metavar="PATTERN",
+                           help="按标题/locator 通配匹配条目（必须唯一命中）")
+    kpeimport.add_argument("--replace", action="store_true",
+                           help="先清该条目的旧点溯源（孤儿点一并删、共享点保留）再导入")
+    kpeimport.add_argument("--dry-run", action="store_true", help="只算账不写库")
+    kpeimport.add_argument("--no-backup", action="store_true", help="跳过写库前快照")
+    kpeimport.add_argument("--limit", type=int, default=0, help="最多导入 N 个点（调试用）")
+
     return parser
 
 
@@ -561,6 +576,26 @@ def _cmd_kerrata(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kpeimport(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .pipeline.kpe_import import import_kpe_dir
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    dl = _open(cfg)
+    try:
+        stats = import_kpe_dir(
+            cfg, dl, args.out_dir, entry_id=args.entry_id, match=args.match,
+            replace=args.replace, dry_run=args.dry_run,
+            backup=not args.no_backup, limit=args.limit)
+    finally:
+        dl.close()
+    head = "OK 试算完成（dry-run 未写库）" if args.dry_run else "OK 导入完成"
+    print(f"{head}：{_json.dumps(stats, ensure_ascii=False)}")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -573,6 +608,7 @@ _COMMANDS = {
     "kpoints": _cmd_kpoints,
     "kaging": _cmd_kaging,
     "kerrata": _cmd_kerrata,
+    "kpeimport": _cmd_kpeimport,
 }
 
 
