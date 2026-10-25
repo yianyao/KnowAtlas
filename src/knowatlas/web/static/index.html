@@ -148,8 +148,9 @@
   body.multiselect .entry .sel-cb { display: inline-block; }
   #bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
               background: Canvas; border: 1px solid #8888; border-radius: 8px;
-              padding: 8px 14px; display: flex; gap: 10px; align-items: center;
+              padding: 8px 14px; display: none; gap: 10px; align-items: center;
               box-shadow: 0 2px 10px #0003; z-index: 50; font-size: 13px; }
+  body.multiselect #bulk-bar { display: flex; }
   #bulk-bar button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
                      background: transparent; color: inherit; padding: 2px 10px; }
   #bulk-bar button.primary { border-color: #4a9eff88; color: #4a9eff; }
@@ -318,6 +319,11 @@
       <button class="mtab" data-sub="rejected">🗑️ 已舍弃</button>
       <button class="mtab" data-sub="data">🛠 数据管理</button>
     </nav>
+    <label id="ms-entry" title="进入多选模式：条目左侧出现复选框，底部浮动条提供 转正 / 舍弃 / 合并 / 移到 / AI 起名"
+           style="display:inline-flex;align-items:center;gap:5px;font-size:12px;
+                  margin:6px 0 0;cursor:pointer;color:var(--text-3)">
+      <input type="checkbox" id="ms-entry-cb"> 多选（批量操作）
+    </label>
     <div id="mgmt-desc" style="font-size:12px;color:var(--text-3);margin:8px 0"></div>
     <div id="mgmt-body" class="entry-host"></div>
   </section>
@@ -329,7 +335,7 @@
   <span class="st-sp"></span>
   <span>知道 KnowAtlas · 桌面壳</span>
 </footer>
-<div id="bulk-bar" style="display:none">
+<div id="bulk-bar">
   <label style="cursor:pointer"><input type="checkbox" id="ms-toggle" style="vertical-align:-2px"> 多选</label>
   <span id="ms-count">已选 0</span>
   <button id="ms-move" class="primary">移到…</button>
@@ -879,15 +885,21 @@ function clearSelection() {
   document.querySelectorAll(".sel-cb").forEach(cb => cb.checked = false);
   updateBulkBar();
 }
-document.getElementById("ms-toggle").onchange = (e) => {
-  document.body.classList.toggle("multiselect", e.target.checked);
-  if (!e.target.checked) clearSelection();
-};
-document.getElementById("ms-cancel").onclick = () => {
-  document.getElementById("ms-toggle").checked = false;
-  document.body.classList.remove("multiselect");
-  clearSelection();
-};
+// 多选模式统一入口（批次 105）：浮动条 #bulk-bar 原先是内联 display:none 且无人
+// 负责显示，导致「勾多选」这件事根本做不到——现在由 body.multiselect 控制显隐，
+// 管理页顶部另给一个常驻勾选框（#ms-entry-cb），两处状态由本函数同步。
+function setMultiSelect(on) {
+  const t = document.getElementById("ms-toggle");
+  const e = document.getElementById("ms-entry-cb");
+  if (t) t.checked = on;
+  if (e) e.checked = on;
+  document.body.classList.toggle("multiselect", on);
+  if (!on) clearSelection();
+}
+document.getElementById("ms-toggle").onchange = (e) => setMultiSelect(e.target.checked);
+document.getElementById("ms-entry-cb")?.addEventListener("change",
+  (e) => setMultiSelect(e.target.checked));
+document.getElementById("ms-cancel").onclick = () => setMultiSelect(false);
 document.getElementById("ms-move").onclick = () => {
   if (!selection.size) { ka.toast("先勾选条目（勾上「多选」后条目前会出现复选框）", "warn"); return; }
   opRecategorize(currentSelection(), "");
@@ -1657,8 +1669,7 @@ function _ptApplyFilter() {
 }
 
 function _ptSelectVisible(ids) {
-  const t = document.getElementById("ms-toggle");
-  if (t) { t.checked = true; document.body.classList.add("multiselect"); }
+  setMultiSelect(true);   // 全选即进入多选模式：浮动条要可见，否则按钮无处可点
   const set = new Set(ids);
   document.querySelectorAll("#mgmt-body .entry[data-id]").forEach(d => {
     if (d.style.display === "none" || !set.has(d.dataset.id)) return;

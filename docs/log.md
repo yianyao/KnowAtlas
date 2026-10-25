@@ -442,3 +442,20 @@ uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_K
   全库盲跑核查会产噪声，必须分诊后再核。
 
 <!-- HANDOFF {"session":"session-3317aaf5-93e1-4d10-a7d2-a2e4b0e79adb","compactions":1,"tokens":165000,"at":"2026-10-25T19:27:00+08:00","status":"CRITICAL","goal":"语义检索已上线；勘误抽样完成待裁决","next":"重启 serve 使 hybrid 生效；看 errata_sample_report.json 判断精度；决定是否建 point_fact_check 工单"} -->
+
+## 2026-10-25 19:41 批 105：多选浮动条修复（用户报障）
+
+- **现象**：待审区点「全选可见」后看不到浮动条「✅转正 / 🗑舍弃」。
+- **根因**：`#bulk-bar` 只有内联 `display:none`，**全仓库没有任何 JS/CSS 把它显示出来**——
+  多选模式一直是隐形的（连条上的「多选」勾选框都点不到）。
+- **修法**（`web/static/index.html`，纯前端）：
+  1. 内联 `display:none` 删除，改 `#bulk-bar{display:none}` + `body.multiselect #bulk-bar{display:flex}`；
+  2. 新增 `setMultiSelect(on)` 统一同步两处开关 + body class + 清空选择；
+  3. 管理页签栏下加常驻入口 `☑ 多选（批量操作）`（`#ms-entry-cb`）；
+  4. `_ptSelectVisible()` 改调 `setMultiSelect(true)`——「全选可见/全选本组」即自动打开浮动条。
+- **验证**（headless Edge + CDP，`temp/ui_bulk_check.py`）：初始 `display:none`；
+  点全选后 `display:flex`、379×75 px、`已选 183`、转正按钮可见、183 个复选框全勾；
+  点「取消」→ 隐藏且入口勾掉；手动勾入口 → 再次显示。`node --check` 通过、`pytest` 全绿。
+- 现场数字：待审从 191 降到 **183**（用户已自行转正 8 条）。
+
+<!-- HANDOFF {"session":"session-3317aaf5-93e1-4d10-a7d2-a2e4b0e79adb","compactions":1,"tokens":182361,"at":"2026-10-25T19:41:00+08:00","status":"CRITICAL","goal":"多选浮动条已修复；语义检索待重启 serve 生效；勘误抽样待裁决","next":"重启 serve；重启后确认 /api/search?mode=hybrid 有命中；看 errata_sample_report.json 定 point_fact_check 工单"} -->
