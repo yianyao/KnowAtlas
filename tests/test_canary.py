@@ -24,8 +24,9 @@ CANARY: dict[str, str] = {
     # capabilities：point_extract 2.0.0 → 2.1.0（自洽性纪律 + 允许空点，
     # 工单 变更工单-2026-10-24-8.5自洽性闸门.md）；point_triage@1.0.0（P0 点分诊）
     # 与 point_errata@1.0.0（P1 点级勘误）新增（工单 变更工单-2026-10-25-点分诊.md
-    # / 变更工单-2026-10-25-P1点级勘误.md）；其余指纹均未动。
-    "capabilities": "89594636c8b2",
+    # / 变更工单-2026-10-25-P1点级勘误.md）；point_lifecycle@1.0.0 新增
+    # （P2 老化两型，工单 变更工单-2026-10-26-P2点级老化两型.md）；其余指纹均未动。
+    "capabilities": "e293e25d725c",
 }
 
 

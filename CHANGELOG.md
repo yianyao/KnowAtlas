@@ -4,6 +4,17 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P2 点级老化两型（2026-10-26）
+
+- **为什么**：老化一直是被动的——L1 日期规则先标 suspect，点级老化才跟进；技术栈层面的过时（Python 2.7 教程、jQuery 1.x 写法）既不写在日期里，也不会自己变成 suspect，永远等不到人看。
+- **能力**（新增 `semantic/tasks/point_lifecycle.py`，1.0.0）：退场型判定——**按技术栈分组**（同一技术几十个点答案相同，逐点判等于重复付费），`retired` 必须附官方依据否则降 `keep`；登记在 `registry/builtins.py`，canary `capabilities` → `e293e25d725c`。
+- **数据**（新增 `semantic/eol.py`）：只收**有官方支持矩阵**的技术（python/django/nodejs/jquery/vue/angularjs/php/ruby，每项带官方 URL）；`data/eol.json` 可覆盖扩充。判 stale 的方向保守：未收录版本 → `unknown`（调用方降 suspect），**不按「比最大值新就是支持的」猜**。
+- **两个真库假阳性（自检抓到并修掉）**：① `Python 3.x` 被 3.6–3.9 的 EOL 记录带成 stale —— 新增 `LIVE_MAJORS` 声明「该大版本仍有活着小版本」；② `需要 Python 3.10 **或更高版本**` 被当成「在用 3.10」—— 新增最低版本语境过滤（`或更高/及以上/N+`）；顺带修 `Python 2019` 的年份误匹配。
+- **管道**（新增 `pipeline/lifecycle.py`）：A 段版本型（零 LLM，命中 EOL → stale / 全在支持期 → ok / 未收录 → suspect）+ B 段退场型（LLM 按技术栈分组，20 组/批）；只吃 `kind=hard`（复用 `points_of_kind` 闸门入口，不另写 SQL）；`stale` 走既有 `set_point_aging` 退出消费面（**只标不删**，物理删除仍只走 30 天冷却）。
+- **CLI**：`kaging --lifecycle [--limit N] [--dry-run]`，与 `--points`/`--sweep` 互斥（退出码 2）；`--limit` 默认 `None`（全库），条目/点级 L2 仍默认 10。
+- **测试**：新增 `tests/test_lifecycle.py`（8 例：版本抽取/家族 EOL/表覆盖/6 条验收样本/技术栈分组/防幻觉降级/幂等与 dry-run/CLI）；全量 **611 passed, 1 skipped**；canary 仅 `capabilities` 一条更新。
+- **真库实跑**：1,579 hard 点 → A 段 2 ok（Vue 3 / Python 3）、**0 stale**；B 段 4 个技术栈（python/nodejs/vue/django）→ 37 ok、0 retired；重跑零写入零调用。**结论：本库没有「用过时版本」的知识点**（探针确认无 AngularJS/jQuery 1.x/Python 2 等，多数是「≥某版本」环境门槛与现行技术）。实跑前备份 `temp/knowledge.pre-lifecycle.db`。
+
 ### 变更工单 · P1b 点级勘误人裁闭环（2026-10-25 续作，2026-10-26 00:1x 交付）
 
 - **为什么**：P1 只交付到「队列 API 可读」——37 条确认级 wrong 只能 curl 看，页面上无法否决出队；37 条种子的 `reason_code` 也全空（verify 产物没记原因码），队列少了「错在哪类」的筛法。

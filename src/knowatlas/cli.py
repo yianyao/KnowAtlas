@@ -118,8 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
     kaging = sub.add_parser(
         "kaging", help="老化三级：L2 LLM 复核 suspect（升级 stale/否决/下沉人裁）；"
                        "--sweep 执行冷却期满删除出口（方案 §7.5）")
-    kaging.add_argument("--limit", type=int, default=10,
-                        help="本次最多复核条数（默认 10——试跑口径，全量判定须用户裁决）")
+    kaging.add_argument("--limit", type=int, default=None,
+                        help="本次最多复核条数（条目/点级默认 10=试跑口径，全量须用户裁决；"
+                             "--lifecycle 默认不限=全库）")
     kaging.add_argument("--dry-run", action="store_true",
                         help="只判定与报告，不写库（LLM 费用照常发生；--sweep 时只出删除报告）")
     kaging.add_argument("--sweep", action="store_true",
@@ -129,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="点级老化 L2（批次 93，裁决 #14）：对溯源条目被标"
                              " suspect/stale 的点逐点复核——条目过时不连坐点，"
                              "确证过时的点退出消费面（溯源条目保留，永不物理删除）")
+    kaging.add_argument("--lifecycle", action="store_true",
+                        help="点级老化两型（P2）：版本型按官方 EOL 表确定性判（零 LLM）+ "
+                             "退场型按技术栈 LLM 判（必附官方依据否则 keep）；只吃 kind=hard，"
+                             "stale 退出消费面，只标不删；幂等（meta.lifecycle.at 游标）")
 
     kerrata = sub.add_parser(
         "kerrata", help="勘误三级：--scan 跑 L1 确定性错误扫描（零费用）；"
@@ -574,14 +579,21 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
 
     from .pipeline.aging import run_aging_judgment, sweep_rejections
 
+    if args.lifecycle and (args.points or args.sweep):
+        print("ERROR --lifecycle 不能与 --points/--sweep 同用（三者入口不同，分开跑）")
+        return _EXIT_USAGE
     cfg = load_config()
     setup_logging(cfg.log_level)
+    limit = 10 if args.limit is None else max(1, args.limit)
     dl = _open(cfg)
     try:
-        if args.points:
+        if args.lifecycle:
+            from .pipeline.lifecycle import run_lifecycle
+            stats = run_lifecycle(cfg, dl, limit=max(0, args.limit or 0),
+                                  dry_run=args.dry_run)
+        elif args.points:
             from .pipeline.aging import run_point_aging
-            stats = run_point_aging(cfg, dl, limit=max(1, args.limit),
-                                    dry_run=args.dry_run)
+            stats = run_point_aging(cfg, dl, limit=limit, dry_run=args.dry_run)
         elif args.sweep:
             stats = sweep_rejections(dl, dry_run=args.dry_run)
             head = "OK 清扫报告（dry-run 未删除）" if args.dry_run else "OK 清扫完成"
@@ -591,10 +603,25 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
                       "共享内容块只减计数，删到零才清正文）")
             return _EXIT_OK
         else:
-            stats = run_aging_judgment(cfg, dl, limit=max(1, args.limit),
+            stats = run_aging_judgment(cfg, dl, limit=limit,
                                        dry_run=args.dry_run)
     finally:
         dl.close()
+    if args.lifecycle:
+        written = sum(stats[k] for k in ("version_stale", "version_ok", "version_suspect",
+                                         "retired_stale", "retired_ok", "retired_keep"))
+        if stats.get("llm_skipped") and not written:
+            print(f"SKIP {stats['llm_skipped']}")
+            return _EXIT_SKIP
+        head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 生命周期扫描完成"
+        print(f"{head}：{_json.dumps({k: v for k, v in stats.items() if k != 'errors'}, ensure_ascii=False)}")
+        for err in stats.get("errors", [])[:5]:
+            print(f"  ERROR {err}")
+        if stats.get("llm_skipped"):
+            print(f"  WARN {stats['llm_skipped']}")
+        print("（A 段版本型=官方 EOL 表，零 LLM；B 段退场型=按技术栈 LLM，须附官方依据；"
+              "stale 已退出消费面，只标不删；重跑幂等）")
+        return _EXIT_OK
     if stats.get("skipped"):  # 仅 LLM 未启用时存在（str）
         print(f"SKIP {stats['skipped']}")
         return _EXIT_SKIP

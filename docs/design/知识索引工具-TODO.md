@@ -498,17 +498,24 @@ reader: 执行者（人与 agent）
 
 ### P2 · 老化从「被动」变「机制」，且分两型
 
-- [ ] **版本型**（确定性优先）：从点文本抽版本号（`Python 2.7`、`Django 2.x`、`jQuery 1.x`），对照可维护的
+- [x] **版本型**（确定性优先）：从点文本抽版本号（`Python 2.7`、`Django 2.x`、`jQuery 1.x`），对照可维护的
       EOL 表（python.org / nodejs / django 等官方支持矩阵，落 `data/` 或配置）；命中 EOL → `stale`。
       给不出官方依据不判 stale（降 `suspect`）。
-- [ ] **退场型**（LLM + 依据）：判「该技术是否仍在被使用/维护」，必须附官方弃用公告或等价依据；
+      **已实施（2026-10-26）**：`semantic/eol.py` 内置表（8 个有官方矩阵的技术 + 官方 URL），
+      `data/eol.json` 可覆盖；保守方向——未收录版本降 `suspect`，`LIVE_MAJORS` 防「Python 3.x」误杀，
+      「或更高版本」语境过滤（真库自检抓到两类假阳性后补的）。
+- [x] **退场型**（LLM + 依据）：判「该技术是否仍在被使用/维护」，必须附官方弃用公告或等价依据；
       给不出降 `keep`（沿用 `point_aging` 的防幻觉闸门）。
-- [ ] 触发方式：不再依赖「条目被日期规则标 suspect」——新增主动扫描入口（`kaging --lifecycle`），
+      **已实施**：`point_lifecycle@1.0.0`，按**技术栈分组**（20 组/批，同一技术只判一次）。
+- [x] 触发方式：不再依赖「条目被日期规则标 suspect」——新增主动扫描入口（`kaging --lifecycle`），
       按 `kind=hard` + 技术栈分组批量跑；结论写 `point.meta.lifecycle`
       （`kind: version|retired`、`verdict`、`evidence`、`at`）。
-- [ ] 输出：`stale` 退出消费面（现成机制），`keep`/`suspect` 只进人裁列表；仍**不自动删**（30 天冷却后删）。
+      **已实施**：`pipeline/lifecycle.py`，`stale` 复用 `set_point_aging` 退出消费面，幂等游标 `lifecycle.at`。
+- [x] 输出：`stale` 退出消费面（现成机制），`keep`/`suspect` 只进人裁列表；仍**不自动删**（30 天冷却后删）。
 - 验收：造 6 条样本（Python 2.7 教程 / jQuery 插件教程 / Python 3.12 教程 / 通用方法论 / 观点文 / 未来预测），
       前两条 stale、后四条不判 stale；全库重跑幂等。
+      **已通过（单测 `tests/test_lifecycle.py::test_version_type_acceptance_samples`）**；
+      真库实跑 1,579 hard 点 → **0 stale / 39 ok**（本库无过时技术栈知识点，符合预期）。
 
 ### P3 · 点层粒度：把「章节名」变成「知识点」（大件，单独一批）
 

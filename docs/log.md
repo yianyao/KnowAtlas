@@ -747,3 +747,42 @@ curl.exe -s http://127.0.0.1:8420/api/errata/points      # count=37，reason_cod
 - PowerShell 控制台直接读 UTF-8 文件仍会乱码（按 ANSI 解码），看中文用 `read` 工具或 `chcp 65001`。
 - 原因码是 LLM 分类（非人工逐条确认）：`overclaim` 边界（如 Godot HTTPRequest、Mixtral 参数激活）
   存在可争议项，人裁时可随时在队列里否决出队。
+
+## 2026-10-26 00:50 P2 点级老化两型交付（同一会话）
+
+### 做了什么
+
+- **工单** `docs/design/变更工单-2026-10-26-P2点级老化两型.md`（契约先行）。
+- **数据/判定** `semantic/eol.py`：8 个有官方支持矩阵的技术 + 官方 URL，`data/eol.json` 可覆盖；
+  保守判定（未收录版本 → suspect，不猜「新版本就是支持的」）。
+- **能力** `semantic/tasks/point_lifecycle.py`：退场型，按技术栈分组，retired 必附官方依据否则 keep。
+- **管道** `pipeline/lifecycle.py`：A 段版本型（零 LLM）+ B 段退场型（LLM 分组）；
+  只吃 `kind=hard`；stale 走 `set_point_aging` 退出消费面；幂等游标 `meta.lifecycle.at`。
+- **CLI** `kaging --lifecycle`（与 `--points`/`--sweep` 互斥，`--limit` 默认全库）。
+- **canary**：只有 `capabilities` 变化 → `e293e25d725c`（新能力，工单在案）。
+
+### 自检抓到的两类假阳性（这是本批最有价值的部分）
+
+1. `Python 3.x` 被判 EOL（表只记 EOL 过的版本）→ 新增 `LIVE_MAJORS` 声明「仍有活着小版本的大版本」；
+2. `需要 Python 3.10 **或更高版本**` 被判「在用 3.10」→ 新增最低版本语境过滤；
+   顺带修 `Python 2019` 年份误匹配。两类都已固化成单测。
+
+### 实跑数字
+
+- 测试 **611 passed / 1 skipped**（+8 例）；备份 `temp/knowledge.pre-lifecycle.db`（120.6 MB）；
+- 真库 1,579 hard 点：A 段 2 ok、**0 stale**；B 段 4 技术栈 → 37 ok、0 retired（1 次调用）；
+- 重跑：candidates 1,540（无技术栈提及的点，纯正则零费用）、零写入零调用（幂等）。
+- **0 stale 是正确结果**：探针确认库里没有「用过时版本」的知识点，多数是「≥某版本」环境门槛
+  （已过滤）与现行技术。
+
+### 下一步
+
+1. **P3 全文分块抽取**（大件）：`_entry_body` 优先 `content_store` 全文、按标题/段落切 4–8k、
+   front matter 过滤、跨块去重；需用户先裁决**重抽全库的成本**。
+2. P4 点级图（wiki 式关联）→ P5 扩散加固（小件，可随时插队）。
+
+### 不要重跑
+
+- **P2 生命周期扫描**：已落库 39 条 ok，重跑零写入；要重跑先 `json_remove('$.lifecycle')`。
+- **全量 pytest**：刚跑过（611/1）。
+- **EOL 表**：不要凭印象改日期，改前查官方支持矩阵；改 `data/eol.json` 不用动代码。
