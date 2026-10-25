@@ -89,7 +89,11 @@ uv run python -m pytest -q                             # 基线：全绿（含 1
 
 - 没有 `config/knowatlas.toml` 时**所有**命令都会 `ConfigError` 退出，不会静默用默认值（`config.py::load_config`）。
 - `[llm]` 的 key 只从环境变量读（`KNOWATLAS_LLM_API_KEY`）；未设时语义层静默跳过，主链路照跑——条目会停在「未归类」，`kadd` 的 DeepSeek 兜底抓取同样跳过。
-- CLI 子命令：`kinit` `kadd` `ksync` `serve` `kexport` `kbackup` `ktest` `kcheck` `kpoints` `kaging` `kerrata`。
+- CLI 子命令：`kinit` `kadd` `ksync` `serve` `kexport` `kbackup` `ktest` `kcheck` `kpoints` `kaging` `kerrata` `kpeimport`。
+- **长文知识点抽取走独立工具 `tools/kpe`**（可安装包 `kpe`，分块→抽取→复核，产物 `<out>/{manifest.json,points.jsonl}`），
+  入库用 `kpeimport <out> [--entry ID|--match 通配] [--replace] [--dry-run]`；
+  点 meta 固定带 `extractor="kpe"`、`book`、`section_path`、`quote`（见
+  `docs/design/变更工单-2026-10-25-KPE导入适配器.md`）。
 - 桌面壳（`desktop/main.py`，pywebview）是可选装：装不上不影响 `serve`。
 - **会话守卫工具已抽成独立仓库** `../session-guard`（可跨机安装：`pip install .` / `uv tool install .`，
   命令 `session-guard probe|check|watch|notify`）。`tools/context_probe.py`、`session_check.py`、

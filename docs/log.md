@@ -329,3 +329,45 @@ DSH 自动压缩水位本机实测约 **147,059 tokens**（模型窗口的 56%�
   2. KPE 正式接入 `pipeline/points.py` 适配器（业务代码，先出方案再改）。
   3. 待定：`ai-agents-in-action` 拆章重跑 KPE（库里还是旧点）。
 - 不要重跑：`uv build`、`notify --test`、context baseline 重建、`install_watcher_task.ps1`。
+
+## 2026-10-25 17:58 KPE 导入适配器 + ai-agents-in-action 重跑 + 收藏夹待审区
+
+### 批 102：`kpeimport`（第二条）
+
+- 新增 `src/knowatlas/pipeline/kpe_import.py`：读 `<out>/{manifest.json,points.jsonl}`（纯 stdlib，
+  **不依赖 tools/kpe**）；条目定位 `--entry` > `--match`（须唯一命中）> `manifest.book` 与标题精确相等；
+  `--replace` 先 `purge_entry_points` 再导；写库前 `snapshot(force=True)`；前置节点丢弃；幂等跳过。
+- `cli.py` 加 `kpeimport` 子命令；`docs/design/变更工单-2026-10-25-KPE导入适配器.md` 已立。
+- `tests/test_kpe_import.py` 6 项：按标题定位 / 前置丢弃 + offset 回填 / 幂等 / replace（孤儿删、共享点留） /
+  多命中拒绝 / dry-run 不写库。
+- 验证：全量 `pytest` **573 passed, 1 skipped**（exit 0）；`test_canary.py` 绿（指纹未动）。
+
+### 第三条：ai-agents-in-action 重跑
+
+- 14 章 MD（51.4 万字）逐章 chunks+extract：产物 `temp/kpe-aiagents-ch/ch-*`；
+  SiliconFlow `DeepSeek-V4.1-Flash`、thinking off、4 并发，共 **603 点**、约 ¥0.36、约 5 分钟。
+- ch-1 首轮 1 块失败 → `--retry-failed` 补抽 +6 点（该章 42）。
+- 导入（`temp/kpe_aiagents_import.py`，单次快照 `knowledge-20261025-180058.db`）：
+  点数 **3976 → 4558**；清旧溯源 21 条（各章旧 integral 点）。
+- 「0.关于本书」6 点全是排版/购买/前置知识，不是知识 → `关于本书` 补进 `FRONT_SECTIONS`，
+  重导 ch-0（`--replace`）清掉 → 点数 **4552**（`points`、`point_sources`、`points_fts` 均为 4552，全部 `judge=split`）。
+- 检索抽检：`上下文工程` / `MCP` / `护栏` 均命中。
+
+### 第四条：Edge 收藏夹 → 待审区
+
+- 本机无 HTML 导出；直读 `%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Bookmarks`（383 条）。
+- `temp/bookmarks_stage.py`：规则预筛丢 AI绘图(60)/tools(9)/华为+Huawei(13)/tencent(1)/可商用素材(7)/
+  移动收藏夹(11) → 282 条交 LLM（标题+域名+文件夹，8 批）→ 保留 **191**，丢弃 192；
+  产物 `data/bookmarks-edge-knowledge.json`（同格式、保留层级）。
+- 本机 `config/knowatlas.toml`：`[sources.bookmarks]` enabled=true、browsers=["edge"]、
+  path 指向上面的产物、`new_entries="pending"`（config/ 已 gitignore，未入库）。
+- `ksync --source bookmarks`：**created=191，全部 status=pending**（重复 URL 5 条）；
+  待审区不抓正文/不分类/不抽点，等用户在管理页「🆕 待审」逐条转正或舍弃。
+
+### 下一步
+
+1. 你在 Web 管理页（`serve` → 管理 → 🆕 待审）挑书签：转正后下一轮 `ksync` 才抓正文/分类/抽点。
+2. 剩余未重跑的 `agentic-design-patterns-main`（PDF 源仓库，与已跑 PDF 重复，决定是否跳过）。
+3. `kpoints` 现在会把这些书签（转正后）当新候选；pending 期间不受影响。
+- 不要重跑：`temp/kpe-aiagents-ch/*`（`stats.json` 已存在）；`kpeimport` 对已导章节（幂等跳过，除非 `--replace`）；
+  `temp/bookmarks_stage.py`（LLM 判定有随机性，重跑会换一批结果）。
