@@ -58,6 +58,9 @@ def _consumable(alias: str = "e") -> str:
 # H3 覆盖纪律：upsert 的 UPDATE 只含源拥有的字段；status 与人工校正永不覆盖。
 # meta 浅合并（第十八批）：源键覆盖旧值，源不设置的键（机器/人工后处理，如
 # value_flag / link_status / manual_*）原样保留——否则同步会抹掉后处理结论。
+# 点层同理（P0，2026-10-25）：points.meta 的 kind/kind_why/kind_at/kind_model 是
+# 分诊后处理结论（change ticket 变更工单-2026-10-25-点分诊.md），永不加进
+# _SOURCE_FIELDS；点 meta 只有 merge_meta_of_point 的浅合并入口。
 _SOURCE_FIELDS = (
     "title", "locator", "locator_canonical", "native_path",
     "inline_content", "content_hash", "created_at",
@@ -2124,6 +2127,59 @@ class DataLayer:
             meta.update(patch)
             conn.execute("UPDATE points SET meta=? WHERE id=?",
                          (json.dumps(meta, ensure_ascii=False), point_id))
+
+    def points_without_kind(self, limit: int = 0, *,
+                            include_dupes: bool = False) -> list[dict[str, Any]]:
+        """待分诊点（meta.kind 为空），P0「点分诊」的取数入口。
+
+        默认排除 `meta.dupe_of` 非空的重复点：重复点由调用方直接标 `dupe`，
+        不进 LLM（与消费面去重口径一致，见文件头 dupe_of 守卫说明）。
+        `limit=0` 表示不限；按 created_at 升序（知识形成顺序）稳定排序。
+        """
+        sql = ("SELECT id, text, content_hash, meta FROM points"
+               " WHERE COALESCE(json_extract(meta,'$.kind'),'') = ''")
+        if not include_dupes:
+            sql += " AND COALESCE(json_extract(meta,'$.dupe_of'),'') = ''"
+        sql += " ORDER BY created_at, id"
+        params: tuple[Any, ...] = ()
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            params = (limit,)
+        out = []
+        for r in self._conn.execute(sql, params).fetchall():
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def point_kind_counts(self) -> dict[str, int]:
+        """分诊分布（P0 验收口径）：hard/opinion/unjudgeable/dupe，未分诊记 '(none)'。"""
+        rows = self._conn.execute(
+            "SELECT COALESCE(json_extract(meta,'$.kind'),'') AS kind,"
+            " COUNT(*) AS n FROM points GROUP BY kind ORDER BY kind").fetchall()
+        return {(r["kind"] or "(none)"): r["n"] for r in rows}
+
+    def points_of_kind(self, kind: str, limit: int = 0) -> list[dict[str, Any]]:
+        """按分诊类别取点（P1 勘误 / P2 老化的领域闸门入口）；meta 已解析。"""
+        sql = ("SELECT id, content_hash, text, aging_flag, meta FROM points"
+               " WHERE COALESCE(json_extract(meta,'$.kind'),'') = ?"
+               " ORDER BY created_at, id")
+        params: list[Any] = [kind]
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        out = []
+        for r in self._conn.execute(sql, params).fetchall():
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
 
     def set_point_aging(self, point_id: str, flag: str, reason: str) -> None:
         """点级老化结论落列（批次 93，裁决 #14）：stale 退出消费面 / ok 免疫复扫 /

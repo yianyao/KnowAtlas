@@ -133,6 +133,11 @@ class LlmClient:
         """后端个数（供启动日志/测试断言，不含任何 key 信息）。"""
         return len(self._backends)
 
+    @property
+    def model_name(self) -> str:
+        """首选后端的模型名（供结论落 meta 的 model 字段与日志；不含 key 信息）。"""
+        return self._backends[0].model if self._backends else ""
+
     def key_fingerprints(self) -> list[str]:
         """全部后端全部 key 的指纹列表（只指纹不明文——供服务端核对）。"""
         return [fp for b in self._backends for fp in b.key_fingerprints]

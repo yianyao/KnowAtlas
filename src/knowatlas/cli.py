@@ -96,8 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
     kpoints = sub.add_parser(
         "kpoints", help="知识点抽取：规则判定（文学创作=split 切点，其余 integral 整条即点，"
                         "用户口径 2026-10-22）→ hash 去重一点多溯源")
-    kpoints.add_argument("--limit", type=int, default=10,
-                         help="本次最多处理条数（默认 10；--limit 0 仅 purge）")
+    kpoints.add_argument("--limit", type=int, default=None,
+                         help="本次最多处理条数（抽取默认 10；--triage 默认不限；"
+                              "--limit 0 仅 purge）")
     kpoints.add_argument("--dry-run", action="store_true",
                          help="只判定与报告，不写库（split 切点的 LLM 费用照常发生）")
     kpoints.add_argument("--purge-points", action="store_true",
@@ -106,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
     kpoints.add_argument("--retry-blocked", action="store_true",
                          help="把被自洽性闸门拦下的条目（meta.points_gate）清标记后"
                               "重抽——口径/prompt 调整后的重试入口")
+    kpoints.add_argument("--triage", action="store_true",
+                         help="点分诊（P0）：给点打 kind=hard|opinion|unjudgeable|dupe，"
+                              "落 meta；后续勘误/老化只吃 hard（领域闸门）。幂等，"
+                              "已有 kind 的跳过")
+    kpoints.add_argument("--from-json", metavar="PATH", default=None,
+                         help="--triage 时导入既有分诊产物（{point_id:{kind,why}}，零 LLM 费）；"
+                              "推荐的默认种子：temp/errata_full_triage.json")
 
     kaging = sub.add_parser(
         "kaging", help="老化三级：L2 LLM 复核 suspect（升级 stale/否决/下沉人裁）；"
@@ -467,11 +475,54 @@ def _cmd_kcheck(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kpoints_triage(cfg, args: argparse.Namespace) -> int:
+    """P0 点分诊：dupe 标记 + 种子导入（零 LLM）+ 新点 LLM 增量，幂等落 meta.kind。"""
+    import json as _json
+
+    from .pipeline.triage import run_point_triage
+
+    limit = 0 if args.limit is None else max(0, args.limit)
+    seed = args.from_json
+    if not seed:
+        default_seed = Path("temp/errata_full_triage.json")
+        if default_seed.exists():
+            print(f"提示：检测到既有分诊产物 {default_seed.as_posix()}，加 "
+                  f"--from-json {default_seed.as_posix()} 可零 LLM 费导入")
+    dl = _open(cfg)
+    try:
+        stats = run_point_triage(cfg, dl, limit=limit, dry_run=args.dry_run,
+                                 seed_path=seed)
+    finally:
+        dl.close()
+    written = stats["imported"] + stats["dupes_marked"] + stats["triaged"]
+    if stats.get("llm_skipped") and not written:
+        print(f"SKIP {stats['llm_skipped']}")
+        return _EXIT_SKIP
+    head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 分诊完成"
+    summary = {k: v for k, v in stats.items() if k != "errors"}
+    print(f"{head}：{_json.dumps(summary, ensure_ascii=False)}")
+    for err in stats.get("errors", [])[:5]:
+        print(f"  ERROR {err}")
+    if stats.get("llm_skipped"):
+        print(f"  WARN {stats['llm_skipped']}")
+    if not args.dry_run:
+        print("（领域闸门：勘误/老化只吃 kind=hard；声明在 pipeline/triage.py::is_hard；"
+              "重跑幂等，已有 kind 的点不会重判）")
+    return _EXIT_OK
+
+
 def _cmd_kpoints(args: argparse.Namespace) -> int:
     from .pipeline.points import run_points_extract
 
     cfg = load_config()
     setup_logging(cfg.log_level)
+    limit = 10 if args.limit is None else args.limit
+    if args.triage:
+        if args.purge_points or args.retry_blocked:
+            print("ERROR --triage 不能与 --purge-points / --retry-blocked 同用"
+                  "（清点/重抽请单独跑）")
+            return _EXIT_USAGE
+        return _cmd_kpoints_triage(cfg, args)
     _warn_if_llm_unavailable(cfg, "kpoints")
     dl = _open(cfg)
     try:
@@ -479,9 +530,9 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
             n = dl.purge_points(reason="用户口径变更：文学创作=split，其余 integral"
                                        "（规则判定取代 LLM 判定）")
             print(f"OK 点层已清空：{n} points（points/point_sources；条目零影响）")
-            if args.limit == 0:
+            if limit == 0:
                 return _EXIT_OK
-        stats = run_points_extract(cfg, dl, limit=max(1, args.limit),
+        stats = run_points_extract(cfg, dl, limit=max(1, limit),
                                    dry_run=args.dry_run,
                                    retry_blocked=args.retry_blocked)
     finally:

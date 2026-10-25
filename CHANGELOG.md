@@ -4,6 +4,18 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P0 点分诊落库 + 领域闸门（2026-10-25）
+
+- **为什么**：勘误（P1）/老化（P2）要变常驻机制，先得筛出「可判对错的东西」。当日 4,509 点全量实测只有 35% 是硬事实，其余是观点（45%）与内部实现/预测（20%）；不分诊就开跑 = 花钱判没有对错的内容并制造误报。
+- **能力**（新增 `semantic/tasks/point_triage.py`，version 1.0.0）：三分诊 `hard`（可判定硬事实：机制/API 行为/复杂度/协议标准/数学定义/语言规范/算法性质）、`opinion`（观点方法论）、`unjudgeable`（内部实现·预测·脱离上下文无法核查）。prompt 与当日全量实测的 `TRIAGE_SYS` 逐字一致，注册在 `registry/builtins.py`。
+- **管道**（新增 `pipeline/triage.py`）：`run_point_triage()` 三件事按代价递增——① `dupe` 确定性标记（`meta.dupe_of` 非空，零 LLM）；② 种子 JSON 导入（`--from-json temp/errata_full_triage.json`，4,509 点零 LLM 费）；③ 只有既无 kind 又不在种子里的新点才走 LLM（30/批）。幂等（只取 kind 为空的点），LLM 不可用/单批故障**不写半成品**。**领域闸门唯一出口** `is_hard()` / `HARD_SQL`，P1/P2 只准 import，不准各写一份口径。
+- **数据层**（`datalayer/db.py`）：`points_without_kind()`（含 meta 解析，默认排除 dupe）、`point_kind_counts()`（验收口径进代码）、`points_of_kind()`（P1/P2 取数入口）；`_SOURCE_FIELDS` 保护说明处登记 `kind/kind_why/kind_at/kind_model` 为点级机器后处理键。
+- **CLI**：`kpoints --triage [--from-json PATH] [--limit N] [--dry-run]`；`--limit` 默认改为 `None`（抽取仍默认 10，分诊默认不限）；与 `--purge-points`/`--retry-blocked` 互斥（退出码 2）；LLM 不可用且零写入 → `SKIP` 退出码 3。
+- **契约**：表结构/迁移/`SOURCE_TYPES`/`STATUSES`/locator scheme/`CONFIG_SCHEMA_KEYS`/REST **零变更**；`points.meta` 新增 4 键（浅合并天然保留，不加进 `_SOURCE_FIELDS`）；canary `capabilities` = `49fa2d77cca4`（point_triage@1.0.0）；工单 `docs/design/变更工单-2026-10-25-点分诊.md`。
+- **测试**：新增 `tests/test_point_triage.py`（10 例：task 三值/非法值丢弃/越界丢弃/无 LLM/故障、dupe 标记、种子导入、LLM 增量与 limit、幂等零写、不可用整批 skip、dry-run 不写、领域闸门、CLI 参数）；全量 **590 passed, 1 skipped**。
+- **真库实跑**：`kpoints --triage --from-json temp/errata_full_triage.json` → candidates 4,552，dupe 43，imported 4,509，**hard 1,579 / opinion 2,016 / unjudgeable 914**，零 LLM 调用；重跑 `candidates 0`、零写入；`task_log` 4,552 条 `triage` 留痕。实跑前库已备份到 `temp/knowledge.pre-triage.db`。
+- **下游约定**：勘误与老化**只吃 `kind=hard`**；`opinion`/`unjudgeable`/`dupe` 一律不判对错、不判过时。真实 LLM 冒烟（deepseek flash，2 后端）两条样本分诊正确。
+
 ### 变更工单 · 第一百零一批（TODO 8.5）：知识点自洽性闸门（`point_gate.py` + prompt 纪律）
 
 - **生成层**（`semantic/tasks/point_extract.py`）：三份 prompt（判定+提炼 / 切点-only / 整条提炼）统一拼 `_SELF_CONSISTENCY_RULES`——只允许四种合格形态（带论据观点/结论、概念解释或术语描述、完整步骤、独立数据）；禁裸名词、禁无支撑单句、步骤必须首尾完整且编号连续、代码块闭合、数据带口径；一个文件只产 1 点合法；确认无可独立成点时 `points` 输出空数组。空数组不再判"LLM 未返回点"故障（`llm_used=True`），能力版本 2.0.0 → **2.1.0**。

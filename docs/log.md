@@ -545,6 +545,26 @@ uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_K
   2. 管理页「📥 暂存区」**不是一种状态**，它列的是「未挂分类」的条目（`STATUSES` 里没有 `staged`）。
 - 手册未生成 HTML 阅读版（skill 默认会出双版，本次按仓库既有 docs 约定只落 Markdown）；需要再补。
 
+## 2026-10-25 23:20 P0 点分诊落库（验收通过，已实跑）
+
+- **产物**：工单 `docs/design/变更工单-2026-10-25-点分诊.md`；新增能力 `point_triage@1.0.0`
+  （`semantic/tasks/point_triage.py`，prompt 与当日全量实测逐字一致）、`pipeline/triage.py`
+  （dupe 确定性标记 + 种子导入 + 新点 LLM 增量 + 幂等 + 领域闸门 `is_hard`/`HARD_SQL`）、
+  datalayer `points_without_kind`/`point_kind_counts`/`points_of_kind`、
+  `kpoints --triage/--from-json`、`tests/test_point_triage.py`（10 例）。
+- **实跑现场数字**（23:08）：candidates 4,552 → dupe 43（`rule:dupe_of`）+ imported 4,509
+  （`seed:errata_full_triage.json`，**零 LLM 调用**）→ **hard 1,579 / opinion 2,016 / unjudgeable 914**；
+  重跑 candidates 0、零写入；`task_log` 4,552 条 `triage` 留痕；实跑前备份 `temp/knowledge.pre-triage.db`。
+- **验收 SQL**：`select coalesce(json_extract(meta,'$.kind'),'(none)') k, count(*) from points group by k`
+  → 与 `dl.point_kind_counts()` 一致（无 `(none)`）。
+- **测试**：`pytest -o addopts="" -q` → **590 passed / 1 skipped**；canary `capabilities` 因新增能力
+  更新为 `49fa2d77cca4`（工单在先、常量后改——canary 先红后绿是正确的漂移拦截）。
+- **真 LLM 冒烟**：`point_triage.run` 两条样本 → hard / opinion 判定正确（deepseek flash，2 后端）。
+- **不要重跑**：`kpoints --triage --from-json …` 再跑是零写入（无害但无意义）；**不要**跑不带
+  `--from-json` 的 `kpoints --triage`——那会把未分诊的新点全量送 LLM（43 个 dupe 已标，不会送）。
+- **下一步（取代下方交接块的「P0」）**：P1 `kerrata --points`——只吃 `kind=hard`（闸门直接
+  `from .triage import is_hard`），以 `content_hash` 为键幂等，回放当日 37 条 wrong 验收队列数。
+
 ## 交接（2026-10-25 23:10，用户主动切会话做验收）
 
 ### 当前目标

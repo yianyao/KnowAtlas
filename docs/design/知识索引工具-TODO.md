@@ -462,12 +462,17 @@ reader: 执行者（人与 agent）
 
 ### P0 · 分诊落库 + 领域闸门（前置，小）
 
-- [ ] 把 `temp/errata_full_triage.json` 的三分诊写进 `point.meta.kind`
+- [x] 把 `temp/errata_full_triage.json` 的三分诊写进 `point.meta.kind`
       （`hard` / `opinion` / `unjudgeable`，附 `kind_why`、`kind_at`、`kind_model`）。
-- [ ] 新增入口 `kpoints --triage [--limit N]`（幂等：已有 kind 的跳过；LLM 不可用则整批 skip 不写半成品）。
-- [ ] **领域闸门**：后续勘误/老化只处理 `kind=hard`；`opinion`/`unjudgeable` 一律不判对错、不判过时。
+- [x] 新增入口 `kpoints --triage [--limit N]`（幂等：已有 kind 的跳过；LLM 不可用则整批 skip 不写半成品）；
+      附 `--from-json PATH` 导入既有分诊产物（零 LLM 费）。
+- [x] **领域闸门**：后续勘误/老化只处理 `kind=hard`；`opinion`/`unjudgeable` 一律不判对错、不判过时。
 - 验收：`select json_extract(meta,'$.kind'), count(*) from points group by 1` 与报告一致（1,579/2,016/914）。
 - 契约：`points.meta` 新增键，不改表结构；需在 `_SOURCE_FIELDS` 保护说明里登记。
+- **已实施（2026-10-25，工单 `变更工单-2026-10-25-点分诊.md`）**：实跑 4,552 点 →
+  **dupe 43 / hard 1,579 / opinion 2,016 / unjudgeable 914**（dupe = `meta.dupe_of` 重复点，
+  确定性标记、不进 LLM）；重跑 candidates 0、零写入（幂等）；闸门唯一出口
+  `pipeline/triage.py::is_hard` / `HARD_SQL`，P1/P2 只准 import；测试 590 passed / 1 skipped。
 
 ### P1 · 勘误从「一次性」变「机制」
 

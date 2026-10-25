@@ -22,8 +22,9 @@ CANARY: dict[str, str] = {
     "entry_fields": "1a9d42828612",
     "config_keys": "213c47faed24",
     # capabilities：point_extract 2.0.0 → 2.1.0（自洽性纪律 + 允许空点，
-    # 工单 变更工单-2026-10-24-8.5自洽性闸门.md）；其余指纹均未动。
-    "capabilities": "62e4f6231165",
+    # 工单 变更工单-2026-10-24-8.5自洽性闸门.md）；point_triage@1.0.0 新增
+    # （P0 点分诊，工单 变更工单-2026-10-25-点分诊.md）；其余指纹均未动。
+    "capabilities": "49fa2d77cca4",
 }
 
 
