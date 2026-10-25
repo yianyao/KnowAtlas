@@ -487,3 +487,43 @@ uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_K
 - 重启姿势（复现用）：`Start-Process <uv.exe> -ArgumentList run,python,-m,knowatlas,serve,--port,8420
   -WorkingDirectory <repo> -WindowStyle Hidden -RedirectStandardOutput temp\serve.out.log`，
   继承 `KNOWATLAS_LLM_API_KEY*` / `KNOWATLAS_WEB_TOKEN`（用户级变量要先 `Set-Item env:` 导入）。
+
+## 2026-10-25 22:30 勘误全量核查完成（4,509 点）
+
+- **两段式**（`temp/errata_full.py`，4 线程、分批增量落盘、可断点续跑）：
+  分诊 4,509 点 → **hard 1,579 / opinion 2,016 / unjudgeable 914**（35% / 45% / 20%，与 400 抽样一致）；
+  只核 hard → **wrong 37（2.3%）/ suspect 348（22%）/ ok 1,194**，未核 0。
+- **中途断线一次**：核查跑到 440/1,575 时两个后端连续 `WinError 10053/10054`（连接被强断），
+  1135 条未核；网络恢复后续跑到 1579/1579，失败批次 0。教训：这类长跑要**分批落盘 + 续跑**，
+  一次跑完不现实。
+- **错误分布**：`agentic-ai-guide` 663 hard / 23 wrong、`Hello-Agents` 315 / 9 wrong，两本占 32/37；
+  其余书 0 wrong。类型：机制/公式说错 ~17（PPO 裁剪 ×4、FlashAttention ×3、偏好优化家族 ×5、
+  KV cache 公式、投机解码、流水线气泡、重复惩罚、AST 等价）、规格细节错 ~11（MCP ×3、A2A ×2、
+  FastAPI 422、Vue、n8n、Godot、pydantic、GAIA）、绝对化断言 ~4、定义/计数混淆 ~3。
+- **产物**：`temp/errata_findings.md`（按书分节；wrong 逐条带理由+依据+point_id；suspect 按书分组）。
+- **对机制的启示**：wrong 不是幻觉，是「把机制压成一句口诀」+「把特定实现说成普遍事实」——
+  核查 prompt 需要 `overclaim` 原因码（必须/只能/始终/有且仅有 且无限定）。
+
+## 2026-10-25 22:40 扩散抓取实跑（用户指定两个 GitHub 种子）
+
+- 种子 1 `jbiaojerry/ebook-treasure-chest/tree/main/md`（entry `55a9645acd182782`）：
+  `ksync --expand --expand-limit 20` → candidates 20 / created 20 / fetch_failed 0 / already_known 0。
+  **但这 20 条全是「书目索引页」**（`# 版权声明` + `| 书名 | 作者 | [下载](url) |` 表格，正文 250–2,960 字，
+  11/20 有明显下载表格）——不是知识。已用 `POST /api/entries/bulk-status`（action=reject）
+  **批量舍弃 20 条**（`bulk_reject` 留痕，30 天冷却可 restore）。走 API 时踩到：
+  httpx 默认读 `HTTP_PROXY` 会把 127.0.0.1 也走代理 → 502，须 `trust_env=False`。
+- 种子 2 `yixiangshijie/ai-agents-in-action-2nd-edition-cn`（entry `f76cea820310ef37`）：**未跑**——
+  该书 12 章已作为 folder 条目在库（`0.关于本书`…`11.构建智能体系统的实用技巧`），
+  仓库树扩散会产出同一批章节的 blob 重复条目（canonical 不同，去重拦不住）。
+- **守卫缺口**（记入 TODO P5）：批次 94 的骨架守门按「重复行」判，链接表格每行不同 → 漏；
+  模板占位符 href（`${old_uri}`）也会被当候选。
+- 已知限制：扁平 ID 平台（知乎 `/p/`、掘金 `/post/`、简书 `/p/`、公众号 `/s/`）同目录≠同主题，
+  扩散对这类源无意义。
+
+## 2026-10-25 22:45 TODO 排序（用户裁决）
+
+- `docs/design/知识索引工具-TODO.md` 新增「2026-10-25 裁决」节，P0–P5 已排序：
+  P0 分诊落库+领域闸门 → P1 勘误机制 → P2 老化机制（版本型/退场型两路）→ P3 点层粒度（全文分块+front matter，大件）
+  → P4 点级图 → P5 扩散加固。
+- 排序原则：先立机制（便宜、当天可验收），再改点集（贵、要重抽全库）；点级结论一律用 `content_hash` 做键，
+  P3 重抽后同文本的点自动继承结论。
