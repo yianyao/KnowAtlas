@@ -24,16 +24,20 @@ if ($Uninstall) {
 if ($Minutes -lt 1) { throw '-Minutes must be >= 1' }
 $uv = (Get-Command uv -ErrorAction Stop).Source
 $script = Join-Path $root 'tools\context_watcher.py'
-$arguments = "run --with zstandard python `"$script`" --once --workspace `"$root`""
+$launcher = Join-Path $root 'tools\run_hidden.vbs'
+# Run through wscript + run_hidden.vbs: a console app started by Task Scheduler in an
+# interactive session pops a visible window every run. WScript.Shell.Run with style 0
+# hides it (no flash), and still reports the child exit code to the task.
+$arguments = "//nologo `"$launcher`" `"$uv`" `"$root`""
 
 try {
-    $action = New-ScheduledTaskAction -Execute $uv -Argument $arguments -WorkingDirectory $root
+    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arguments -WorkingDirectory $root
     $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
         -RepetitionInterval (New-TimeSpan -Minutes $Minutes) `
         -RepetitionDuration (New-TimeSpan -Days 3650)
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) `
-        -MultipleInstances IgnoreNew
+        -MultipleInstances IgnoreNew -Hidden
     $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
         -LogonType Interactive -RunLevel Limited
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
@@ -42,7 +46,7 @@ try {
     "Installed scheduled task: $taskName (every $Minutes min)"
 } catch {
     Write-Warning "ScheduledTasks registration failed, falling back to schtasks: $($_.Exception.Message)"
-    $tr = "`"$uv`" $arguments"
+    $tr = "wscript.exe //nologo `"$launcher`" `"$uv`" `"$root`""
     & schtasks.exe /Create /F /SC MINUTE /MO $Minutes /TN $taskName /TR $tr | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "schtasks failed (exit $LASTEXITCODE)" }
     "Installed scheduled task: $taskName (every $Minutes min, schtasks)"
