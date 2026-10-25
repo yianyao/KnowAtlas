@@ -850,4 +850,73 @@ uv run python -m knowatlas kaging --lifecycle            # candidates 1540、零
 - PowerShell 控制台读 UTF-8 文件会乱码（按 ANSI 解码），看中文用 `read` 工具或 `chcp 65001`；
   往 `python -c` 里塞中文/引号容易被打断，**写 `temp/*.py` 再跑**。
 
-<!-- HANDOFF {"session":"session-f4c32d7b-dd84-4592-b172-5e72f79b068f","compactions":0,"tokens":192798,"at":"2026-10-26T07:00:00+08:00","status":"HANDOFF","goal":"P1b 人裁闭环与 P2 老化两型已交付并实跑（提交 f2ce960 / 200525e，测试 611/1）；用户已裁决 P3 走「先小样本成本测算」，P3 代码未开工；本会话水位 131% 按协议停止","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后写 temp/probe_p3_cost.py 对 Hello-Agents 与 5.智能体推理与规划 做分块抽取试跑（先导入用户级 LLM key），量出点数/耗时/费用，再出全库重抽成本测算交用户裁决","not_rerun":"P1b reason_code 回填（37 条已落码）；P2 kaging --lifecycle（39 条 ok 已落库）；全量 pytest（611/1）；EOL 表日期不要凭印象改","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 611 passed, 1 skipped；curl.exe -s http://127.0.0.1:8420/api/errata/points -> count=37"} -->
+## 交接（2026-10-26 07:12，水位 92.5% HANDOFF；P3 成本测算已完成，等裁决）
+
+### 当前目标
+
+用户 06:58 裁决「P3 先小样本试跑 + 成本测算」——**本轮已做完，未改一行业务代码**。
+下一步等用户裁决：**全库重抽 / 先 3–5 本试点 / 暂不做**。
+
+### 本轮新增（提交 `7167e3a`，只动 TODO 文档）
+
+- **发现 1（省掉重抓）**：`content_store` 里本来就有全文——Hello-Agents **674,468 字**、
+  `5.智能体推理与规划` **36,438 字**；是 `pipeline/points.py::_entry_body` 优先取
+  `inline_content`（`adapters/dbfile.py::_INLINE_CAP = 4000` 的预览）才只看到 **4,023 字**。
+  所以 P3 是「改取值优先级 + 分块」，**不是重新抓取**。
+- **发现 2（省掉造轮子）**：`tools/kpe` 已是完整的分块抽取工具（`chunks/extract/review/stats`，
+  4 并发、断点续跑、quote 校验，产物 `chunks.jsonl`/`points.jsonl`），入库走 `kpeimport`；
+  P3 不必在 `pipeline/points.py` 里另写切块。
+- **实测**（DeepSeek-V4.1-Flash、关思考、4 并发、¥2/M in + ¥8/M out）：
+
+| 样本 | 规模 | 块数 | 实测 | 外推 |
+|---|---|---|---|---|
+| Hello-Agents（PDF 720 页，目录条=0） | 760,575 字 | 140 | 前 10 块 → **58 点**/1 拒，37,612+4,036 token，12.3s，¥0.11 | ≈**812 点**，¥1.5，~3 min |
+| 5.智能体推理与规划.md | 34,528 字 | 9 | 全跑 → **50 点**/0 拒，16,825+3,347 token，7.7s，¥0.06 | 同左 |
+| **全库 30 条目** | 5,863,924 字 | ≈1,080 | 每块 ≈5.6 点 / 3,700 token in / 400 out / 1.2s | ≈**6,000 点**，**≈¥11.6**，**≈22 min** |
+
+- **真正的成本在下游**：点数 1,579 → ≈6,000（4×）；P0 分诊 ≈300 批调用；
+  P1 勘误按 hard 点**逐点**调用 ≈3,000 次（串行十几小时），这才是要裁的。
+- 产物：`temp/kpe-helloagents/`（140 块 + 10 块点）、`temp/kpe-ch5b/`（9 块 + 50 点）、
+  `temp/probe_p3_cost.py`、`temp/probe_corpus.py`、`temp/probe_samples.py`（探针，随时可删）。
+
+### 下一步（按用户裁决分支，首步都可直接执行）
+
+1. **试点（推荐）**：先导 3 本（Hello-Agents / AI-Agents-in-Depth / agentic-design-patterns），
+   观察检索·词云·关系图效果再决定其余：
+   ```powershell
+   $env:PYTHONPATH='D:\sData\git\KnowAltas\tools\kpe'
+   uv run python -m kpe chunks "<源文件>" --out temp/kpe-<名>
+   uv run python -m kpe extract temp/kpe-<名> --base-url https://api.siliconflow.cn/v1 `
+     --model deepseek-ai/DeepSeek-V4.1-Flash --api-key-env KNOWATLAS_LLM_API_KEY_SF1 `
+     --thinking off --workers 4 --price-in 2 --price-out 8
+   uv run python -m knowatlas kpeimport temp/kpe-<名> --match "<书名通配>" --replace
+   ```
+2. **全库重抽**：同上循环 30 个条目（注意 `kpeimport --match` 只导单本，别一次导全部）。
+3. **P1 不自动跟进**：新点只落库；分诊用 `kpoints --triage`（分批导入种子），errata 按需跑。
+4. 若同意「让原生管道也吃全文」→ 先写工单（改 `_entry_body` 优先级 = 改 pipeline 口径，需用户点头）。
+
+### 不要重跑
+
+- **P1b 原因码回填**（37 条已落码，candidates 0）、**P2 lifecycle**（39 ok 已落库，重跑零写入）。
+- **`kpe chunks` 两个样本**（`temp/kpe-helloagents/`、`temp/kpe-ch5b/` 已有 `chunks.jsonl`；
+  Hello-Agents 是 720 页 PDF，解析要 1–2 分钟）。
+- **全量 pytest**（611/1，刚跑过）。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                 # 611 passed, 1 skipped
+uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.06
+```
+
+### 已知失败 / 注意
+
+- 水位 **92.5%**（135,975 / baseline 147,059，compactions=1）→ 二次压缩风险高，按协议停。
+- `kpe.exe` 被应用控制策略拦，**必须** `uv run python -m kpe`（并设 `PYTHONPATH`）。
+- `kpe extract` 的 key 用 `--api-key-env KNOWATLAS_LLM_API_KEY_SF1`（硅基），不是 DeepSeek 那条。
+- Hello-Agents 的 PDF **没有可解析目录**（720 页 / 目录条=0），块名只有书名、无章节路径；
+  若要 `section_path`，需先 MinerU/Docling 预处理。
+- `Write-Output` 列 `tools/kpe` 目录会把 `.venv` 全打出来（几千行）——列目录时加 `-Exclude`。
+
+<!-- HANDOFF {"session":"session-f4c32d7b-dd84-4592-b172-5e72f79b068f","compactions":1,"tokens":135975,"at":"2026-10-26T07:12:00+08:00","status":"HANDOFF","goal":"P1b/P2 已交付（f2ce960/200525e），P3 成本测算已完成（提交 7167e3a，只动 TODO）：全库重抽 ≈¥11.6 / ≈22 分钟 / ≈6,000 点，等用户裁决是否落地","next":"新会话先跑 session_check 与 pytest -o addopts= -q（611/1）；再由用户裁决 P3 走向：试点 3 本（kpe chunks→extract→kpeimport --match）或全库 30 本；P1 勘误不要自动跟进新点","not_rerun":"P1b reason_code 回填；P2 kaging --lifecycle；kpe chunks 两个样本（temp/kpe-helloagents、temp/kpe-ch5b 已有 chunks.jsonl）；全量 pytest","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 611 passed, 1 skipped；uv run python -m kpe stats temp/kpe-ch5b -> 9 块/50 点"} -->
