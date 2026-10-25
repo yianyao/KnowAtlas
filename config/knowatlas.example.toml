@@ -74,10 +74,19 @@ max_batch      = 20                    # 每次批量送给 LLM 的条目数（�
                                        # 只认 [llm] 扁平键——写进 [[llm.backends]] 块里
                                        # 会被静默忽略；与用哪家供应商无关，放全局即可
 
-[embedding]                             # 可选级；依赖缺失自动降级
+[embedding]                             # 可选级；依赖缺失 / key 未设自动降级（检索退 FTS）
 enabled  = false
-provider = "local"
-model_path = ""
+provider = "local"                      # local（sentence-transformers，需 optional 依赖）
+                                        # | openai（OpenAI 兼容 /embeddings，按量计费）
+# ---- provider = "local" ----
+model_path = ""                         # 留空 = BAAI/bge-m3；首次 encode 才加载
+# ---- provider = "openai"（例：硅基流动 bge-m3 / Qwen3-Embedding）----
+# base_url        = "https://api.siliconflow.cn/v1"
+# model           = "BAAI/bge-m3"       # 1024 维；Qwen/Qwen3-Embedding-8B 为 4096 维
+# api_key_env     = "KNOWATLAS_LLM_API_KEY_SF1"   # 只写变量名，密钥本体不入配置
+# dim             = 1024                # 可留空：首批发回后自动填；换模型须 --embed-force 重建
+# batch_size      = 32
+# timeout_seconds = 30
 
 [fetch]                                 # 正文抓取
 default_backend   = "simple"            # simple | deepseek
