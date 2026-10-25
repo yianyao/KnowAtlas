@@ -786,3 +786,68 @@ curl.exe -s http://127.0.0.1:8420/api/errata/points      # count=37，reason_cod
 - **P2 生命周期扫描**：已落库 39 条 ok，重跑零写入；要重跑先 `json_remove('$.lifecycle')`。
 - **全量 pytest**：刚跑过（611/1）。
 - **EOL 表**：不要凭印象改日期，改前查官方支持矩阵；改 `data/eol.json` 不用动代码。
+
+## 交接（2026-10-26 07:00，水位 131% 立即停止；P1b/P2 已交付，P3 未开工）
+
+### 当前目标
+
+**P3（全文分块抽取）先做小样本成本测算**（用户 2026-10-26 06:58 裁决）：拿
+`Hello-Agents`（674k 字整本）与 `5.智能体推理与规划`（36k 字章节）两个条目试跑分块抽取，
+量出**点数 / 耗时 / 费用**，再决定是否全库重抽。**P3 代码一行未写**。
+
+### 已完成（本会话两批，均已提交）
+
+- **批 109（`f2ce960`）P1b 人裁闭环**：写接口 `POST /api/points/{id}/fact-check/dismiss`
+  （37→36→复原实测，404/403 实测）；37 条 `reason_code` 回填（**32 fact_error / 5 overclaim**，
+  2 次调用，重跑 candidates 0）；管理页「🩹 勘误裁决」同页签双区（点级带徽标/理由/依据/溯源）。
+  工单 §6 + CHANGELOG + TODO 已更新。测试 603/1。
+- **批 110（`200525e`）P2 老化两型**：`semantic/eol.py`（8 个有官方矩阵的技术 + `LIVE_MAJORS`
+  + 最低版本语境过滤）、`point_lifecycle@1.0.0`、`pipeline/lifecycle.py`、`kaging --lifecycle`；
+  canary `capabilities` → **`e293e25d725c`**。真库 1,579 hard 点 → **0 stale / 39 ok**
+  （本库无过时技术栈知识点，探针已确认），重跑零写入。测试 **611 passed / 1 skipped**。
+- 备份：`temp/knowledge.pre-p1b.db`、`temp/knowledge.pre-lifecycle.db`（各 120.6 MB）。
+- serve：PID **14220** / 8420 / token 指纹 `2ad28785`（本会话重启两次）。
+
+### 下一步（按序，首步可直接执行）
+
+1. **只读摸底**：`src/knowatlas/pipeline/points.py` 的 `_entry_body`（96 行起，
+   `_BODY_CAP = 6000` 截断）、`run_points_extract`（216 行起）、`semantic/tasks/point_extract.py`
+   的输入契约（items 形态与 `judge` 三值）。
+2. **写 `temp/probe_p3_cost.py`**（过程脚本，**不改业务代码**，符合「过程文件落 temp」纪律）：
+   - 按标题定位两个条目（`Hello-Agents` / `5.智能体推理与规划`，见 `--match` 口径）；
+   - `dl.get_content(content_hash)` 取全文 → 按标题/段落切 4–8k 块；
+   - 逐块调 `point_extract.run(items, TaskContext(run_id=..., llm=LlmClient.from_config(cfg)))`；
+   - 统计：全文长度 / 块数 / 原始点数 / 抽到点数 / 耗时 / 字符数 → 费用估算。
+   - **先导入用户级 key**（AGENTS.local.md 的 `foreach ($n in ...)` 片段），否则会静默降级成
+     「整篇 4023 字 integral 点」，测出来的数是假的。
+3. **出全库成本测算**：27 个有点条目的全文总字数 → 块数 → 调用次数 → 预估费用/时长；
+   交用户裁决是否落地 P3。落地前先写工单：分块口径、front matter 过滤、跨块按 `content_hash`
+   去重、`meta.book`/`section_path` 键、重抽是否 `--purge-points`。
+
+### 不要重跑
+
+- **P1b 原因码回填**：37 条已落码，重跑 candidates 0（要重跑先按工单 §6.3 清码）。
+- **P2 lifecycle 扫描**：39 条 ok 已落库，重跑零写入（要重跑先 `json_remove('$.lifecycle')`）。
+- **全量 pytest**：刚跑过（611/1）；除非又改业务代码。
+- **EOL 表**：不要凭印象改日期；改 `data/eol.json` 不用动代码。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                 # 611 passed, 1 skipped
+curl.exe -s http://127.0.0.1:8420/api/errata/points      # count=37，reason_code 非空
+uv run python -m knowatlas kaging --lifecycle            # candidates 1540、零写入（幂等）
+```
+
+### 已知失败 / 注意
+
+- 本会话 `effective_pct` **131.1%**（192,798 / baseline 147,059）→ 按协议（≥95% 立即停）
+  未开始 P3，别把「测完」当成已完成。
+- `serve` 是本会话重启的（PID 14220）；**改后端要再重启**，改 `index.html` 用户 `Ctrl+F5` 即可。
+- 原因码是 LLM 分类而非人工逐条确认：`overclaim` 边界（Godot HTTPRequest、Mixtral 参数）
+  可争议；点级「↩误报，保留」就是人裁出口。
+- PowerShell 控制台读 UTF-8 文件会乱码（按 ANSI 解码），看中文用 `read` 工具或 `chcp 65001`；
+  往 `python -c` 里塞中文/引号容易被打断，**写 `temp/*.py` 再跑**。
+
+<!-- HANDOFF {"session":"session-f4c32d7b-dd84-4592-b172-5e72f79b068f","compactions":0,"tokens":192798,"at":"2026-10-26T07:00:00+08:00","status":"HANDOFF","goal":"P1b 人裁闭环与 P2 老化两型已交付并实跑（提交 f2ce960 / 200525e，测试 611/1）；用户已裁决 P3 走「先小样本成本测算」，P3 代码未开工；本会话水位 131% 按协议停止","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后写 temp/probe_p3_cost.py 对 Hello-Agents 与 5.智能体推理与规划 做分块抽取试跑（先导入用户级 LLM key），量出点数/耗时/费用，再出全库重抽成本测算交用户裁决","not_rerun":"P1b reason_code 回填（37 条已落码）；P2 kaging --lifecycle（39 条 ok 已落库）；全量 pytest（611/1）；EOL 表日期不要凭印象改","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 611 passed, 1 skipped；curl.exe -s http://127.0.0.1:8420/api/errata/points -> count=37"} -->
