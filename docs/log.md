@@ -386,3 +386,59 @@ DSH 自动压缩水位本机实测约 **147,059 tokens**（模型窗口的 56%�
 3. 想要「转正即抓取/分类/抽点」的一键闭环再走方案 B：需工单 + `api.py`/新 pipeline + 进度 UI。
 - 不要重跑：`temp/kpe-aiagents-ch/*`（`stats.json` 已存在）；`kpeimport` 对已导章节（幂等跳过，除非 `--replace`）；
   `temp/bookmarks_stage.py`（LLM 判定有随机性，重跑会换一批结果）；`temp/ui_check.py` 只读、可随时复跑。
+
+## 2026-10-25 19:27 交接（上下文 CRITICAL）
+
+### 当前目标
+
+语义检索上线（已完成）+ 勘误能力评估（抽样已出结果，等用户裁决是否建流水线）。
+
+### 已完成（本轮，提交 `496ef28` / `8f2a3b8`）
+
+- **批 103 待审区 UI**：筛选 / 分组 / 全选可见 / 文件夹+域名徽标 / 转正后三条命令提示；
+  headless Edge 实测 191 行、15 组、搜 github 筛出 78；纯前端零契约变更。
+- **批 104 语义检索**：`semantic/embed.py` 新增 `RemoteEmbedder`（OpenAI 兼容）；
+  本机 `[embedding]` 切硅基流动 `BAAI/bge-m3`（1024 维）。
+  `ksync --embed` 实测：`entry_vectors=29`（其余 pending/无正文跳过）、`point_vectors=4552`、
+  语义去重 42 组 / 43 个重复；总耗时 **686s**（几乎全在 `dedup_points` 的 O(n²) 纯 Python 余弦）。
+  FTS 零命中的三个语义词（进销存 / 怎么让智能体记住之前说过的话 / 函数调用和工具调用的区别）
+  hybrid 各召回 30 条向量独有点，全部对题。
+- **勘误抽样**（`temp/errata_sample.py`，只读）：400 点 →
+  分诊 opinion 182 / unjudgeable 83 / **hard 135**；
+  对 135 条硬事实核查 → **ok 104 / suspect 27 / wrong 4**（约 1% 全样本、3% 硬事实）。
+  4 条 wrong 均有可核查依据，例：LangChain「专为 DAG 构建」、PPO clipping「防止灾难性遗忘」、
+  MCP `idempotentHint`「失败可安全重试」。
+  报告：`temp/errata_sample_report.json`（含每条 kind/verdict/reason/evidence）。
+- **watcher 弹窗**已修（`fe87fba`）：计划任务改 `wscript.exe + tools/run_hidden.vbs` 隐藏启动。
+
+### 下一步（按序）
+
+1. **重启 `serve`**：正在跑的进程是改配置前启动的，`/api/search?mode=hybrid` 仍返回 0 命中；
+   重启后前端 hybrid 才生效（config 已指向 bge-m3 + SF1 key）。
+2. 看 `temp/errata_sample_report.json` 里 4 条 wrong 与 27 条 suspect，判断精度是否可接受。
+3. 若接受 → 建工单做 `point_fact_check`（分诊 + 硬事实核查 + 双模型交叉可选 + 裁决 UI 扩展）；
+   若不接受 → 只保留「过时性核查」，人文社科改做「多视角对照」。
+4. 顺手优化：`dedup_points` 纯 Python O(n²) 686s，可改 numpy 向量化或分块（无契约变更）。
+
+### 不要重跑
+
+- `ksync --embed`（686s，向量已在库；换模型才需 `--embed-force`）
+- `kpeimport` / `temp/kpe-aiagents-ch/*`（已导入）
+- `temp/bookmarks_stage.py`（LLM 判定有随机性）
+- 全量 `pytest` 刚跑过（573 passed / 1 skipped）
+
+### 验证命令
+
+```bash
+uv run python -m pytest -q                       # 573 passed, 1 skipped
+uv run --with zstandard python tools/session_check.py
+uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_KEY_SF1
+```
+
+### 已知失败 / 注意
+
+- `serve` 未重载新配置（见下一步 1）。
+- `fact_audit` 早前 60 点样本：0 wrong / 27 suspect —— 说明「AI 智能体理论书」大量是观点，
+  全库盲跑核查会产噪声，必须分诊后再核。
+
+<!-- HANDOFF {"session":"session-3317aaf5-93e1-4d10-a7d2-a2e4b0e79adb","compactions":1,"tokens":165000,"at":"2026-10-25T19:27:00+08:00","status":"CRITICAL","goal":"语义检索已上线；勘误抽样完成待裁决","next":"重启 serve 使 hybrid 生效；看 errata_sample_report.json 判断精度；决定是否建 point_fact_check 工单"} -->
