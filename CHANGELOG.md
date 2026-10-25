@@ -4,6 +4,18 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P1b 点级勘误人裁闭环（2026-10-25 续作，2026-10-26 00:1x 交付）
+
+- **为什么**：P1 只交付到「队列 API 可读」——37 条确认级 wrong 只能 curl 看，页面上无法否决出队；37 条种子的 `reason_code` 也全空（verify 产物没记原因码），队列少了「错在哪类」的筛法。
+- **REST**（新增写接口）：`POST /api/points/{point_id}/fact-check/dismiss` —— 人裁「误报，保留」→ `fact_check.dismissed=true` + `dismissed_at`，队列 SQL 既有 `dismissed` 过滤自动出队；`verdict`/`reason`/`evidence`/`at` 原样保留（可回溯「为什么曾被判错」）；点正文与溯源零改动；`task_log` 记 `point_fact_check_dismiss`。
+- **坑（浅合并）**：`merge_meta_of_point` 是浅合并，直接写 `{"fact_check": {"dismissed": true}}` 会把整块结论抹掉——否决与回填都必须读出整块、改完再写回（单测钉死）。
+- **数据层**：`get_point_meta()`（**不过**消费面过滤，裁决要看得到任何点）、`points_wrong_without_reason_code()`（队列同域 + 空码条件，幂等口径）。
+- **能力**（`semantic/tasks/point_errata.py` 新增 `classify_codes()`）：只产原因码、不重判 verdict/reason/evidence；非法码丢弃。**不是新能力**，canary 六项指纹零漂移（`capabilities` 仍 `89594636c8b2`）。
+- **CLI**：`kerrata --points --backfill-codes [--dry-run] [--limit N]`，与 `--from-json` 互斥（退出码 2）；20/批，幂等（有码即跳过），LLM 不可用整批 skip、不写半成品。
+- **UI**：管理页「🩹 勘误裁决」同页签双区——条目级沿用 + 点级新增（点文本 / 原因码徽标 / 判定理由 / 📎依据 / 溯源条目链接 / 「↩误报，保留」）；点级只标不删，改正仍走条目级勘误附注。
+- **测试**：`tests/test_point_errata.py` 追加 5 例（classify 只产码、回填不动结论+幂等+留痕、dry-run 与无 LLM 不写、dismiss 出队且结论保留 + 404/403、CLI 开关）；全量 **603 passed, 1 skipped**；canary 零漂移。
+- **真库实跑**：`--backfill-codes` 37 candidates → 37 filled（2 次调用，**32 fact_error / 5 overclaim**），重跑 candidates 0 零写入；serve 重启后 `GET /api/errata/points` 带码；dismiss 受控往返 37→36→复原 37（只多 `dismissed`/`dismissed_at` 两键，404/403 实测）。实跑前备份 `temp/knowledge.pre-p1b.db`。
+
 ### 变更工单 · P1 点级勘误机制（2026-10-25）
 
 - **为什么**：条目级勘误会连坐——一个文档里多数点是对的，错误几乎都发生在「把机制压成一句口诀」的个别点上（实测 37 条 wrong 全在点层）。

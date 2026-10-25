@@ -56,6 +56,65 @@ def _write_verdict(dl: Any, point_id: str, v: dict[str, Any], model: str,
                  "stage": stage})
 
 
+def backfill_reason_codes(cfg: Any, dl: Any, *, limit: int = 0, dry_run: bool = False,
+                          batch: int = CHECK_BATCH, llm: Any = None) -> dict[str, Any]:
+    """给已判 wrong 但原因码为空的点补 `fact_check.reason_code`（P1b）。
+
+    只补码不重判：verdict/reason/evidence/at 原样保留（读-改-写整块 fact_check，
+    浅合并下直接写 {"fact_check": {"reason_code": ...}} 会把结论抹掉）。
+    幂等：有码即跳过；LLM 不可用 → 整批 skip，不写半成品。
+    """
+    run_id = uuid.uuid4().hex[:16]
+    dl.start_run(run_id, "kerrata")
+    now = _now_iso()
+    stats: dict[str, Any] = {
+        "run_id": run_id, "dry_run": dry_run, "candidates": 0, "filled": 0,
+        "llm_calls": 0, "llm_skipped": None, "errors": [],
+    }
+    try:
+        cands = dl.points_wrong_without_reason_code(limit=0)
+        if limit and limit > 0:
+            cands = cands[:limit]
+        stats["candidates"] = len(cands)
+        if not cands:
+            return stats
+        if llm is None and cfg is not None:
+            llm = LlmClient.from_config(cfg)
+        if llm is None:
+            stats["llm_skipped"] = ("llm 未启用（[llm] enabled=false 或 key 未设）——"
+                                    "原因码未回填，可稍后重跑")
+            return stats
+        model = getattr(llm, "model_name", "") or "llm"
+        for i in range(0, len(cands), max(1, batch)):
+            b = cands[i:i + max(1, batch)]
+            items = [{"point_id": c["id"], "text": c["text"],
+                      "reason": (c["meta"].get("fact_check") or {}).get("reason", "")}
+                     for c in b]
+            res = point_errata.classify_codes(items, TaskContext(run_id=run_id, llm=llm))
+            stats["llm_calls"] += 1
+            if res.get("error"):
+                stats["errors"].append(res["error"])
+                continue
+            ids = {x["id"] for x in b}
+            for pid, code in res.get("codes", {}).items():
+                if pid not in ids:
+                    continue
+                if dry_run:
+                    stats["filled"] += 1
+                    continue
+                cur = dl.get_point_meta(pid)
+                fact = dict((cur or {}).get("meta", {}).get("fact_check") or {})
+                fact["reason_code"] = code
+                dl.merge_meta_of_point(pid, {"fact_check": fact})
+                dl.log_task(now, "kerrata", "point_reason_code_backfill", pid,
+                            {"reason_code": code, "model": model})
+                stats["filled"] += 1
+    finally:
+        dl.finish_run(run_id, {k: v for k, v in stats.items() if k != "errors"}
+                      | {"errors": len(stats["errors"])})
+    return stats
+
+
 def run_point_errata(cfg: Any, dl: Any, *, limit: int = 0, dry_run: bool = False,
                      seed_path: str | Path | None = None, batch: int = CHECK_BATCH,
                      llm: Any = None) -> dict[str, Any]:

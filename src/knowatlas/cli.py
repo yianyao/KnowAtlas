@@ -148,6 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
     kerrata.add_argument("--from-json", metavar="PATH", default=None,
                          help="--points 时回放既有核查产物（{point_id:{verdict,reason,evidence}}，"
                               "零 LLM 费）；推荐的默认种子：temp/errata_full_verify.json")
+    kerrata.add_argument("--backfill-codes", action="store_true",
+                         help="--points 时只回填原因码（P1b）：给已判 wrong 但 reason_code "
+                              "为空的点补 fact_error/overclaim，不重判 verdict/reason/evidence；"
+                              "幂等，与 --from-json 互斥")
 
     kpeimport = sub.add_parser(
         "kpeimport", help="导入 KPE 长文抽取产物（manifest.json + points.jsonl）到点层"
@@ -613,6 +617,30 @@ def _cmd_kerrata(args: argparse.Namespace) -> int:
         if args.scan:
             print("ERROR --points 不能与 --scan 同用（条目级 L1 扫描请单独跑）")
             return _EXIT_USAGE
+        if args.backfill_codes:
+            if args.from_json:
+                print("ERROR --backfill-codes 不能与 --from-json 同用"
+                      "（回填只补原因码，不回放结论）")
+                return _EXIT_USAGE
+            from .pipeline.errata_points import backfill_reason_codes
+
+            dl = _open(cfg)
+            try:
+                stats = backfill_reason_codes(
+                    cfg, dl, limit=max(0, args.limit or 0), dry_run=args.dry_run)
+            finally:
+                dl.close()
+            if stats.get("llm_skipped") and not stats["filled"]:
+                print(f"SKIP {stats['llm_skipped']}")
+                return _EXIT_SKIP
+            head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 原因码回填完成"
+            print(f"{head}：{_json.dumps({k: v for k, v in stats.items() if k != 'errors'}, ensure_ascii=False)}")
+            for err in stats.get("errors", [])[:5]:
+                print(f"  ERROR {err}")
+            if not args.dry_run and stats.get("filled"):
+                print("（只补 fact_check.reason_code，verdict/reason/evidence 未动；"
+                      "重跑幂等：有码即跳过）")
+            return _EXIT_OK
         from .pipeline.errata_points import run_point_errata
 
         point_limit = 0 if args.limit is None else max(0, args.limit)

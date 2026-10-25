@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from knowatlas.cli import build_parser
 from knowatlas.models import Entry
-from knowatlas.pipeline.errata_points import run_point_errata
+from knowatlas.pipeline.errata_points import backfill_reason_codes, run_point_errata
 from knowatlas.pipeline.points import point_hash
 from knowatlas.semantic.base import TaskContext
 from knowatlas.semantic.llm import LlmError
@@ -218,3 +218,95 @@ def test_cli_kerrata_points_flags():
     assert ns.limit is None
     ns2 = build_parser().parse_args(["kerrata"])
     assert ns2.points is False and ns2.scan is False
+
+
+# ---- P1b：原因码回填 + 人裁出队写接口 ----
+
+def _auth():
+    return {"X-KnowAtlas-Token": "test-token-123", "Origin": "http://127.0.0.1:8420"}
+
+
+def test_task_classify_codes_only_codes():
+    """只补原因码：非法码丢弃；无 LLM 返回空（不重判 verdict/reason）。"""
+    items = [{"point_id": "p1", "text": "x", "reason": "公式写错"},
+             {"point_id": "p2", "text": "y", "reason": "说只能这样"},
+             {"point_id": "p3", "text": "z", "reason": "莫名其妙"}]
+    payload = json.dumps([{"i": 1, "reason_code": "fact_error"},
+                          {"i": 2, "reason_code": "overclaim"},
+                          {"i": 3, "reason_code": "maybe"}], ensure_ascii=False)
+    res = point_errata.classify_codes(items, TaskContext(run_id="t",
+                                                         llm=FakeLlm([payload])))
+    assert res["llm_used"] is True
+    assert res["codes"] == {"p1": "fact_error", "p2": "overclaim"}
+    assert point_errata.classify_codes(items,
+                                       TaskContext(run_id="t", llm=None))["codes"] == {}
+
+
+def _wrong_point(dl, key: str, **fact) -> str:
+    pid = _point(dl, key)
+    block = {"verdict": "wrong", "reason": "机制说错", "evidence": "官方文档",
+             "reason_code": "", "at": "2026-10-25T23:00:00+08:00",
+             "model": "seed:v.json", "stage": "seed"}
+    block.update(fact)
+    dl.merge_meta_of_point(pid, {"fact_check": block})
+    return pid
+
+
+def test_backfill_fills_code_without_touching_verdict(dl):
+    """回填只写 reason_code：verdict/reason/evidence/at/model/stage 一字不动；
+    重跑零候选（幂等）；task_log 留痕。"""
+    p1 = _wrong_point(dl, "a")
+    p2 = _wrong_point(dl, "b")
+    payload = json.dumps([{"i": 1, "reason_code": "fact_error"},
+                          {"i": 2, "reason_code": "overclaim"}], ensure_ascii=False)
+    stats = backfill_reason_codes(None, dl, llm=FakeLlm([payload]))
+    assert stats["candidates"] == 2 and stats["filled"] == 2
+    metas = {p["id"]: p["meta"]["fact_check"] for p in dl.list_points(50)}
+    # 候选按 id 升序分批（SQL ORDER BY id），批次内 i=1 → 字典序小的点
+    first, second = sorted([p1, p2])
+    assert metas[first]["reason_code"] == "fact_error"
+    assert metas[second]["reason_code"] == "overclaim"
+    assert metas[p1]["verdict"] == "wrong" and metas[p1]["evidence"] == "官方文档"
+    assert metas[p1]["at"] == "2026-10-25T23:00:00+08:00"
+    assert metas[p1]["model"] == "seed:v.json" and metas[p1]["stage"] == "seed"
+    again = backfill_reason_codes(None, dl, llm=FakeLlm([]))
+    assert again["candidates"] == 0 and again["filled"] == 0
+    with dl.transaction() as conn:
+        actions = [r["action"] for r in conn.execute(
+            "SELECT action FROM task_log WHERE target=?", (p1,)).fetchall()]
+    assert "point_reason_code_backfill" in actions
+
+
+def test_backfill_dry_run_and_no_llm_leave_meta_empty(dl):
+    p1 = _wrong_point(dl, "a")
+    payload = json.dumps([{"i": 1, "reason_code": "overclaim"}], ensure_ascii=False)
+    dry = backfill_reason_codes(None, dl, dry_run=True, llm=FakeLlm([payload]))
+    assert dry["candidates"] == 1 and dry["filled"] == 1
+    assert dl.get_point_meta(p1)["meta"]["fact_check"]["reason_code"] == ""
+    skip = backfill_reason_codes(None, dl, llm=None)
+    assert skip["llm_skipped"] and skip["filled"] == 0
+    assert dl.get_point_meta(p1)["meta"]["fact_check"]["reason_code"] == ""
+
+
+def test_dismiss_endpoint_takes_point_out_of_queue_and_keeps_conclusion(client, dl):
+    """人裁误报：出队（队列 count 1→0），结论/依据/原因码保留；404 与写守卫。"""
+    p1 = _wrong_point(dl, "a", text="确认级错误点", reason_code="fact_error")
+    assert client.get("/api/errata/points").json()["count"] == 1
+    r = client.post(f"/api/points/{p1}/fact-check/dismiss", json={}, headers=_auth())
+    assert r.status_code == 200 and r.json()["dismissed"] is True
+    assert client.get("/api/errata/points").json()["count"] == 0
+    fact = dl.get_point_meta(p1)["meta"]["fact_check"]
+    assert fact["dismissed"] is True and fact.get("dismissed_at")
+    assert fact["verdict"] == "wrong" and fact["reason"] == "机制说错"
+    assert fact["evidence"] == "官方文档" and fact["reason_code"] == "fact_error"
+    assert client.post("/api/points/nope/fact-check/dismiss", json={},
+                       headers=_auth()).status_code == 404
+    assert client.post(f"/api/points/{p1}/fact-check/dismiss",
+                       json={}).status_code == 403
+
+
+def test_cli_kerrata_backfill_codes_flag():
+    ns = build_parser().parse_args(["kerrata", "--points", "--backfill-codes"])
+    assert ns.points is True and ns.backfill_codes is True
+    ns2 = build_parser().parse_args(["kerrata", "--points"])
+    assert ns2.backfill_codes is False

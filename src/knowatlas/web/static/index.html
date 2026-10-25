@@ -1894,11 +1894,15 @@ async function mgmtFresh() {
 // 废弃走同款 reject（30 天冷却）；误报否决置 ok 后规则与 LLM 不再标记。
 async function mgmtErrata() {
   refreshCurrent = () => mgmtShow("errata");
-  _mgmtDesc().textContent = "确认错误才进本队列（L1 确定性扫描：完整代码块语法/已移除 API；L2 带依据核查须附官方依据）。改正=勘误附注（原文永不改写，附注并显）；误报否决后不再标记；舍弃走 30 天冷却。CLI：kerrata --scan（零费用）/ kerrata（L2 试跑 ≤10）。";
+  _mgmtDesc().textContent = "确认错误才进本队列（条目级：L1 确定性扫描/已移除 API + L2 带依据核查；点级：hard 点事实核查，wrong 且须附依据）。改正=勘误附注（原文永不改写，附注并显）；误报否决后不再标记；舍弃走 30 天冷却。CLI：kerrata --scan（零费用）/ kerrata（L2 试跑 ≤10）/ kerrata --points（点级）。";
   const kindLabel = { syntax: "语法错误", api: "已移除 API", llm_fact: "事实核查" };
-  const data = await (await fetch("/api/errata")).json();
+  const [data, pts] = await Promise.all([
+    fetch("/api/errata").then(r => r.json()),
+    fetch("/api/errata/points").then(r => r.json()),
+  ]);
+  const list = pts.points || [];
   const body = _mgmtBody();
-  body.innerHTML = data.entries.length
+  const entryHtml = data.entries.length
     ? data.entries.map(x => {
         const notes = (x.errata || []).map(n =>
           `<div style="margin:4px 0 0 16px;padding:4px 8px;border-left:3px solid var(--warning);font-size:12px">`
@@ -1912,7 +1916,33 @@ async function mgmtErrata() {
           + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
           + notes + `</div>`;
       }).join("")
-    : "<small>没有确认级勘误候选。跑 kerrata --scan（L1 确定性扫描，零费用）或 kerrata（L2 带依据核查试跑）。</small>";
+    : "<small>条目级：没有确认级勘误候选。跑 kerrata --scan（L1 确定性扫描，零费用）或 kerrata（L2 带依据核查试跑）。</small>";
+  // 点级（P1b）：只出 kind=hard 且 verdict=wrong 的确认级错误；改正走条目级勘误附注，
+  // 这里只能「误报，保留」出队（结论/依据/溯源保留，可回溯为什么曾被判错）。
+  const codeLabel = { fact_error: "事实说错", overclaim: "绝对化表述" };
+  const pointHtml = list.length
+    ? list.map(p => {
+        const srcs = (p.sources || []).map(s => s.locator
+          ? `<a href="${s.locator}" target="_blank" rel="noopener">${_escHtml(s.title || s.entry_id)}</a>`
+          : _escHtml(s.title || s.entry_id)).join(" · ");
+        return `<div class="pt-item" data-pid="${p.id}">`
+          + (p.reason_code ? `<span class="badge">${codeLabel[p.reason_code] || p.reason_code}</span>` : "")
+          + (p.stage === "seed" ? `<span class="badge" title="种子回放（零 LLM 费）">种子</span>` : "")
+          + `<div class="pt-text">${_escHtml(p.text || "")}</div>`
+          + (p.reason ? `<div style="font-size:12px;color:var(--text-2)">❓ ${_escHtml(p.reason)}</div>` : "")
+          + (p.evidence ? `<div style="font-size:12px;color:var(--text-3)">📎 ${_escHtml(p.evidence)}</div>` : "")
+          + (srcs ? `<div style="font-size:12px;color:var(--text-3)">↩ 溯源：${srcs}</div>` : "")
+          + `<button class="pt-dismiss-btn" data-pid="${p.id}">↩误报，保留</button>`
+          + `</div>`;
+      }).join("")
+    : "<small>点级：没有确认级错误点。hard 点跑 kerrata --points（结论落 point.meta.fact_check）；suspect 不进队列。</small>";
+  body.innerHTML =
+    `<div style="margin:10px 0 4px;font-weight:600">条目级（${data.entries.length}）</div>`
+    + entryHtml
+    + `<div style="margin:18px 0 4px;font-weight:600">点级（${list.length}）`
+    + `<span style="font-weight:400;color:var(--text-3);font-size:12px">`
+    + `· 只吃 kind=hard；只标不删，改正走条目级勘误附注</span></div>`
+    + pointHtml;
   bindEntryButtons();
   document.querySelectorAll(".errata-btn").forEach(b => b.onclick = async () => {
     // 改正 = 勘误附注层：原文永不改写（方案 §7.6 定稿——溯源链保住）
@@ -1925,6 +1955,12 @@ async function mgmtErrata() {
   document.querySelectorAll(".errata-keep-btn").forEach(b => b.onclick = async () => {
     // 误报否决：errata_flag=ok，L1/L2 不再标记
     await writeJSON(`/api/entries/${b.dataset.id}/errata/dismiss`, {});
+    refreshCurrent();
+  });
+  document.querySelectorAll(".pt-dismiss-btn").forEach(b => b.onclick = async () => {
+    // 点级误报否决（P1b）：fact_check.dismissed=true，队列 SQL 自动出队；结论/溯源保留
+    if (!(await ka.confirm("确认这是误报？本点将从队列移除（判定结论与溯源保留，可回溯）"))) return;
+    await writeJSON(`/api/points/${b.dataset.pid}/fact-check/dismiss`, {});
     refreshCurrent();
   });
 }

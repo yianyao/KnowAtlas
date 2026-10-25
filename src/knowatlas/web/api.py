@@ -763,6 +763,33 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         dl.log_task(_now_iso(), "web", "errata_dismiss", entry_id, {})
         return {"entry_id": entry_id, "errata_flag": "ok"}
 
+    @app.post("/api/points/{point_id}/fact-check/dismiss")
+    async def dismiss_point_fact_check(point_id: str, request: Request):
+        """人裁否决（误报）：点级勘误出队（P1b）。
+
+        与条目级 `/api/entries/{id}/errata/dismiss` 同口径：**只让人裁结论出队**，
+        点本身、正文、溯源零改动。`verdict`/`reason`/`evidence`/`at` 原样保留，
+        便于追溯「为什么曾被判错」；队列 SQL（`points_wrong_queue` 的 dismissed
+        过滤）自动出队，不改查询。裁决动作 task_log 留痕。
+        """
+        guard = check_write_access(request, cfg)
+        if guard is not None:
+            return guard
+        point = dl.get_point_meta(point_id)
+        if point is None:
+            return JSONResponse({"error": {"code": "NOT_FOUND", "message": "点不存在"}},
+                                status_code=404)
+        # 坑：merge_meta_of_point 是**浅**合并，直接写 {"fact_check": {"dismissed": true}}
+        # 会把 verdict/reason/evidence 整块抹掉——必须读出整块改完再写回。
+        fact = dict(point["meta"].get("fact_check") or {})
+        fact["dismissed"] = True
+        fact["dismissed_at"] = _now_iso()
+        dl.merge_meta_of_point(point_id, {"fact_check": fact})
+        dl.log_task(_now_iso(), "web", "point_fact_check_dismiss", point_id,
+                    {"verdict": fact.get("verdict", "")})
+        return {"point_id": point_id, "dismissed": True,
+                "verdict": fact.get("verdict", "")}
+
     _CLOUD_PALETTE = ("#d1495b", "#e07a3c", "#c9a227", "#5f9e4e", "#2e9e83",
                       "#2b8fb3", "#3f6fb5", "#63599e", "#8d5aa8", "#b5497e",
                       "#a4485f", "#5f6b7a")

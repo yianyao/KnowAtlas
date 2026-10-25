@@ -92,3 +92,46 @@ def run(items: list[dict[str, Any]], ctx: TaskContext) -> dict[str, Any]:
     if not verdicts:
         return {"verdicts": {}, "llm_used": True}
     return {"verdicts": verdicts, "llm_used": True}
+
+
+_CLASSIFY_PROMPT = (
+    "你是技术事实核查员。下列每条知识都**已被判定为错误**，并给出了判错理由；"
+    "你只需归类错误类型，不要重新判断对错、也不要改写理由。\n"
+    "reason_code：fact_error=事实/机制/规格说错；"
+    "overclaim=绝对化表述（必须/只能/始终/有且仅有）且原文未给限定条件。\n"
+    "只输出 JSON 数组：[{\"i\":编号,\"reason_code\":\"fact_error|overclaim\"}]。"
+)
+
+
+def classify_codes(items: list[dict[str, Any]], ctx: TaskContext) -> dict[str, Any]:
+    """只补原因码（P1b 回填）：输入点 + 已有判错理由，输出 {point_id: code}。
+
+    为什么单独一条路径：种子产物只记了 verdict/reason/evidence，没记原因码；
+    重跑 `run()` 会把结论重新判一遍（既费钱、又可能把种子结论洗掉）。这里只取
+    `reason_code` 一列，verdict/reason/evidence 一律不动。
+    非法或缺失码丢弃（调用方留空），宁缺勿滥。
+    """
+    if ctx.llm is None or not items:
+        return {"codes": {}, "llm_used": False}
+    lines = []
+    for i, it in enumerate(items):
+        text = str(it.get("text") or "").strip()[:300]
+        reason = str(it.get("reason") or "").strip()[:200]
+        lines.append(f"{i + 1}. 点：{text}\n   判错理由：{reason}")
+    try:
+        arr = extract_json_array(ctx.llm.chat(_CLASSIFY_PROMPT, "\n".join(lines)))
+    except LlmError as exc:
+        return {"codes": {}, "llm_used": False, "error": str(exc)}
+    codes: dict[str, str] = {}
+    for x in arr:
+        idx = x.get("i")
+        code = str(x.get("reason_code", "")).strip().lower()
+        if not str(idx).lstrip("-").isdigit() or code not in REASON_CODES:
+            continue
+        i = int(idx)
+        if not 1 <= i <= len(items):
+            continue
+        pid = str(items[i - 1].get("point_id", ""))
+        if pid:
+            codes[pid] = code
+    return {"codes": codes, "llm_used": True}

@@ -685,3 +685,65 @@ uv run python -m knowatlas kpoints --triage               # 应 candidates 0（�
 - 本会话 `effective_pct` 87.8%（baseline 147,059）；请开新会话继续说「继续」。
 
 <!-- HANDOFF {"session":"session-3bfb4ef8-1581-474d-8ede-e9f8c048b7cc","compactions":0,"tokens":129100,"at":"2026-10-25T23:30:00+08:00","status":"HANDOFF","goal":"P0 点分诊与 P1 点级勘误已交付并实跑（4,552 点分诊 / 1,579 hard 勘误、队列 37）；下一步 P1b（UI 页签+写接口+原因码回填）→ P2 老化机制","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后 P1b：index.html 勘误页签接 /api/errata/points + 新增 dismiss 写接口 + 回填 37 条 reason_code；之后 P2 老化两型（kaging --lifecycle，只吃 kind=hard）"} -->
+
+## 2026-10-26 00:20 P1b 人裁闭环交付（续会话 session-f4c32d7b）
+
+### 开场判据
+
+- `session_check` = `NEW_SESSION`（exit 0），上一交接 23:30 `status=HANDOFF`；
+- `context_probe`：`effective_pct` **10.0%**（14,768 / 147,059，compactions=0）；
+- 基线 `pytest -o addopts="" -q` → **598 passed / 1 skipped**（与交接一致，未重跑旧核查）。
+
+### 做了什么（契约先行：先追加工单 §6，再动代码）
+
+- **工单** `docs/design/变更工单-2026-10-25-P1点级勘误.md` 追加 §6「P1b」：写接口签名、
+  `fact_check` 两个新键（`dismissed`/`dismissed_at`）、CLI 开关、datalayer 两方法、回滚 SQL。
+- **写接口** `POST /api/points/{point_id}/fact-check/dismiss`：人裁误报 → 出队；
+  结论/依据/原因码原样保留（可回溯「为什么曾被判错」）；`task_log` 记 `point_fact_check_dismiss`。
+  坑：`merge_meta_of_point` 是**浅**合并，必须读-改-写整块 `fact_check`，否则抹掉结论。
+- **原因码回填**：`point_errata.classify_codes()`（只产码）+ `pipeline/errata_points.py::backfill_reason_codes()`
+  + `kerrata --points --backfill-codes`（与 `--from-json` 互斥）；datalayer 新增
+  `get_point_meta()` / `points_wrong_without_reason_code()`。
+- **UI**：`index.html::mgmtErrata()` 同页签双区（条目级沿用 + 点级新增），点卡带原因码徽标、
+  理由、📎依据、溯源条目链接与「↩误报，保留」按钮。
+- **测试**：`tests/test_point_errata.py` +5 例 → 全量 **603 passed / 1 skipped**；
+  **canary 六项指纹零漂移**（未更新常量，`capabilities` 仍 `89594636c8b2`）。
+
+### 实跑（现场数字）
+
+- 备份 `temp/knowledge.pre-p1b.db`（120.6 MB）；
+- `--backfill-codes --dry-run` → candidates 37 / filled 37（2 次调用）；实跑同上 →
+  **32 fact_error / 5 overclaim**；重跑 candidates **0**、零 LLM 调用（幂等）；
+- `serve` 已重启（PID 3404，端口 8420，`KNOWATLAS_WEB_TOKEN` 指纹 `2ad28785`）；
+  `GET /api/errata/points` → `count=37`，每条带 `reason_code`；
+- dismiss 受控往返：37 → 36 → 复原 37（只多 `dismissed`/`dismissed_at` 两键）；404 / 无令牌 403 实测；
+- 前端：`node --check` 校验内联脚本通过；用户需 **Ctrl+F5** 才看到新版页面。
+
+### 下一步（按序，首步可直接执行）
+
+1. **P2 老化机制**：版本型（抽版本号 + EOL 表，确定性）+ 退场型（LLM 附官方依据），
+   `kaging --lifecycle` 主动扫描，只吃 `kind=hard`，只标不删。
+2. 之后 P3（全文分块抽取，大件，需用户裁决重抽成本）→ P4（点级图）→ P5（扩散加固）。
+
+### 不要重跑
+
+- **P1b 原因码回填**：37 条已落码，重跑 candidates 0（要重跑先按工单 §6.3 清码）。
+- **全量 pytest**：刚跑过（603/1）；除非又改业务代码。
+- **dismiss 受控往返**：已复原，队列仍是 37，不要再拿真库点做往返验证。
+- **P0 分诊 / P1 勘误回放 / 勘误全量核查**：见上一交接块，结论都在库里与 `temp/errata_full_*.json`。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                 # 603 passed, 1 skipped
+uv run python -m knowatlas kerrata --points --backfill-codes   # 应 candidates 0
+curl.exe -s http://127.0.0.1:8420/api/errata/points      # count=37，reason_code 非空
+```
+
+### 已知失败 / 注意
+
+- `serve` 是本会话重启的进程（PID 3404）；**改后端代码要再重启**，改 `index.html` 用户 `Ctrl+F5` 即可。
+- PowerShell 控制台直接读 UTF-8 文件仍会乱码（按 ANSI 解码），看中文用 `read` 工具或 `chcp 65001`。
+- 原因码是 LLM 分类（非人工逐条确认）：`overclaim` 边界（如 Godot HTTPRequest、Mixtral 参数激活）
+  存在可争议项，人裁时可随时在队列里否决出队。

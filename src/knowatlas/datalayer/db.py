@@ -2234,6 +2234,49 @@ class DataLayer:
             out.append(d)
         return out
 
+    def get_point_meta(self, point_id: str) -> dict[str, Any] | None:
+        """按 id 取单点（id/text/meta；meta 已解析），**不过**消费面过滤。
+
+        勘误裁决与原因码回填要看得到任何点（含老化 stale / 去重副点），所以不能复用
+        `get_point_hit`（它按消费面口径过滤）；不存在返回 None。
+        """
+        r = self._conn.execute(
+            "SELECT id, text, meta FROM points WHERE id=?", (point_id,)).fetchone()
+        if r is None:
+            return None
+        d = dict(r)
+        try:
+            d["meta"] = json.loads(d["meta"] or "{}")
+        except ValueError:
+            d["meta"] = {}
+        return d
+
+    def points_wrong_without_reason_code(self, limit: int = 0) -> list[dict[str, Any]]:
+        """P1b 原因码回填候选：hard + verdict=wrong + reason_code 空 + 人裁未否决。
+
+        与 `points_wrong_queue` 同一域（队列里人看得到的才补码），只多一个空码条件；
+        幂等口径同源——已补过码的点自动不再入选。
+        """
+        sql = ("SELECT id, content_hash, text, meta FROM points"
+               " WHERE COALESCE(json_extract(meta,'$.kind'),'') = 'hard'"
+               "   AND COALESCE(json_extract(meta,'$.fact_check.verdict'),'') = 'wrong'"
+               "   AND COALESCE(json_extract(meta,'$.fact_check.reason_code'),'') = ''"
+               "   AND COALESCE(json_extract(meta,'$.fact_check.dismissed'), 0) = 0"
+               " ORDER BY id")
+        params: list[Any] = []
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        out = []
+        for r in self._conn.execute(sql, params).fetchall():
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
     def set_point_aging(self, point_id: str, flag: str, reason: str) -> None:
         """点级老化结论落列（批次 93，裁决 #14）：stale 退出消费面 / ok 免疫复扫 /
         keep 只记游标留观（flag 传 '' 表示维持未判）。永不物理删除点。"""
