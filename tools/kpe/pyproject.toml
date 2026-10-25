@@ -1,0 +1,16 @@
+[project]
+name = "kpe"
+version = "0.1.0"
+description = "Extract self-contained knowledge points from long books"
+requires-python = ">=3.10"
+dependencies = ["pdfplumber>=0.11"]
+
+[project.scripts]
+kpe = "kpe.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["kpe"]
