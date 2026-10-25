@@ -459,3 +459,31 @@ uv run python temp/probe_hybrid.py               # 需导入 KNOWATLAS_LLM_API_K
 - 现场数字：待审从 191 降到 **183**（用户已自行转正 8 条）。
 
 <!-- HANDOFF {"session":"session-3317aaf5-93e1-4d10-a7d2-a2e4b0e79adb","compactions":1,"tokens":182361,"at":"2026-10-25T19:41:00+08:00","status":"CRITICAL","goal":"多选浮动条已修复；语义检索待重启 serve 生效；勘误抽样待裁决","next":"重启 serve；重启后确认 /api/search?mode=hybrid 有命中；看 errata_sample_report.json 定 point_fact_check 工单"} -->
+
+## 2026-10-25 19:52 批 106：页面新鲜度防呆（旧 DOM 导致「修了看不到」）
+
+- **现象（用户复报）**：批 105 修好的浮动条，用户仍看不到。排查结论：**代码没问题，是客户端端着旧页面**——
+  线上 `GET /` 返回的 HTML 已含 `body.multiselect #bulk-bar`/`setMultiSelect`；headless Edge 复现全绿；
+  用户的 Edge 进程是 10-24 20:46 起的，标签页从未重载，`#bulk-bar` 还是旧 DOM 里的内联 `display:none`。
+- **修法（防复发，不改接口/表结构）**：
+  1. `web/app.py` 新增 `_NoStoreHTML(StaticFiles)`：`text/html` 响应加 `Cache-Control: no-store`，
+     js/css 仍走 ETag（不牺牲 echarts 之类大文件的缓存）。测试 `tests/test_web_api.py::test_html_entries_are_no_store`。
+  2. `static/index.html` 页脚加 `#st-build` 构建戳；`checkPageFresh()` 用 `HEAD /` 的 `Last-Modified`
+     与 `document.lastModified` 比对，对不上就标红 + toast「请 Ctrl+F5」——旧页面一眼可见。
+  3. `#bulk-bar.has-sel { display:flex }` + `updateBulkBar()` 同步：**只要 selection 非空就显示浮动条**，
+     不再只依赖多选模式（旁路/未来新入口也能兜住）。
+  4. 「反选」也先 `setMultiSelect(true)`（原先只有「全选可见/全选本组」进多选）。
+- **验证**：headless Edge（`temp/ui_fresh_check.py`）——页面戳 `10-25 19:36`、未标 stale；全选 → `flex`/`已选 183`/
+  入口勾上；反选 → 183 条勾上、条可见；取消 → `none`/`已选 0`；无 JS 异常（仅 favicon 404，历史既有，无 favicon.ico）。
+  `uv run python -m pytest -q` → 583 passed / 1 skipped。
+- **提示**：以后改完 HTML，让用户 `Ctrl+F5`；页脚若标红「⚠ 已过期」就是没刷新。
+
+## 2026-10-25 19:55 serve 重启（hybrid 生效）
+
+- 旧 serve 是 10-24 21:37 起的，跑的是批 104 之前的代码：`/api/search?mode=hybrid` 返回
+  `effective_mode=fts` + 「本次已降级 fts」。
+- 重启后（隐藏窗口，日志 `temp/serve.out.log` / `temp/serve.err.log`）：`mode=hybrid`、`vectors=29`。
+  顺带 `serve` 现在按批 106 给 HTML 发 `no-store`，用户 `Ctrl+F5` 一次即可拿到浮动条。
+- 重启姿势（复现用）：`Start-Process <uv.exe> -ArgumentList run,python,-m,knowatlas,serve,--port,8420
+  -WorkingDirectory <repo> -WindowStyle Hidden -RedirectStandardOutput temp\serve.out.log`，
+  继承 `KNOWATLAS_LLM_API_KEY*` / `KNOWATLAS_WEB_TOKEN`（用户级变量要先 `Set-Item env:` 导入）。

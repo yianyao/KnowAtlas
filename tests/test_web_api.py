@@ -801,3 +801,24 @@ def test_serve_port_override_updates_host_whitelist(cfg, dl, registries):
     assert ok.get("/api/stats").status_code == 200
     old = TestClient(app, headers={"Host": "127.0.0.1:8420"})
     assert old.get("/api/stats").status_code == 403
+
+
+def test_html_entries_are_no_store(client):
+    """批次 106：HTML 入口必须 no-store，静态资源仍走 ETag。
+
+    背景：改了 index.html，浏览器端着旧 DOM 不重载，用户报「修复看不到」；
+    只给 HTML 关缓存，js/css 照旧缓存，避免每次刷新重下 echarts 之类大文件。
+    """
+    r = client.get("/", headers=_auth())
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert r.headers.get("cache-control") == "no-store"
+
+    for html in ("/graph.html", "/thread.html"):
+        h = client.get(html, headers=_auth())
+        assert h.status_code == 200
+        assert h.headers.get("cache-control") == "no-store", html
+
+    js = client.get("/ui.js", headers=_auth())
+    assert js.status_code == 200
+    assert not js.headers.get("cache-control"), "静态资源不该被关缓存"

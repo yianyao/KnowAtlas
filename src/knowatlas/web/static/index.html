@@ -150,7 +150,10 @@
               background: Canvas; border: 1px solid #8888; border-radius: 8px;
               padding: 8px 14px; display: none; gap: 10px; align-items: center;
               box-shadow: 0 2px 10px #0003; z-index: 50; font-size: 13px; }
-  body.multiselect #bulk-bar { display: flex; }
+  body.multiselect #bulk-bar, #bulk-bar.has-sel { display: flex; }
+  /* 批次 106：页面新鲜度——与服务器 Last-Modified 对不上就标红，防「改了看不到」 */
+  #st-build { font-size: 11px; color: var(--text-3); }
+  #st-build.stale { color: #e5534b; font-weight: 600; }
   #bulk-bar button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
                      background: transparent; color: inherit; padding: 2px 10px; }
   #bulk-bar button.primary { border-color: #4a9eff88; color: #4a9eff; }
@@ -332,6 +335,7 @@
 <footer class="shell-status">
   <span class="st-dot" id="st-dot"></span>
   <span id="st-text">本地服务连接中…</span>
+  <span id="st-build" title="页面文件的构建时间；标红说明浏览器里还是旧页面，Ctrl+F5 刷新"></span>
   <span class="st-sp"></span>
   <span>知道 KnowAtlas · 桌面壳</span>
 </footer>
@@ -879,6 +883,9 @@ const selection = new Set();
 const currentSelection = () => [...selection];
 function updateBulkBar() {
   document.getElementById("ms-count").textContent = `已选 ${selection.size}`;
+  // 批次 106：只要有选中就显示浮动条（不依赖是否已进多选模式），
+  // 免得「反选」「按组勾」这类旁路把条子漏出来。
+  document.getElementById("bulk-bar").classList.toggle("has-sel", selection.size > 0);
 }
 function clearSelection() {
   selection.clear();
@@ -1753,6 +1760,7 @@ async function mgmtPending() {
     _ptSelectVisible(ids);
   };
   document.getElementById("pt-inv").onclick = () => {
+    setMultiSelect(true);   // 批次 106：反选同样要亮浮动条
     [...body.querySelectorAll(".entry[data-id]")]
       .filter(d => d.style.display !== "none").forEach(d => {
         const cb = d.querySelector(".sel-cb");
@@ -2094,6 +2102,36 @@ async function refreshStatus() {
   }
 }
 refreshStatus();
+
+// ---- 批次 106：页面新鲜度自检 ----
+// 症状：后端改了 index.html，浏览器（或桌面壳）端着旧 DOM，用户「看不到修复」，
+// 而服务端抓取明明是新的。做法两条：
+//   1) app.py 对所有 text/html 响应加 Cache-Control: no-store（刷新必回源）；
+//   2) 页脚显示本页构建时间，并与服务器 HEAD 的 Last-Modified 比一次，
+//      对不上就把戳标红 + 弹提示，用户一眼知道「这是旧页面」。
+function _fmtBuild(d) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+async function checkPageFresh() {
+  const el = document.getElementById("st-build");
+  const mine = new Date(document.lastModified);
+  if (!el || isNaN(mine)) return;
+  el.textContent = "页面 " + _fmtBuild(mine);
+  try {
+    const r = await fetch("/?fresh=" + Date.now(), { method: "HEAD", cache: "no-store" });
+    const lm = r.headers.get("last-modified");
+    if (!lm) return;
+    const srv = new Date(lm);
+    if (Math.abs(srv - mine) > 2000) {
+      el.textContent = "页面 " + _fmtBuild(mine) + " ⚠ 已过期";
+      el.classList.add("stale");
+      el.title = "服务器上一次构建是 " + _fmtBuild(srv) + "，本页是旧的；Ctrl+F5 刷新";
+      ka.toast("服务器页面已更新（" + _fmtBuild(srv) + "），请按 Ctrl+F5 刷新", "warn");
+    }
+  } catch (e) { /* 服务不可达：状态栏已单独提示 */ }
+}
+checkPageFresh();
 
 // ---- 批次 75：三栏宽度 / 预览面板常驻 / 命令面板（纯显示层，派发既有函数）----
 
