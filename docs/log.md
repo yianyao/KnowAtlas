@@ -305,3 +305,27 @@ DSH 自动压缩水位本机实测约 **147,059 tokens**（模型窗口的 56%�
   `../session-guard`，挪走需 `pip install session-guard` 或设 `SESSION_GUARD_SRC`。
 - 会话指纹：`session-a312f91f-a326-441a-860d-f120973a0500` / compactions 0 /
   tokens ≈123,000 / 2026-10-25T17:04+08:00（WARN，83.6%）。
+
+## 2026-10-25 17:07 新会话：验证交接 + 两笔提交
+
+- 17:07 新会话 `session-3317aaf5-93e1-4d10-a7d2-a2e4b0e79adb`；开场三步：
+  `session_check` → `NEW_SESSION`（exit 0）；`context_probe` → `effective_pct=9.8%`
+  （14,456 / 147,059，compactions 0，status OK）→ 不需要交接，按 17:04 交接块继续。
+- 17:09 核对交接块里的验证项：`session-guard` **34 passed**（交接写 33；其后
+  `5338209`「--dry-run 只报告不发送」与 `89f11f7`「消除 find_session 按 env 判定的偶发失败」
+  两提交新增 1 项）；`tools/kpe` **14 passed**。
+- 17:10 提交 `ae4e8aa`：会话治理 9 文件、+601（4 个 py 薄封装 + bridge + 2 个 ps1 +
+  `AGENTS.md` §0 + `docs/log.md` 首入库）。
+- 17:11 提交 `471dee3`：`tools/kpe/` + 5 份设计文档，24 文件、+2812（含 `uv.lock`；
+  `__pycache__/`、`*.egg-info/`、`.venv/` 均被 `.gitignore` 挡住，未入库）。
+- 17:13 主仓库基线：`567 tests collected`，`uv run python -m pytest` 两次退出码均 0（全绿）。
+  注意 `pyproject.toml` 的 `addopts = "-q"`，命令行再加 `-q` 会变 `-qq` 并吞掉
+  「N passed」汇总行——要汇总就别再传 `-q`。
+- 现象：`tools/kpe/.venv`（约 44 MB，`uv run` 自动创建）与 `tools/kpe/uv.lock` 是本次跑测试的副产物，
+  前者已忽略、后者已入库。控制台看中文仍是 GBK 乱码（文件本身 UTF-8 无 BOM、LF，已验）。
+- 下一步：
+  1. `session-guard` 与 `kpe` 都还没有远程仓库；本机 github 直连 443 被墙、镜像只读，
+     要发布得另想办法（或先 `git bundle` 落盘）。
+  2. KPE 正式接入 `pipeline/points.py` 适配器（业务代码，先出方案再改）。
+  3. 待定：`ai-agents-in-action` 拆章重跑 KPE（库里还是旧点）。
+- 不要重跑：`uv build`、`notify --test`、context baseline 重建、`install_watcher_task.ps1`。
