@@ -364,10 +364,25 @@ DSH 自动压缩水位本机实测约 **147,059 tokens**（模型窗口的 56%�
 - `ksync --source bookmarks`：**created=191，全部 status=pending**（重复 URL 5 条）；
   待审区不抓正文/不分类/不抽点，等用户在管理页「🆕 待审」逐条转正或舍弃。
 
+### 批 103：待审区书签审查增强（方案 A，纯前端）
+
+- 只改 `web/static/index.html`：工具条（搜索 / 分组下拉 /「筛出 N / 共 M」/ 全选可见 / 反选）、
+  按文件夹分组（组头带条数与「全选本组」）、行内 `📁文件夹` + `域名` 徽标、
+  批量后 toast「已转正 N，剩余 M」、「转正后下一步」提示条（三条可复制命令）。
+  接口 / 表结构 / config 键零变更，canary 未动。
+- 真实浏览器验收（headless Edge + CDP，`temp/ui_check.py`，全程只读）：191 行、
+  15 个分组（书签栏/AI 54、后端 10、前端 9、JS&TS 7、综合 4、编程思想 3 …）、
+  文件夹与域名徽标各 191；搜 `github` → 筛出 78；全选可见 → 选中 78；
+  再点「全选本组」→ 86；下一步提示渲染出 3 条命令；`js_errors=null`。
+- 补记：watcher 弹窗已修（18:24）—— 计划任务改 `wscript.exe + tools/run_hidden.vbs` 隐藏启动，
+  提交 `fe87fba`；实测 `LastTaskResult=0`、状态文件正常更新；安装脚本同步改造。
+
 ### 下一步
 
-1. 你在 Web 管理页（`serve` → 管理 → 🆕 待审）挑书签：转正后下一轮 `ksync` 才抓正文/分类/抽点。
+1. 你在 Web 管理页（`serve` → 管理 → 🆕 待审）挑书签：按文件夹筛选 → 全选本组 / 全选可见 → ✅转正。
+   转正后照页面提示条依次跑 `ksync --fetch-limit N` → `ksync --reclassify` → `kpoints --limit N`
+   （**不会自动跑**：书签是全量源，转正条目下一轮 sync 属于 unchanged，不进分类）。
 2. 剩余未重跑的 `agentic-design-patterns-main`（PDF 源仓库，与已跑 PDF 重复，决定是否跳过）。
-3. `kpoints` 现在会把这些书签（转正后）当新候选；pending 期间不受影响。
+3. 想要「转正即抓取/分类/抽点」的一键闭环再走方案 B：需工单 + `api.py`/新 pipeline + 进度 UI。
 - 不要重跑：`temp/kpe-aiagents-ch/*`（`stats.json` 已存在）；`kpeimport` 对已导章节（幂等跳过，除非 `--replace`）；
-  `temp/bookmarks_stage.py`（LLM 判定有随机性，重跑会换一批结果）。
+  `temp/bookmarks_stage.py`（LLM 判定有随机性，重跑会换一批结果）；`temp/ui_check.py` 只读、可随时复跑。

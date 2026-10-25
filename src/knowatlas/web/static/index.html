@@ -154,6 +154,22 @@
                      background: transparent; color: inherit; padding: 2px 10px; }
   #bulk-bar button.primary { border-color: #4a9eff88; color: #4a9eff; }
   #filter { margin: 8px 0; }
+  /* 待审区（批次 103）：书签批量审查工具条 / 分组头 / 下一步提示 */
+  .pt-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+            margin: 6px 0 8px; font-size: 12px; }
+  .pt-bar input[type=text] { padding: 3px 8px; border: 1px solid #8886; border-radius: 4px;
+                             background: transparent; color: inherit; min-width: 220px; font-size: 12px; }
+  .pt-bar select { padding: 3px 6px; border: 1px solid #8886; border-radius: 4px;
+                   background: Canvas; color: inherit; font-size: 12px; }
+  .pt-bar button, .pt-grp button { cursor: pointer; border: 1px solid #8886; border-radius: 4px;
+                                   background: transparent; color: inherit; padding: 2px 8px; font-size: 12px; }
+  .pt-grp { display: flex; gap: 8px; align-items: center; margin: 12px 0 4px;
+            padding-bottom: 3px; border-bottom: 1px dashed #8884;
+            font-size: 12px; color: var(--text-3); }
+  .pt-grp b { font-weight: 600; color: var(--text-2, inherit); }
+  .pt-next { border: 1px solid #4a9eff88; border-radius: 6px; padding: 8px 10px;
+             margin: 6px 0 10px; font-size: 12px; line-height: 1.8; background: #4a9eff12; }
+  .pt-next code { display: block; font-size: 12px; margin: 2px 0; }
   /* 词云视图（第四十三批） */
   .cloud-scope { font-size: 13px; margin: 4px 0 10px; }
   .cloud-cats { margin-bottom: 12px; }
@@ -886,8 +902,15 @@ async function bulkStatus(action) {
   const res = await writeJSON("/api/entries/bulk-status", { ids, action });
   if (res.__aborted) return;
   if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
+  const wasPending = mgmtCurrent === "pending";
   clearSelection();
-  refreshCurrent();
+  if (wasPending && action === "activate") _ptNext = { count: res.done.length };
+  await refreshCurrent();
+  if (wasPending) {
+    const left = document.querySelectorAll("#mgmt-body .entry[data-id]").length;
+    ka.toast(`已${action === "activate" ? "转正" : "舍弃"} ${res.done.length} 条；`
+      + `待审剩余 ${left} 条`, "success");
+  }
 }
 document.getElementById("ms-activate").onclick = () => bulkStatus("activate");
 document.getElementById("ms-reject").onclick = () => bulkStatus("reject");
@@ -1605,17 +1628,156 @@ async function mgmtStaged() {
   bindEntryButtons();
 }
 
+// ---- 待审区（批次 103）：书签批量审查——筛选 / 按文件夹分组 / 全选可见 /
+// 文件夹与域名徽标 / 转正后「下一步」提示。纯前端，接口与数据结构零变更。 ----
+let _ptQuery = "", _ptGroup = "", _ptTotal = 0, _ptNext = null;
+
+function _ptHost(u) {
+  try { return new URL(u).host.replace(/^www\./, ""); } catch (e) { return ""; }
+}
+
+// 就地过滤（不重渲染，避免输入框失焦）：行上用 data-g=分组序号、data-s=搜索串。
+function _ptApplyFilter() {
+  const q = _ptQuery.trim().toLowerCase(), g = _ptGroup;
+  let n = 0;
+  const per = {};
+  document.querySelectorAll("#mgmt-body .entry[data-id]").forEach(d => {
+    const ok = (!g || d.dataset.g === g) && (!q || (d.dataset.s || "").includes(q));
+    d.style.display = ok ? "" : "none";
+    if (ok) { n++; per[d.dataset.g] = (per[d.dataset.g] || 0) + 1; }
+  });
+  document.querySelectorAll("#mgmt-body .pt-grp").forEach(h => {
+    const c = per[h.dataset.g] || 0;
+    h.style.display = c ? "" : "none";
+    const b = h.querySelector(".pt-gn");
+    if (b) b.textContent = c;
+  });
+  const el = document.getElementById("pt-count");
+  if (el) el.textContent = `筛出 ${n} / 共 ${_ptTotal}`;
+}
+
+function _ptSelectVisible(ids) {
+  const t = document.getElementById("ms-toggle");
+  if (t) { t.checked = true; document.body.classList.add("multiselect"); }
+  const set = new Set(ids);
+  document.querySelectorAll("#mgmt-body .entry[data-id]").forEach(d => {
+    if (d.style.display === "none" || !set.has(d.dataset.id)) return;
+    selection.add(d.dataset.id);
+    const cb = d.querySelector(".sel-cb");
+    if (cb) cb.checked = true;
+  });
+  updateBulkBar();
+}
+
 async function mgmtPending() {
-  refreshCurrent = () => mgmtShow("pending");
+  refreshCurrent = () => mgmtPending();
   _mgmtDesc().textContent =
-    "入库待审（批次 68）：配置 new_entries=\"pending\" 的源，新条目先进这里，"
-    + "不进检索/分类/点抽取。审查：勾「多选」→ 批量「✅转正」/「🗑舍弃」；单条用行上按钮。";
+    "入库待审（批次 68）：配 new_entries=\"pending\" 的源，新条目先进这里——不进检索/分类/点抽取。"
+    + "按文件夹筛选、全选一组，再用浮动条批量「✅转正」/「🗑舍弃」。";
   const data = await (await fetch("/api/pending?limit=500")).json();
   const body = _mgmtBody();
-  body.innerHTML = data.entries.length ? data.entries.map(entryHTML).join("")
-    : "<small>待审队列为空。在 config/knowatlas.toml 给高噪音源配 "
-      + "<code>new_entries = \"pending\"</code>（如未来接入的聊天记录/AI 会话/邮件）后，新条目会先进这里等你审。</small>";
+  const all = data.entries.map(e => ({ ...e,
+    gp: e.native_path || srcLabel(e.source_type), host: _ptHost(e.locator) }));
+  _ptTotal = all.length;
+  if (!all.length) {
+    body.innerHTML = "<small>待审队列为空。在 config/knowatlas.toml 给高噪音源配 "
+      + "<code>new_entries = \"pending\"</code>（书签 / 聊天记录 / AI 会话 / 邮件）后，"
+      + "新条目会先进这里等你审。</small>";
+    _ptNext = null;
+    return;
+  }
+  const groups = [...new Set(all.map(e => e.gp))].sort();
+  const opt = groups.map((g, i) =>
+    `<option value="${i}"${_ptGroup === g ? " selected" : ""}>`
+    + `${_escHtml(g)}（${all.filter(e => e.gp === g).length}）</option>`).join("");
+  let html = "";
+  if (_ptNext) {
+    const n = _ptNext.count;
+    html += `<div class="pt-next"><b>✅ 已转正 ${n} 条</b> —— 转正只是解除隔离，`
+      + `下面三步要显式跑（可复制到终端）：`
+      + `<code>uv run python -m knowatlas ksync --fetch-limit ${n}</code>`
+      + `<code>uv run python -m knowatlas ksync --reclassify</code>`
+      + `<code>uv run python -m knowatlas kpoints --limit ${n}</code>`
+      + `<button id="pt-copy">📋 复制三条命令</button>`
+      + `<button id="pt-close" style="margin-left:6px">知道了</button></div>`;
+  }
+  html += `<div class="pt-bar">`
+    + `<input id="pt-q" type="text" placeholder="搜标题 / URL / 文件夹" value="${_escHtml(_ptQuery)}">`
+    + `<select id="pt-group"><option value="">全部分组（${groups.length}）</option>${opt}</select>`
+    + `<span id="pt-count"></span>`
+    + `<button id="pt-all">全选可见</button><button id="pt-inv">反选</button>`
+    + `<small style="color:var(--text-3)">共 ${all.length} 条待审</small></div>`;
+  for (const g of groups) {
+    const rows = all.filter(e => e.gp === g);
+    html += `<div class="pt-grp" data-g="${_escHtml(g)}"><span>📁 ${_escHtml(g)}</span>`
+      + `<b class="pt-gn">${rows.length}</b>`
+      + `<button class="pt-gsel" data-g="${_escHtml(g)}">全选本组</button></div>`;
+    html += rows.map(entryHTML).join("");
+  }
+  body.innerHTML = html;
+  const byId = new Map(all.map(e => [e.id, e]));
+  body.querySelectorAll(".entry[data-id]").forEach(d => {
+    const e = byId.get(d.dataset.id);
+    if (!e) return;
+    d.dataset.g = e.gp;
+    d.dataset.s = (e.title + " " + e.locator + " " + e.gp).toLowerCase();
+    const link = d.querySelector(".entry-title-link");
+    if (link && e.native_path)
+      link.insertAdjacentHTML("afterend",
+        ` <span class="badge" title="收藏夹路径">📁${_escHtml(e.native_path)}</span>`);
+    if (link && e.host)
+      link.insertAdjacentHTML("afterend",
+        ` <span class="badge" title="域名">${_escHtml(e.host)}</span>`);
+  });
   bindEntryButtons();
+  const qEl = document.getElementById("pt-q");
+  qEl.oninput = () => { _ptQuery = qEl.value; _ptApplyFilter(); };
+  document.getElementById("pt-group").onchange = (ev) => {
+    _ptGroup = ev.target.value === "" ? "" : groups[Number(ev.target.value)];
+    _ptApplyFilter();
+  };
+  document.getElementById("pt-all").onclick = () => {
+    const ids = [...body.querySelectorAll(".entry[data-id]")]
+      .filter(d => d.style.display !== "none").map(d => d.dataset.id);
+    _ptSelectVisible(ids);
+  };
+  document.getElementById("pt-inv").onclick = () => {
+    [...body.querySelectorAll(".entry[data-id]")]
+      .filter(d => d.style.display !== "none").forEach(d => {
+        const cb = d.querySelector(".sel-cb");
+        if (selection.has(d.dataset.id)) {
+          selection.delete(d.dataset.id);
+          if (cb) cb.checked = false;
+        } else {
+          selection.add(d.dataset.id);
+          if (cb) cb.checked = true;
+        }
+      });
+    updateBulkBar();
+  };
+  body.querySelectorAll(".pt-gsel").forEach(b => b.onclick = () => {
+    _ptSelectVisible([...body.querySelectorAll(".entry[data-id]")]
+      .filter(d => d.dataset.g === b.dataset.g).map(d => d.dataset.id));
+  });
+  document.getElementById("pt-copy")?.addEventListener("click", async () => {
+    const n = _ptNext ? _ptNext.count : _ptTotal;
+    const txt = [
+      `uv run python -m knowatlas ksync --fetch-limit ${n}`,
+      "uv run python -m knowatlas ksync --reclassify",
+      `uv run python -m knowatlas kpoints --limit ${n}`,
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(txt);
+      ka.toast("三条命令已复制", "success");
+    } catch (e) {
+      await ka.alert(txt, "复制失败，请手动复制");
+    }
+  });
+  document.getElementById("pt-close")?.addEventListener("click", () => {
+    _ptNext = null;
+    mgmtPending();
+  });
+  _ptApplyFilter();
 }
 
 async function mgmtNonk() {
@@ -1807,6 +1969,7 @@ async function mgmtData() {
 
 function mgmtShow(sub) {
   mgmtCurrent = sub;
+  if (sub !== "pending") _ptNext = null;   // 下一步提示只在待审页显示
   document.querySelectorAll("#mgmt-tabs .mtab").forEach(b =>
     b.classList.toggle("on", b.dataset.sub === sub));
   if (sub === "staged") mgmtStaged();
