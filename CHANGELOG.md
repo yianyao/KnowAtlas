@@ -4,6 +4,19 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P1 点级勘误机制（2026-10-25）
+
+- **为什么**：条目级勘误会连坐——一个文档里多数点是对的，错误几乎都发生在「把机制压成一句口诀」的个别点上（实测 37 条 wrong 全在点层）。
+- **能力**（新增 `semantic/tasks/point_errata.py`，1.0.0）：hard 点判 `wrong/suspect/ok`；`wrong` 必须附可核查依据，给不出自动降 `suspect`（§7.6 防幻觉）；原因码 `fact_error`（事实/机制/规格错）与 `overclaim`（必须·只能·始终·有且仅有且无限定）分开记。
+- **管道**（新增 `pipeline/errata_points.py`）：候选=**`kind=hard` 且未核**（领域闸门走 `pipeline/triage.py::is_hard`，`opinion`/`unjudgeable`/`dupe` 永不判）→ 种子回放（`--from-json temp/errata_full_verify.json`，1,579 条零 LLM）→ 新点 LLM 增量（20/批）。幂等=点 id（`content_hash` 前 16）+ `fact_check.at` 游标；不写半成品；只标不删。
+- **数据层**（`datalayer/db.py`）：`hard_points_without_fact_check()` / `points_fact_check_counts()` / `points_wrong_queue()`（hard+wrong+未否决，按结论时间倒序）。
+- **REST**：新增只读 `GET /api/errata/points?limit=` —— 队列只出确认级 wrong，逐条带 reason/evidence/reason_code 与**溯源**（`point_sources` → 条目 id/title/locator）。**UI 页签未改**（留 P1b）。
+- **CLI**：`kerrata --points [--from-json PATH] [--limit N] [--dry-run]`；与 `--scan` 互斥；`--limit` 默认 `None`（条目 L2 仍 10，点级默认不限）。
+- **契约**：表结构/`SOURCE_TYPES`/`STATUSES`/scheme/`CONFIG_SCHEMA_KEYS` 零变更；`points.meta.fact_check` 一组新键；canary `capabilities` = `89594636c8b2`；工单 `docs/design/变更工单-2026-10-25-P1点级勘误.md`。
+- **测试**：新增 `tests/test_point_errata.py`（8 例）；全量 **598 passed, 1 skipped**。
+- **真库实跑**：1,579 candidates → imported 1,579（**wrong 37 / suspect 348 / ok 1,194**），零 LLM；重跑 candidates 0；`GET /api/errata/points` → `count=37`（serve 已重启加载新路由）；实跑前备份 `temp/knowledge.pre-errata.db`。
+- **已知缺口（记入 P1b）**：种子回放的 37 条 `reason_code` 为空（当日 verify 产物没记原因码；新核点由 LLM 产出）；UI「🩹 勘误裁决」页签仍只列条目级，点级队列目前只有 API。
+
 ### 变更工单 · P0 点分诊落库 + 领域闸门（2026-10-25）
 
 - **为什么**：勘误（P1）/老化（P2）要变常驻机制，先得筛出「可判对错的东西」。当日 4,509 点全量实测只有 35% 是硬事实，其余是观点（45%）与内部实现/预测（20%）；不分诊就开跑 = 花钱判没有对错的内容并制造误报。

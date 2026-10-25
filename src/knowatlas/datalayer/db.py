@@ -2181,6 +2181,59 @@ class DataLayer:
             out.append(d)
         return out
 
+    def hard_points_without_fact_check(self, limit: int = 0) -> list[dict[str, Any]]:
+        """P1 点级勘误候选：kind=hard 且未落 fact_check 的点（meta 已解析）。
+
+        领域闸门写进 SQL（与 pipeline/triage.py::is_hard 同口径）：opinion /
+        unjudgeable / dupe 永不成候选——没有客观对错，不判。
+        """
+        sql = ("SELECT id, content_hash, text, meta FROM points"
+               " WHERE COALESCE(json_extract(meta,'$.kind'),'') = 'hard'"
+               "   AND COALESCE(json_extract(meta,'$.fact_check.at'),'') = ''"
+               " ORDER BY created_at, id")
+        params: list[Any] = []
+        if limit and limit > 0:
+            sql += " LIMIT ?"
+            params.append(limit)
+        out = []
+        for r in self._conn.execute(sql, params).fetchall():
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
+    def points_fact_check_counts(self) -> dict[str, int]:
+        """点级勘误分布（P1 验收口径，只统计 hard 点）：wrong/suspect/ok/(none)。"""
+        rows = self._conn.execute(
+            "SELECT COALESCE(json_extract(meta,'$.fact_check.verdict'),'') AS v,"
+            " COUNT(*) AS n FROM points"
+            " WHERE COALESCE(json_extract(meta,'$.kind'),'') = 'hard'"
+            " GROUP BY v ORDER BY v").fetchall()
+        return {(r["v"] or "(none)"): r["n"] for r in rows}
+
+    def points_wrong_queue(self, limit: int = 500) -> list[dict[str, Any]]:
+        """点级勘误裁决队列：hard 且 verdict=wrong 且人裁未否决（fact_check.dismissed），
+        按结论时间倒序。suspect 不到确认级，不进队列（§7.6 纪律）。meta 已解析。"""
+        rows = self._conn.execute(
+            "SELECT id, content_hash, text, meta FROM points"
+            " WHERE COALESCE(json_extract(meta,'$.kind'),'') = 'hard'"
+            "   AND COALESCE(json_extract(meta,'$.fact_check.verdict'),'') = 'wrong'"
+            "   AND COALESCE(json_extract(meta,'$.fact_check.dismissed'), 0) = 0"
+            " ORDER BY COALESCE(json_extract(meta,'$.fact_check.at'), '') DESC, id"
+            " LIMIT ?", (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try:
+                d["meta"] = json.loads(d["meta"] or "{}")
+            except ValueError:
+                d["meta"] = {}
+            out.append(d)
+        return out
+
     def set_point_aging(self, point_id: str, flag: str, reason: str) -> None:
         """点级老化结论落列（批次 93，裁决 #14）：stale 退出消费面 / ok 免疫复扫 /
         keep 只记游标留观（flag 传 '' 表示维持未判）。永不物理删除点。"""

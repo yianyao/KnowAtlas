@@ -33,9 +33,10 @@ def test_builtin_specs_present(registries):
     # point_aging：点级老化 L2（批次 93，裁决 #14 条目过时不连坐点）；
     # point_explain：大白话释疑（批次 90，方案 §9 点卡片 LLM 解释+示例）；
     # point_triage：点分诊（P0，2026-10-25 裁决，变更工单-2026-10-25-点分诊.md）；
+    # point_errata：点级勘误（P1，2026-10-25 裁决，变更工单-2026-10-25-P1点级勘误.md）；
     # synthesize：知识梳理合成层（批次 69，§7.9 勾点生成方案，回灌+隔离+强制溯源）
     assert {"classify_coarse", "classify_deep", "tag_keywords", "topic_recall",
             "thread_suggest", "delta_summarize",
             "thread_digest", "point_extract", "aging_judge",
             "errata_check", "point_aging", "point_explain",
-            "point_triage", "synthesize"} == {s.name for s in semantics.specs()}
+            "point_triage", "point_errata", "synthesize"} == {s.name for s in semantics.specs()}

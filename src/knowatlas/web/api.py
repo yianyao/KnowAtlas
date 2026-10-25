@@ -696,6 +696,29 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                         "errata": e.meta.get("errata") or []})
         return {"entries": out}
 
+    @app.get("/api/errata/points")
+    def errata_points_queue(limit: int = 500):
+        """点级勘误裁决队列（P1，2026-10-25）：**只出确认级** wrong。
+
+        只含 `kind=hard` 且 `meta.fact_check.verdict=wrong`、人裁未否决的点；
+        suspect 不到确认级不出队（§7.6 防幻觉纪律）。每条附 reason/evidence/
+        reason_code 与**溯源**（point_sources → 条目），供人裁时回溯原文。
+        只读接口；正确的入口仍是条目级勘误附注（原文永不改写）。
+        """
+        out = []
+        for p in dl.points_wrong_queue(limit=limit):
+            fact = (p["meta"].get("fact_check") or {})
+            sources = [{"entry_id": s["entry_id"], "title": s.get("title"),
+                        "locator": s.get("locator")}
+                       for s in dl.point_sources_of(p["id"])]
+            out.append({"id": p["id"], "text": p["text"],
+                        "reason": fact.get("reason"),
+                        "evidence": fact.get("evidence"),
+                        "reason_code": fact.get("reason_code"),
+                        "at": fact.get("at"), "model": fact.get("model"),
+                        "stage": fact.get("stage"), "sources": sources})
+        return {"points": out, "count": len(out)}
+
     @app.post("/api/entries/{entry_id}/errata")
     async def add_errata(entry_id: str, request: Request):
         """人裁「改正」= 勘误附注层：修正文字挂 meta.errata 追加，**原文永不改写**

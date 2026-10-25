@@ -132,14 +132,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     kerrata = sub.add_parser(
         "kerrata", help="勘误三级：--scan 跑 L1 确定性错误扫描（零费用）；"
+                        "--points 跑点级事实核查（P1，只吃 kind=hard）；"
                         "默认跑 L2 带依据核查（方案 §7.6）")
-    kerrata.add_argument("--limit", type=int, default=10,
-                         help="本次最多核查条数（默认 10——试跑口径，全量核查须用户裁决模型档位）")
+    kerrata.add_argument("--limit", type=int, default=None,
+                         help="本次最多核查条数（条目 L2 默认 10=试跑口径；--points 默认不限）")
     kerrata.add_argument("--dry-run", action="store_true",
                          help="只判定与报告，不写库（LLM 费用照常发生；--scan 时只出报告）")
     kerrata.add_argument("--scan", action="store_true",
                          help="跑 L1 确定性错误扫描（完整 Python 代码块语法验证 + 已移除"
                               " API 对照表，零费用；同 ksync --errata-scan）")
+    kerrata.add_argument("--points", action="store_true",
+                         help="点级事实核查（P1）：hard 点判 wrong/suspect/ok，结论落"
+                              " point.meta.fact_check；wrong 进 /api/errata/points 队列，"
+                              "suspect 只进筛选视图；只标不删、幂等")
+    kerrata.add_argument("--from-json", metavar="PATH", default=None,
+                         help="--points 时回放既有核查产物（{point_id:{verdict,reason,evidence}}，"
+                              "零 LLM 费）；推荐的默认种子：temp/errata_full_verify.json")
 
     kpeimport = sub.add_parser(
         "kpeimport", help="导入 KPE 长文抽取产物（manifest.json + points.jsonl）到点层"
@@ -598,10 +606,45 @@ def _cmd_kaging(args: argparse.Namespace) -> int:
 def _cmd_kerrata(args: argparse.Namespace) -> int:
     import json as _json
 
-    from .pipeline.errata import run_errata_check, run_errata_scan
-
     cfg = load_config()
     setup_logging(cfg.log_level)
+    limit = 10 if args.limit is None else args.limit
+    if args.points:
+        if args.scan:
+            print("ERROR --points 不能与 --scan 同用（条目级 L1 扫描请单独跑）")
+            return _EXIT_USAGE
+        from .pipeline.errata_points import run_point_errata
+
+        point_limit = 0 if args.limit is None else max(0, args.limit)
+        seed = args.from_json
+        if not seed:
+            default_seed = Path("temp/errata_full_verify.json")
+            if default_seed.exists():
+                print(f"提示：检测到既有核查产物 {default_seed.as_posix()}，加 "
+                      f"--from-json {default_seed.as_posix()} 可零 LLM 费回放")
+        dl = _open(cfg)
+        try:
+            stats = run_point_errata(cfg, dl, limit=point_limit,
+                                     dry_run=args.dry_run, seed_path=seed)
+        finally:
+            dl.close()
+        written = stats["imported"] + stats["checked"]
+        if stats.get("llm_skipped") and not written:
+            print(f"SKIP {stats['llm_skipped']}")
+            return _EXIT_SKIP
+        head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 点级核查完成"
+        print(f"{head}：{_json.dumps({k: v for k, v in stats.items() if k != 'errors'}, ensure_ascii=False)}")
+        for err in stats.get("errors", [])[:5]:
+            print(f"  ERROR {err}")
+        if stats.get("llm_skipped"):
+            print(f"  WARN {stats['llm_skipped']}")
+        if not args.dry_run:
+            print("（队列：wrong 进 GET /api/errata/points（附理由+依据+溯源）；suspect 不进队列；"
+                  "只标不删，重跑幂等）")
+        return _EXIT_OK
+
+    from .pipeline.errata import run_errata_check, run_errata_scan
+
     dl = _open(cfg)
     try:
         if args.scan:
@@ -611,7 +654,7 @@ def _cmd_kerrata(args: argparse.Namespace) -> int:
             print("（确定性错误直接进裁决队列；节选特征不下结论宁漏勿误；"
                   "裁决在 Web 管理页「勘误裁决」）")
             return _EXIT_OK
-        stats = run_errata_check(cfg, dl, limit=max(1, args.limit),
+        stats = run_errata_check(cfg, dl, limit=max(1, limit),
                                  dry_run=args.dry_run)
     finally:
         dl.close()

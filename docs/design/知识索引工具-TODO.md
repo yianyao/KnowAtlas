@@ -476,15 +476,20 @@ reader: 执行者（人与 agent）
 
 ### P1 · 勘误从「一次性」变「机制」
 
-- [ ] 新增 `kerrata --points`（点级事实核查）：分诊 hard → 分批复核 → 结论写 `point.meta.fact_check`
+- [x] 新增 `kerrata --points`（点级事实核查）：分诊 hard → 分批复核 → 结论写 `point.meta.fact_check`
       （`verdict`/`reason`/`evidence`/`at`/`model`/`stage`），**只标不删**。
-- [ ] 幂等与增量：以 `content_hash` 为键 + `fact_check.at` 游标，已核的不重跑；新点自动入队。
-- [ ] 裁决队列：`wrong` 进「勘误裁决」页签（点级条目，带理由+依据+溯源）；`suspect` **不进队列**，
+- [x] 幂等与增量：以 `content_hash` 为键 + `fact_check.at` 游标，已核的不重跑；新点自动入队。
+- [x] 裁决队列：`wrong` 进「勘误裁决」页签（点级条目，带理由+依据+溯源）；`suspect` **不进队列**，
       只做筛选视图（§7.6 纪律：不到确认级不出队列）。
-- [ ] 原因码：`fact_error`（事实错）与 `overclaim`（绝对化表述：必须/只能/始终/有且仅有，且原文无限定条件）
+      **已实施（2026-10-25）**：只读 `GET /api/errata/points`（37 条）；UI 页签渲染留 P1b。
+- [x] 原因码：`fact_error`（事实错）与 `overclaim`（绝对化表述：必须/只能/始终/有且仅有，且原文无限定条件）
       分开记——实测 wrong 的三大类正是「机制说错 / 规格细节错 / 绝对化」。
 - 验收：用当日 37 条 wrong 回放，队列条目数 = 37；重跑一次零新增（幂等）；新入库一点后自动进待核。
 - 成本：全库 hard 1,579 条 ≈ 交付实测约 12 分钟 / 4 线程。
+- **已实施（2026-10-25，工单 `变更工单-2026-10-25-P1点级勘误.md`）**：种子回放 1,579 条 →
+  **wrong 37 / suspect 348 / ok 1,194**（零 LLM）；重跑 candidates 0；队列 API 37 条带溯源；
+  测试 598 passed / 1 skipped。**遗留**：37 条种子结论的 `reason_code` 为空（原产物未记），
+  新核点由 LLM 产出；UI 页签未接（P1b）。
 
 ### P2 · 老化从「被动」变「机制」，且分两型
 

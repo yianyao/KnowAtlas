@@ -621,3 +621,67 @@ curl http://127.0.0.1:8420/api/stats                    # serve 已起（PID 221
 - 本会话 `effective_pct` 79.2%（baseline 147,059）。
 
 <!-- HANDOFF {"session":"session-599a0405-b8b3-4be2-8ed3-889a97e073ca","compactions":1,"tokens":116432,"at":"2026-10-25T23:10:00+08:00","status":"HANDOFF","goal":"交付验收手册 docs/使用手册-2026-10-25.md；勘误全量已出清单；TODO P0-P5 已排序；用户验完开新会话按 P0 开工","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后 P0 分诊落库（point.meta.kind + kpoints --triage + 领域闸门），再 P1 勘误机制、P2 老化机制"} -->
+
+## 交接（2026-10-25 23:30，P0/P1 已交付，水位 87.8%）
+
+### 当前目标
+
+按 TODO 的 P0→P5 逐项立机制。**P0（点分诊）、P1（点级勘误）已完成并实跑验收**；
+下一步 P1b（UI 页签 + 原因码回填）→ P2（老化两型）→ P3/P4/P5。
+
+### 已完成（含产物路径与现场数字）
+
+- **P0 点分诊**（提交 `02bf82d`）：`point_triage@1.0.0` + `pipeline/triage.py` +
+  `kpoints --triage/--from-json`；实跑 4,552 点 → **hard 1,579 / opinion 2,016 /
+  unjudgeable 914 / dupe 43**（零 LLM 回放），重跑 candidates 0。
+  工单 `docs/design/变更工单-2026-10-25-点分诊.md`。
+- **P1 点级勘误**（本批，提交号见下）：`point_errata@1.0.0` + `pipeline/errata_points.py` +
+  只读 `GET /api/errata/points` + `kerrata --points/--from-json`；
+  实跑 1,579 hard 点 → **wrong 37 / suspect 348 / ok 1,194**（零 LLM），重跑 candidates 0；
+  队列 API `count=37`（带理由/依据/溯源）。工单 `docs/design/变更工单-2026-10-25-P1点级勘误.md`。
+- **测试**：`pytest -o addopts="" -q` → **598 passed / 1 skipped**；canary `capabilities`
+  = `89594636c8b2`（P0+P1 两个新能力，工单在先）。
+- **备份**：`temp/knowledge.pre-triage.db`（P0 前）、`temp/knowledge.pre-errata.db`（P1 前）。
+- **serve 已重启**（本会话 23:27，新 PID 见 `Get-NetTCPConnection -LocalPort 8420`），
+  新路由 `/api/errata/points` 生效；日志 `temp/serve.out.log` / `temp/serve.err.log`。
+
+### 下一步（按序，首步可直接执行）
+
+1. **P1b（小）**：
+   a. `index.html::mgmtErrata()` 增「点级」区块，拉 `/api/errata/points` 渲染点卡
+      （理由/依据/原因码/溯源条目），与条目级队列分区展示；
+   b. 需要**写接口** `POST /api/points/{id}/fact-check/dismiss`（人裁误报 → `fact_check.dismissed=true`
+      出队）——属接口契约变更，先在 P1 工单里追加一节再实现；
+   c. 37 条种子结论的 `reason_code` 为空：可一次性 LLM 分类回填（~2 批）或按 reason 文本规则抽，
+      回填后写 `fact_check.reason_code` + `stage` 保持可追溯。
+2. **P2 老化机制**：版本型（抽版本号 + EOL 表，确定性）+ 退场型（LLM 附官方依据），
+   `kaging --lifecycle` 主动扫描，只吃 `kind=hard`，只标不删。
+3. 之后 P3（全文分块抽取，大件，需用户裁决重抽成本）→ P4（点级图）→ P5（扩散加固）。
+
+### 不要重跑
+
+- **P0 分诊回放**（`kpoints --triage --from-json …`）：已落库 4,552 点，重跑零写入。
+- **P1 勘误回放**（`kerrata --points --from-json …`）：已落库 1,579 点，重跑零写入。
+- **勘误全量核查**（4,509 点，约 25 分钟 + 费用）：结果在 `temp/errata_full_*.json`，直接读。
+- **两个 GitHub 种子扩散**：已跑过/已回退，别再跑。
+- **全量 pytest**：刚跑过（598/1）；除非改了业务代码。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py     # 新会话应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                  # 598 passed, 1 skipped
+curl http://127.0.0.1:8420/api/errata/points              # {"count":37,...}
+uv run python -m knowatlas kpoints --triage               # 应 candidates 0（幂等）
+```
+
+### 已知失败 / 注意
+
+- **37 条 wrong 的 `reason_code` 为空**（种子产物没记原因码）；LLM 新核点会产出。
+- **点级队列只有 API**，管理页「🩹 勘误裁决」仍只列条目级（P1b）。
+- `serve` 是本会话重启的进程；**改后端代码需再重启**才生效，改 `index.html` 用户 `Ctrl+F5` 即可。
+- PowerShell 控制台直接 `Invoke-WebRequest` 打印 UTF-8 会乱码（按 Latin-1 解码），
+  用 `uv run python -c` 读库或 `curl.exe` 复核，别当成数据损坏。
+- 本会话 `effective_pct` 87.8%（baseline 147,059）；请开新会话继续说「继续」。
+
+<!-- HANDOFF {"session":"session-3bfb4ef8-1581-474d-8ede-e9f8c048b7cc","compactions":0,"tokens":129100,"at":"2026-10-25T23:30:00+08:00","status":"HANDOFF","goal":"P0 点分诊与 P1 点级勘误已交付并实跑（4,552 点分诊 / 1,579 hard 勘误、队列 37）；下一步 P1b（UI 页签+写接口+原因码回填）→ P2 老化机制","next":"新会话先跑 session_check 与 pytest -o addopts= -q；然后 P1b：index.html 勘误页签接 /api/errata/points + 新增 dismiss 写接口 + 回填 37 条 reason_code；之后 P2 老化两型（kaging --lifecycle，只吃 kind=hard）"} -->
