@@ -100,6 +100,8 @@
   <label title="在边上常驻显示关联理由（tooltip 恒显）">
     <input type="checkbox" id="showReason"> 🏷 关联解释</label>
   <button id="topicBtn" title="知识点聚类主题视图（批次 88 试点：语义相近的点聚成主题，条目退溯源层）">🧠 主题</button>
+  <input id="topicSearch" placeholder="搜主题名 / 知识点，命中金框高亮（Esc 清空）"
+         size="26" autocomplete="off" hidden>
   <button id="reverseBtn" title="哪些焦点能到达当前焦点">🔍 反查</button>
   <button id="threadBtn" title="当前视图条目一键存为线索">🧵 固化为线索</button>
   <span id="crumb"></span>
@@ -405,6 +407,12 @@ function render(data, crumbText, opts = {}) {
   revpanel.hidden = true;    // 反查面板随视图切换收起（批次 92.5：切页不复现驻留）
   showEntriesBtn.style.display = "none";   // 非层级子树视图一律收起（子树视图按需重开）
   const radiateView = !!opts.radiate;
+  // R12（2026-10-27）：主题视图才出搜索框；切走时清空查询与高亮上下文，
+  // 防下次进来残留上一次的命中。
+  const topicView = !!data.topicView;
+  const tSearch = document.getElementById("topicSearch");
+  tSearch.hidden = !topicView;
+  if (!topicView) { tSearch.value = ""; topicQuery = ""; topicNodes = null; topicLinks = []; }
   const reasonOn = document.getElementById("showReason").checked;
   // 随缩放显隐（2026-10-26）：opts.zoom 来自缩放后的重渲染，首次进入恒为 1
   const zoomNow = Number.isFinite(opts.zoom) ? opts.zoom : 1;
@@ -516,7 +524,12 @@ function render(data, crumbText, opts = {}) {
                gravity: 0.06 },
       data: nodes, links: links,
       labelLayout: { hideOverlap: true },
-      emphasis: { focus: "adjacency", lineStyle: { width: 3 } },
+      emphasis: topicView
+        // 主题视图：命中靠 highlight 派发金框（focus:none 免得只亮邻接）；
+        // 其他视图保持原「悬停看邻接」口径
+        ? { focus: "none", itemStyle: { borderColor: PAL.focusRing, borderWidth: 3 },
+            label: { fontWeight: "bold" } }
+        : { focus: "adjacency", lineStyle: { width: 3 } },
       label: { position: "right",
                formatter: p => p.name.length > 18 ? p.name.slice(0, 17) + "…" : p.name },
     }],
@@ -589,6 +602,10 @@ async function doSearch(q, push = true) {
 // R11（2026-10-26）：真库 1,003 个主题 / 全量 378.7 s——默认只取点数最多的前
 // TOPIC_LIMIT 个（服务端 limit 截断 + 只对返回的主题命名），副标题说明总量。
 const TOPIC_LIMIT = 80;
+// R12（2026-10-27）：主题视图内搜索高亮——topicNodes/topicLinks 存最近一次主题
+// 渲染的节点与边（顺序 = series.data 顺序），供「命中即金框高亮」按 dataIndex 派发。
+let topicQuery = "", topicNodes = null, topicLinks = [], topicTip = "";
+const topicSearchBox = document.getElementById("topicSearch");
 async function showTopics(push = true) {
   const data = await (await fetch(`/api/graph/topics?limit=${TOPIC_LIMIT}`)).json();
   currentRadiate = null; currentSubtree = null;
@@ -599,14 +616,17 @@ async function showTopics(push = true) {
   }
   const total = (data.total ?? data.topics.length);
   const shown = data.topics.length;
+  const mergeNote = data.merged_from > total
+    ? `相似簇合并 ${data.merged_from}→${total}；` : "";
   const head = data.truncated
-    ? `知识主题 ${shown} 个 / 共 ${total} 个（按点数取前 ${data.limit}；阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`
-    : `知识主题 ${shown} 个（阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`;
+    ? `知识主题 ${shown} 个 / 共 ${total} 个（按点数取前 ${data.limit}；${mergeNote}阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`
+    : `知识主题 ${shown} 个（${mergeNote}阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`;
   const nodes = [], links = [], seen = new Set();
   data.topics.forEach((t, i) => {
     const tid = "t:" + i;
     nodes.push({ id: tid, name: t.name, kind: "category", value: t.size,
-                 path: `${t.size} 个知识点 · 溯源 ${t.sources_count} 条目` });
+                 path: `${t.size} 个知识点 · 溯源 ${t.sources_count} 条目`
+                       + (t.merged > 1 ? ` · 合并 ${t.merged} 簇` : "") });
     for (const p of t.points) {
       const pid = "p:" + p.point_id;
       if (!seen.has(pid)) {
@@ -618,15 +638,52 @@ async function showTopics(push = true) {
       links.push({ source: tid, target: pid, kind: "attach" });
     }
   });
-  render({ nodes, links, truncated: {}, focus: { id: "" } }, head);
-  tip.textContent = data.truncated
+  const view = { nodes, links, truncated: {}, focus: { id: "" }, topicView: true };
+  render(view, head);
+  topicNodes = view.nodes; topicLinks = view.links;
+  topicTip = data.truncated
     ? `主题=语义相近知识点聚合（共享词命名）；全库共 ${total} 个，图上只画点数最多的前 ${shown} 个，点主题节点可下钻成员点。`
     : "主题=语义相近知识点聚合（共享词命名）；悬停成员点看知识内容与溯源条目。";
+  tip.textContent = topicTip;
   if (push) {
     nav.push({ label: "知识主题", load: p => showTopics(false) });
     renderBread();
   }
 }
+
+// 主题视图搜索：按名字/成员点文本匹配 → 命中节点金框高亮（emphasis），
+// 命中成员点的主题同时点亮；Esc 清空。不重排布局（只派发 highlight/downplay）。
+function applyTopicHighlight() {
+  if (!chart || !topicNodes) return;
+  chart.dispatchAction({ type: "downplay", seriesIndex: 0 });
+  const q = (topicQuery || "").trim().toLowerCase();
+  if (!q) { tip.textContent = topicTip; return; }
+  const hitIds = new Set();
+  for (const n of topicNodes) {
+    if ((n.name || "").toLowerCase().includes(q)
+        || (n.text || "").toLowerCase().includes(q)) hitIds.add(n.id);
+  }
+  const hitTopics = new Set(topicLinks.filter(l => hitIds.has(l.target))
+                                     .map(l => l.source));
+  for (const tid of hitTopics) hitIds.add(tid);
+  const indexOf = new Map(topicNodes.map((n, i) => [n.id, i]));
+  for (const id of hitIds) chart.dispatchAction({ type: "highlight", seriesIndex: 0,
+                                                  dataIndex: indexOf.get(id) });
+  const hitNodes = hitIds.size;
+  tip.textContent = `搜索「${topicQuery.trim()}」：命中 ${hitNodes} / ${topicNodes.length} 个节点`
+    + `（主题 ${[...hitIds].filter(id => id.startsWith("t:")).length} 个；Esc 清空）`;
+}
+topicSearchBox.addEventListener("input", () => {
+  topicQuery = topicSearchBox.value;
+  applyTopicHighlight();
+});
+topicSearchBox.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    topicSearchBox.value = ""; topicQuery = "";
+    applyTopicHighlight();
+  }
+});
 document.getElementById("topicBtn").onclick = () => showTopics();
 
 // ---- 放射模式（第三十三批）：焦点一跳邻域，空层降级不压栈 ----

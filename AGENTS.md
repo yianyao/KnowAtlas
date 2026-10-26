@@ -94,11 +94,9 @@ uv run python -m pytest -q                             # 基线：全绿（含 1
   入库用 `kpeimport <out> [--entry ID|--match 通配] [--replace] [--dry-run]`；
   点 meta 固定带 `extractor="kpe"`、`book`、`section_path`、`quote`（见
   `docs/design/变更工单-2026-10-25-KPE导入适配器.md`）。
-- **`tools/kpe` 的上游是独立仓库** <https://github.com/yianyao/kpe>（MIT）。开发在本地克隆
-  （如 `D:\kpe`；**删掉无妨**，`git clone` 即回）完成，提交推送后再在本仓库拉回来：
-  `git subtree pull --prefix=tools/kpe kpe main --squash`（remote `kpe` 已在 `.git/config`，
-  指向 GitHub，**不依赖本地克隆是否存在**）。
-  **方向单向**：不要在本仓库直接改 `tools/kpe` 下的代码，否则下次 pull 会冲突。
+- **`tools/kpe` 是独立仓库的子树** <https://github.com/yianyao/kpe>（MIT）：不要在本仓库直改
+  `tools/kpe` 下的代码；上游升级用 `git subtree pull --prefix=tools/kpe kpe main --squash`
+  （remote `kpe` 指向 GitHub）。
 - 桌面壳（`desktop/main.py`，pywebview）是可选装：装不上不影响 `serve`。
 - **会话守卫工具已抽成独立仓库** `../session-guard`（可跨机安装：`pip install .` / `uv tool install .`，
   命令 `session-guard probe|check|watch|notify`）。`tools/context_probe.py`、`session_check.py`、

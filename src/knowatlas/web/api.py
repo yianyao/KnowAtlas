@@ -612,7 +612,8 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 "missing": missing}
 
     @app.get("/api/graph/topics")
-    def graph_topics(limit: int = 80):
+    def graph_topics(limit: int = 80, merge: bool = True,
+                     merge_threshold: float = 0.85):
         """知识主题聚合（批次 88，方案 §9：点聚类主题节点，条目退溯源层）。
 
         全库点向量贪心归簇（阈值 0.72），簇 ≥2 点成主题；主题名=成员共享词
@@ -623,9 +624,16 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         真库 4,552 点下全量聚类 + 逐主题命名 378.7 s，故 `limit` 截断（默认
         80、上限 MAX_LIMIT，按点数降序），且只对返回的主题算名字；响应加
         `total`/`limit`/`truncated`——前端据此说明「显示前 N / 共 M 个」。
+
+        R12（2026-10-27，工单 变更工单-2026-10-27-知识主题二次合并与命名去重.md）：
+        归簇后按质心再做一遍贪心合并（`merge`，默认开；`merge_threshold`
+        默认 0.85、夹到 0.5–0.99），消掉「同一主题被切成多块」造成的重名；
+        响应加 `merge_threshold`/`merged_from` 与每主题 `merged`。
         """
         from ..pipeline.graph_topics import MAX_LIMIT, topic_clusters
-        return topic_clusters(dl, limit=max(1, min(int(limit), MAX_LIMIT)))
+        mt = max(0.5, min(float(merge_threshold), 0.99))
+        return topic_clusters(dl, limit=max(1, min(int(limit), MAX_LIMIT)),
+                              merge=bool(merge), merge_threshold=mt)
 
     @app.post("/api/entries/auto-name")
     def auto_name(request: Request, body: dict = Body(default={})):

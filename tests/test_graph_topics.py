@@ -171,6 +171,9 @@ def test_api_graph_topics_limit_param(cfg, dl, registries):
     body = client.get("/api/graph/topics?limit=1").json()
     assert body["limit"] == 1 and len(body["topics"]) == 1
     assert body["total"] == 3 and body["truncated"] is True
+    # R12：合并口径回声（三簇互不相似 → 不合并，merged_from = total）
+    assert body["merge_threshold"] == 0.85 and body["merged_from"] == body["total"]
+    assert all(t["merged"] == 1 for t in body["topics"])
     assert client.get("/api/graph/topics").json()["limit"] == 80
 
 
@@ -200,3 +203,76 @@ def test_greedy_clusters_dim_mismatch_falls_back():
     vecs["p70"] = [1.0, 0.0]                 # 维度不齐
     out = _greedy_clusters(vecs, 0.72)
     assert sum(len(c["ids"]) for c in out) == 71
+
+
+# ---- R12（2026-10-27 工单 变更工单-2026-10-27-知识主题二次合并与命名去重.md） ----
+
+def test_merge_clusters_joins_near_duplicates():
+    """质心余弦 ≥ 阈值就合并（并记录 merged）；正交簇不受影响。"""
+    from knowatlas.pipeline.graph_topics import _merge_clusters
+
+    cs = [
+        {"ids": ["a1", "a2"], "centroid": normalize([1.0, 0.10, 0, 0, 0, 0, 0, 0])},
+        {"ids": ["b1", "b2"], "centroid": normalize([0.98, 0.20, 0, 0, 0, 0, 0, 0])},
+        {"ids": ["c1", "c2"], "centroid": normalize([0, 1.0, 0, 0, 0, 0, 0, 0])},
+    ]
+    out = _merge_clusters(cs, 0.85)
+    assert len(out) == 2
+    big = max(out, key=lambda c: len(c["ids"]))
+    assert big["ids"] == ["a1", "a2", "b1", "b2"] and big["merged"] == 2
+    assert min(out, key=lambda c: len(c["ids"]))["ids"] == ["c1", "c2"]
+
+
+def test_merge_clusters_dim_mismatch_keeps_as_is():
+    """维度不齐（多模型混排）→ 原样返回，不做跨维比较。"""
+    from knowatlas.pipeline.graph_topics import _merge_clusters
+
+    cs = [{"ids": ["a1", "a2"], "centroid": [1.0, 0.0]},
+          {"ids": ["b1", "b2"], "centroid": [1.0, 0.0, 0.0]}]
+    assert _merge_clusters(cs, 0.85) is cs
+
+
+def test_topic_name_unique_and_single_word_has_size():
+    """同一响应内重名加②③；只有 1 个共享词时带规模后缀。"""
+    from knowatlas.pipeline.graph_topics import _dedupe_name, _topic_name
+
+    used: set[str] = set()
+    texts = ["git 提交规范与分支策略", "git 命令行常用操作"]
+    n1 = _topic_name(texts, 2, used)
+    n2 = _topic_name(texts, 2, used)
+    assert n1 != n2 and {n1, n2} <= used
+    assert n1.startswith("git") and "2 点" in n1
+    assert [_dedupe_name("智能（3 点）", used) for _ in range(3)][1:] == \
+        ["智能（3 点）②", "智能（3 点）③"]
+
+
+def test_topic_clusters_merges_and_reports(monkeypatch):
+    """簇被切成两块时：默认合并（total 降、merged 记账），merge=False 退回。"""
+    from knowatlas.pipeline import graph_topics as gt
+
+    vecs = {
+        "a1": normalize([1.0, 0.10, 0, 0, 0, 0, 0, 0]),
+        "a2": normalize([0.99, 0.12, 0, 0, 0, 0, 0, 0]),
+        "b1": normalize([0.98, 0.20, 0, 0, 0, 0, 0, 0]),
+        "b2": normalize([0.97, 0.22, 0, 0, 0, 0, 0, 0]),
+    }
+
+    class FakeDL:
+        def all_point_vectors(self):
+            return {pid: vec_to_blob(v) for pid, v in vecs.items()}
+
+    hits = [{"point_id": pid, "text": f"git 提交规范与分支管理 {pid}",
+             "summary": "", "sources": []} for pid in vecs]
+    clusters = [{"ids": ["a1", "a2"], "centroid": vecs["a1"]},
+                {"ids": ["b1", "b2"], "centroid": vecs["b1"]}]
+    monkeypatch.setattr(gt, "_greedy_clusters", lambda v, t: clusters)
+    monkeypatch.setattr(gt, "_all_point_hits", lambda dl: hits)
+
+    r = gt.topic_clusters(FakeDL(), limit=10)
+    assert r["total"] == 1 and r["merged_from"] == 2 and r["merge_threshold"] == 0.85
+    assert r["topics"][0]["size"] == 4 and r["topics"][0]["merged"] == 2
+    assert r["topics"][0]["name"]                      # 名字仍由成员共享词构成
+
+    r2 = gt.topic_clusters(FakeDL(), limit=10, merge=False)
+    assert r2["total"] == 2
+    assert all(t["merged"] == 1 for t in r2["topics"])

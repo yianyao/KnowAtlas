@@ -2003,3 +2003,67 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 3. 用 `D:\kpe` 真跑一本书（沿用 `temp/kpe-aiagents` 的 key/参数）验证跨仓库可用性。
 
 <!-- HANDOFF {"at":"2026-10-27T06:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-27-0655","draft":false,"goal":"KPE 已独立成 D:\\kpe + MIT + 推到 yianyao/kpe，subtree 单向传导实测闭环","host":"dsh","kind":"handoff","next":"用户验收 GitHub 仓库与 D:\\kpe；之后可选：改仓库描述 / 加 tools/kpe 未同步检查 / 用 D:\\kpe 真跑一本书","not_rerun":"D:\\kpe 的 pytest 14 与 chunks 样例；subtree split；两次 subtree pull（no-op 与 910c85c 升级）；KnowAtlas 全量套件","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":80524,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+<!-- HANDOFF {"at":"2026-10-27T07:06:11.186797+08:00","compactions":0,"doc":"docs/交接/2026-10-27-0706.md","draft":true,"goal":"上下文到 HANDOFF（93.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"HANDOFF","tokens":138103,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T07:08:11.133489+08:00","compactions":0,"doc":"docs/交接/2026-10-27-0708.md","draft":true,"goal":"上下文到 CRITICAL（107.8%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"CRITICAL","tokens":158471,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-27 07:20 知识主题：二次合并 + 命名去重 + 视图搜索高亮（R12）
+
+**触发**：用户报障「知识主题里好些重复名字的节点，比如『智能』（放射出去的子节点不同）」，
+要求「聚合算法别再有重名」+「加搜索高亮」；同时确认 #1 方向（分类页检索也要
+「集→簇→块→点」聚合，另排）。
+
+### 诊断（只读探针）
+
+| 探针 | 结论 |
+|---|---|
+| `temp/topic_dup_probe.py` | 1,003 主题，top500 里 **35 个重名 / 96 簇**（`智能`×14、`agent`×10…）；同名簇质心余弦 **66/182 对 ≥0.8**（最高 0.90） |
+| `temp/topic_merge_probe.py` | 合并敏感性：0.90→1,010 簇；**0.85→945（最大 126 点）**；0.80→662（最大 697）；0.75→280（最大 1,910，链式粘连） |
+
+结论：**0.72 单遍贪心把同一主题切成多块（主因）+ 命名只取共享词、1 词时退化单词名（放大器）**。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `src/knowatlas/pipeline/graph_topics.py` | 新增 `_merge_clusters`（规模降序质心贪心合并，默认 0.85，`merge=False` 可关）；`topic_clusters` 加 `merge`/`merge_threshold`，响应加 `merge_threshold`/`merged_from`、主题 `merged`；命名加规模后缀 `（N 点）`+ 圈号去重，命名词取**种子簇**（合并前最大簇） |
+| `src/knowatlas/web/api.py` | 端点加 `merge`/`merge_threshold`（夹 0.5–0.99） |
+| `src/knowatlas/web/static/graph.html` | 主题视图搜索框（其它视图隐藏）、命中金框高亮（`emphasis` borderWidth 3）、命中计数、Esc 清空 |
+| `tests/test_graph_topics.py` | 新增 4 例（合并记账、维度不齐、命名唯一/规模后缀、端到端 `merged_from`/`merged`） |
+| `docs/design/变更工单-2026-10-27-知识主题二次合并与命名去重.md`、`CHANGELOG.md` | 工单与变更记录 |
+
+### 验证（现场数字）
+
+- 真库 `topic_clusters(limit=80)`：`total` **1003 → 934**（`merged_from=1003`，23 个主题发生过合并，
+  最大 26 簇 / 113 点，抽读成员全是「智能体定义/循环/分类」——同主题，合并合理）；
+  top80 重名 **35 → 0**；泛名 0；耗时 **4.02 s**（R11 2.69 s，合并多约 1.3 s）。
+- 测试：**663 passed / 1 skipped**（原 659）；`tests/test_canary.py` 通过（EXIT=0）。
+- 浏览器（headless Edge 156 + CDP，真实点击 `#topicBtn`）：搜索「智能」→ 命中 **257 / 779** 节点
+  （30 个主题），金框像素 **3 → 1,944**，Esc 清空后 tip 复原；搜索框只在主题视图出现。
+
+### 坑（已写进注释与工单）
+
+簇心是成员均值、模长 <1，直接点积会系统性低估相似度——首版 0.85 阈值下真库**零合并**，
+而单测全绿（测试向量都是单位向量）。改成先投影单位球再比才生效。
+
+### 运行态
+
+`serve` 已重启：旧 PID 9540 停掉，新进程用
+`Start-Process uv run python -m knowatlas serve` 起（日志 `%TEMP%\knowatlas-serve.log`）。
+用户验收需 Ctrl+F5（graph.html 无版本参数，浏览器可能给旧缓存）。
+
+### 不要重跑
+
+- `pytest` 全量（663/1）与 canary；`temp/topic_check.py`、`temp/edge_topic_test.mjs`、
+  `temp/edge_shots.mjs`、`temp/edge_check_emphasis*.mjs`。
+- `temp/topic_dup_probe.py` / `temp/topic_merge_probe.py`（结论已固化进工单）。
+
+### 下一步
+
+1. 用户 Ctrl+F5 验收：重名是否消失、搜索高亮是否够醒目（不满意可调 `merge_threshold`）。
+2. 用户 #1：把主题聚合接进分类页检索（集→簇→块→点）——需单独方案 + 可能的新端点/新工单。
+3. 若觉得 934 个主题仍多，可再议「0.80 合并 + 规模上限」或按章分片。
+
+<!-- HANDOFF {"at":"2026-10-27T07:20:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-0720","draft":false,"goal":"知识主题二次合并（0.85）+ 命名去重 + 主题视图搜索高亮，已实现并实测","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② #1 分类页检索按主题聚合（需新工单/方案）","not_rerun":"pytest 全量 663/1 与 canary；temp/topic_check.py、temp/edge_*.mjs、两个 topic_*_probe.py","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":78834,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+
+<!-- HANDOFF {"at":"2026-10-27T07:20:12.006886+08:00","compactions":1,"doc":"docs/交接/2026-10-27-0720.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":82980,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
