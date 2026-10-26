@@ -218,21 +218,26 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
 .cmdk-item.on { color: var(--text-1); background: var(--accent-soft); }
 .cmdk-empty { padding: 14px 12px; font-size: var(--fs-12); color: var(--text-3); }
 
-/* ---- 条目卡（统一 .entry 令牌化：分类/检索/暂存/管理/词云/时间线各视图共用）---- */
+/* ---- 条目卡（统一 .entry 令牌化：分类/检索/暂存/管理/词云/时间线各视图共用）----
+   .pt-card 是词云 facet 的「知识点卡」：外观复用条目卡，但**不带 .entry 类**——
+   条目的通用钩子（点聚合/🆔/分类徽标/多选拖拽）都按 .entry[data-id] 选择器扫描，
+   点卡若冒充条目，同一 entry_id 的 N 个点会各自展开该条目全部 N 个点（19:25 报障）。 */
 .entry-host { display: flex; flex-direction: column; gap: 6px; }
-.entry { margin: 0; padding: 8px 12px; background: var(--bg-2);
+.entry, .pt-card { margin: 0; padding: 8px 12px; background: var(--bg-2);
          border: 1px solid var(--border-1); border-radius: var(--radius-card); }
-.entry:hover { border-color: var(--border-2); background: var(--bg-3); }
+.entry:hover, .pt-card:hover { border-color: var(--border-2); background: var(--bg-3); }
 .entry-main { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
 .entry-main .badge { margin-left: 0; }
-.entry a { font-size: var(--fs-13); font-weight: 500; color: var(--text-1);
+.entry a, .pt-card a { font-size: var(--fs-13); font-weight: 500; color: var(--text-1);
            text-decoration: none; }
-.entry a:hover { color: var(--accent-text); text-decoration: underline; }
+.entry a:hover, .pt-card a:hover { color: var(--accent-text); text-decoration: underline; }
 .entry-snippet { margin-top: 4px; font-size: var(--fs-12); line-height: 1.6;
                  color: var(--text-2); }
 /* 知识点主通道（批次 86）：点卡片左缘强调线 + 溯源 chips */
 .entry.point-hit { border-left: 2px solid var(--accent-text, #4a9eff);
                    padding-left: 8px; }
+/* 词云点卡（19:25 报障修复）：知识点卡左缘强调线，与 point-hit 同一视觉语言 */
+.pt-card { border-left: 2px solid var(--accent-text, #4a9eff); padding-left: 8px; }
 .point-sources { margin-top: 4px; font-size: var(--fs-12); color: var(--text-3); }
 .point-sources a { color: var(--accent-text, #4a9eff); text-decoration: none;
                    margin: 0 2px; }

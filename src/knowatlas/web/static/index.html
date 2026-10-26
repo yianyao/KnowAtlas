@@ -1363,10 +1363,12 @@ async function renderCloudTab() {
     facet.innerHTML = `<div style="font-size:13px;margin:6px 0">范围「${(d2.focus && d2.focus.name) || "全库"}」
       含「<b>${cloudWord}</b>」的知识点 ${pts.length} 个：</div>`
       + (pts.length ? pts.map(p =>
-          `<div class="entry" data-id="${p.entry_id}"><span class="badge">◆ 知识点</span>`
-          + `<a href="#" class="pt-open" data-eid="${p.entry_id}">${p.title}</a>`
-          + `<div style="margin:4px 0;line-height:1.6">${(p.text || "").slice(0, 160)}</div>`
-          + `<small style="opacity:.6">溯源：${p.title}</small></div>`).join("")
+          // 点卡（19:25 报障修复）：不能用 .entry —— 条目的通用钩子按 .entry[data-id]
+          // 扫，19 个点同属一个条目时会各挂一份「34 点」；标题用点摘要，避免 19 张同名。
+          `<div class="pt-card" data-eid="${p.entry_id}"><span class="badge">◆ 知识点</span>`
+          + `<a href="#" class="pt-open" data-eid="${p.entry_id}">${_escHtml(p.summary || (p.text || "").slice(0, 40) || p.title)}</a>`
+          + `<div style="margin:4px 0;line-height:1.6">${_escHtml((p.text || "").slice(0, 160))}</div>`
+          + `<small style="opacity:.6">溯源：${_escHtml(p.title)}</small></div>`).join("")
         : "")
       + `<div style="font-size:13px;margin:10px 0 6px">含「<b>${cloudWord}</b>」的可消费条目 ${d2.entries.length} 条：</div>`
       + (d2.entries.length ? d2.entries.map(x =>

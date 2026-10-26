@@ -156,3 +156,8 @@ def test_cloud_frontend_probes():
     assert "currentCat = b.dataset.id" in cloud
     # 探针④：字号 ∝ √权重
     assert "Math.sqrt(w.count / max)" in cloud
+    # 回归探针（2026-10-26 19:25 报障）：词云点卡必须用独立 .pt-card，不得冒充
+    # .entry[data-id] —— 条目的通用钩子（点聚合/🆔/分类徽标/多选拖拽）都按
+    # .entry[data-id] 扫描，N 个点同属一个条目时会各自展开该条目全部 N 个点。
+    assert 'class="pt-card"' in cloud
+    assert '<div class="entry" data-id="${p.entry_id}">' not in cloud
