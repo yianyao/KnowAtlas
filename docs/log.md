@@ -1605,3 +1605,44 @@ uv run --with zstandard python tools/context_probe.py      # 本会话 66.5%（9
 
 `session-7d7ad876-3a1b-4cee-8500-addb58131143`，compactions=0，tokens≈97,738，
 baseline 147,059，effective 66.5%（OK），2026-10-26T21:52+08:00。
+
+## 2026-10-26 22:00 条目原文站内代理（修「反查可溯源，但打不开」/ 653 passed）
+
+### 当前目标
+
+用户报障「反查可溯源，但打不开」→ 已定位为 `file://` 假链接并交付站内代理端点；**待用户 Ctrl+F5 验收**。
+
+### 做了什么
+
+- **定位**：反查面板 L690 把 `it.locator` 原样塞 `<a href>`；真库 30 条 active（29 folder + 1 emmx）中 29 条 locator = `file://<相对 D:/sData/KnowLedge>`（多为 PDF）。`file://` 首段被当主机名 + http 页禁跳 file:// → 必失败。`index.html` 12 处同样。
+- **接口** `web/api.py::entry_file`：`GET /api/entries/{id}/file` 只读代理（roots 逐根解析 + realpath `is_relative_to` 包含性；`..`/盘符 → 403 OUT_OF_ROOT；PDF/图片 inline、md/txt text/plain、HTML/SVG/Office/emmx 强制 attachment 防同源脚本读走写令牌；一律 nosniff；零写库零 LLM）。
+- **前端**：`ui.js` 新增 `ka.rawHref`/`ka.linkOrText`（http(s) 直开 / `file://`+entryId → 代理 / 其它 scheme → 空串退化纯文本）；`graph.html` 4 处（点卡溯源、条目「打开原文」、反查面板、条目节点点击）、`index.html` 12 处全部换用；`ui.js` 引用加 `?v=20261026` + 页面侧兜底。
+- **测试**：新增 `tests/test_entry_file.py` 10 例；`test_web_api.py` 静态探针改断言 `rawHref` 且 locator 不得原样进 href；全量 **653 passed / 1 skipped**（22:03），canary 六项零漂移。
+- **实测**：线上 `9f118bf8f0d79592` → 200 `application/pdf` inline nosniff（11.6 MB）、`4e3fcf4dc53d4a88` → 5.6 MB；headless Edge 反查面板 `/api/entries/75781c6e900f6fca/file` fetch 200 text/plain；首页 entryHTML/entryCard/预览「打开原文」均指代理，emmx 退化纯文本，无 console 异常。
+
+### 下一步（按序）
+
+1. 用户 `Ctrl+F5` → `http://127.0.0.1:8420/graph.html` → ◆点层 → 点节点 → 🔍 反查 → 点溯源条目（应新标签打开 PDF）。
+2. 首页条目标题 / 预览面板「打开原文」同样可开。
+3. 剩余候选：R10（LLM 键缺失被静默降级）、8.3/8.4 端到端验收。
+
+### 不要重跑
+
+- 全量测试（653 passed / 1 skipped，22:03）；canary（零漂移）。
+- 站内代理真库实测（2 个 PDF 200 + CDP 脚本 `temp/ui_entry_file_check.js`，22:00）。
+- serve 已重启（PID 12672，载本轮代码；前端改动 Ctrl+F5 即生效）。
+
+### 验证命令
+
+```powershell
+curl -s -D - -o NUL "http://127.0.0.1:8420/api/entries/9f118bf8f0d79592/file"   # 200 application/pdf inline
+uv run python -m pytest -o addopts= -q                                            # 653 passed, 1 skipped
+```
+
+### 会话指纹
+
+`session-36dab62e-d79a-41ff-80d4-2318745065a9`，compactions=0，tokens≈138,943，
+baseline 147,059，effective 94.5%（HANDOFF），2026-10-26T22:00+08:00。
+
+<!-- HANDOFF {"at":"2026-10-26T22:00:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2200","draft":false,"goal":"条目原文站内代理已交付（653 passed），待用户 Ctrl+F5 验收反查与首页「打开原文」","host":"dsh","kind":"handoff","next":"用户验收 graph.html 反查面板与 index.html 打开原文；之后可做 R10 或 8.3/8.4 端到端验收","not_rerun":"全量测试（653 passed / 1 skipped）；站内代理真库实测；serve 已重启（PID 12672）","schema":1,"session":"session-36dab62e-d79a-41ff-80d4-2318745065a9","status":"HANDOFF","tokens":138943,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+

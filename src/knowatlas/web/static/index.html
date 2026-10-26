@@ -395,9 +395,19 @@
     <button type="button" id="add-url-btn">收录</button>
   </div>
 </dialog>
-<script src="/ui.js"></script>
+<script src="/ui.js?v=20261026"></script>
 <script src="/vendor/echarts.min.js"></script>
 <script>
+// 原文链接口径（2026-10-26 P4 后置项 B，实现见 ui.js）：file:// 走站内代理
+// /api/entries/<id>/file，http(s) 直开，emmx:// 等不出链接（退化为纯文本）。
+// 兜底：ui.js 被浏览器缓存成旧版时不至于整页 TypeError（退化为不出链接）。
+const rawHref = ka.rawHref || (() => "");
+const linkOrText = ka.linkOrText || (function (href, labelHtml, attrs) {
+  return href
+    ? '<a href="' + href + '" target="_blank" rel="noopener"' + (attrs || "") + ">"
+      + labelHtml + "</a>"
+    : "<span>" + labelHtml + "</span>";
+});
 let pathToId = {};     // 派生路径 → 分类 id（供移动/合并输入目标）
 let currentCat = null; // 当前选中分类 id
 let refreshCurrent = null; // 当前视图刷新器——写操作成功后局部刷新，不跳转
@@ -554,7 +564,9 @@ async function opMerge(n) {
 const SRC_LABEL = { folder: "文件", bookmark: "书签", manual: "手动", emmx: "脑图", mail: "邮件", expand: "扩散", opml: "OPML" };
 function srcLabel(t) { return SRC_LABEL[t] || t; }
 function entryHTML(e) {
-  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><div class="entry-main"><a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
+  return `<div class="entry" data-id="${e.id}" data-force="${(e.meta && e.meta.force_form) || ""}"><div class="entry-main">`
+       + linkOrText(rawHref(e.locator, e.id), e.title,
+                    ` class="entry-title-link" data-id="${e.id}"`)
        + `<span class="badge">${srcLabel(e.source_type)}</span>`
        + `<button class="rename-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}" title="改名（批次 71：写覆盖层，重同步不冲回）">✏️</button>`
        + `<button class="move-btn" data-id="${e.id}" data-title="${e.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
@@ -582,8 +594,11 @@ async function openPreview(id) {
   document.getElementById("pv-body").hidden = false;
   document.getElementById("pv-empty").hidden = true;
   const open = document.getElementById("pv-open");
-  open.href = d.locator || "#";
-  open.hidden = !d.locator || (d.locator || "").startsWith("emmx://");  // emmx:// 浏览器打不开（批次 37 纪律：不渲染假链接）
+  // file:// 条目 → 站内代理（PDF 直接读，见 ui.js::rawHref）；emmx:// 无可用 href，
+  // 下方走站内大纲树；两者都拿不到就藏按钮（批次 37 纪律：不渲染假链接）
+  const openHref = rawHref(d.locator, id);
+  open.href = openHref || "#";
+  open.hidden = !openHref;
   // 脑图大纲树（批次 91）：emmx 整图条目站内树形浏览——读 .emmx 重建树，
   // 不再依赖外部 MindMaster；拉取失败（文件缺失/降级条目）静默回落正文预览。
   const mtree = document.getElementById("pv-mtree");
@@ -1372,7 +1387,7 @@ async function renderCloudTab() {
         : "")
       + `<div style="font-size:13px;margin:10px 0 6px">含「<b>${cloudWord}</b>」的可消费条目 ${d2.entries.length} 条：</div>`
       + (d2.entries.length ? d2.entries.map(x =>
-          `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+          `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
           + `<span class="badge">${srcLabel(x.source_type)}</span>`
           + `<button class="move-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
           + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
@@ -1476,7 +1491,7 @@ async function drillBucket(key) {
   if (!box) return;
   box.innerHTML = `<div style="font-size:13px;margin:6px 0">「<b>${key}</b>」的可消费条目 ${d.entries.length} 条：</div>`
     + (d.entries.length ? d.entries.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
         + `<span class="badge">${srcLabel(x.source_type)}</span>`
         + `<button class="move-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">⇄改分类</button>`
         + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
@@ -1490,7 +1505,8 @@ function entryCard(e) {
   // ⌘/Ctrl+点击标题仍在新标签打开原文（bindEntryButtons 里保留修饰键直通）。
   // 批次 92（裁决 #13）：条目区从点反查为主——via=point 的条目带徽标注明来源。
   return `<div class="entry" data-id="${e.id}"><div class="entry-main">`
-    + `<a href="${e.locator}" target="_blank" rel="noopener" class="entry-title-link" data-id="${e.id}">${e.title}</a>`
+    + linkOrText(rawHref(e.locator, e.id), e.title,
+                 ` class="entry-title-link" data-id="${e.id}"`)
     + (e.via === "point" ? `<span class="badge" title="由命中知识点的溯源反查得到（非全文直击）">◆ 点反查</span>` : "")
     + e.channels.map(ch => `<span class="badge" title="关联解释：${ch.replace(/"/g, "&quot;")}">${chLabel(ch)}</span>`).join("")
     + `<button class="wb-focus-btn" data-id="${e.id}" title="以该条目为焦点进入放射视图">🎯 放射</button>`
@@ -1616,7 +1632,8 @@ async function renderRadiateTab() {
     + Object.keys(groups).map(key =>
         `<div class="wb-channel">${chTitle(key)}（${groups[key].length}${data.truncated && data.truncated[key.replace(":", "")] ? `，还有 ${data.truncated[key.replace(":", "")]} 条未显示` : ""}）</div>`
         + groups[key].map(n =>
-            `<div class="entry"><a href="${n.locator || "#"}" target="_blank" rel="noopener">${n.name}</a>`
+            `<div class="entry">` + linkOrText(
+              rawHref(n.locator, n.kind === "entry" ? String(n.id).slice(2) : ""), n.name)
             + `<span class="badge" title="关联解释">${n.reasons.map(chLabel).join("；")}</span>`
             + (n.kind === "entry" ? `<button class="wb-focus-btn" data-eid="${n.id.slice(2)}" title="以该条目为新焦点继续放射">🎯 切焦点</button>` : "")
             + `</div>`).join("")).join("");
@@ -1811,7 +1828,7 @@ async function mgmtNonk() {
   const body = _mgmtBody();
   body.innerHTML = data.entries.length
     ? data.entries.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
         + `<span class="badge">${srcLabel(x.source_type)}</span>`
         + (x.reason ? `<span class="badge" title="价值守卫判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
         + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
@@ -1839,7 +1856,7 @@ async function mgmtDead() {
   const data = await (await fetch("/api/dead-links")).json();
   const body = _mgmtBody();
   const row = (x, tag, code) =>
-    `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+    `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
     + `<span class="badge">${tag}${x.code ? " " + x.code : ""}</span>`
     + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button></div>`;
   const all = [...data.dead.map(x => row(x, "失效", x.code)),
@@ -1870,7 +1887,7 @@ async function mgmtFresh() {
   const body = _mgmtBody();
   body.innerHTML = rows.length
     ? rows.map(x =>
-        `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
         + `<span class="badge">${srcLabel(x.source_type)}</span>`
         + `<span class="badge">${flagLabel[x.flag] || x.flag}</span>`
         + (x.reason ? `<span class="badge" title="老化规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
@@ -1910,7 +1927,7 @@ async function mgmtErrata() {
         const notes = (x.errata || []).map(n =>
           `<div style="margin:4px 0 0 16px;padding:4px 8px;border-left:3px solid var(--warning);font-size:12px">`
           + `📌 勘误：${n.text}${n.evidence ? `（依据：${n.evidence}）` : ""}</div>`).join("");
-        return `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        return `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
           + `<span class="badge">${srcLabel(x.source_type)}</span>`
           + (x.kind ? `<span class="badge" title="${(x.reason || "").replace(/"/g, "&quot;")}">${kindLabel[x.kind] || x.kind}</span>` : "")
           + (x.evidence ? `<span class="badge" title="可核查依据：${x.evidence.replace(/"/g, "&quot;")}">📎 依据</span>` : "")
@@ -1925,9 +1942,8 @@ async function mgmtErrata() {
   const codeLabel = { fact_error: "事实说错", overclaim: "绝对化表述" };
   const pointHtml = list.length
     ? list.map(p => {
-        const srcs = (p.sources || []).map(s => s.locator
-          ? `<a href="${s.locator}" target="_blank" rel="noopener">${_escHtml(s.title || s.entry_id)}</a>`
-          : _escHtml(s.title || s.entry_id)).join(" · ");
+        const srcs = (p.sources || []).map(s =>
+          linkOrText(rawHref(s.locator, s.entry_id), _escHtml(s.title || s.entry_id))).join(" · ");
         return `<div class="pt-item" data-pid="${p.id}">`
           + (p.reason_code ? `<span class="badge">${codeLabel[p.reason_code] || p.reason_code}</span>` : "")
           + (p.stage === "seed" ? `<span class="badge" title="种子回放（零 LLM 费）">种子</span>` : "")
@@ -1980,7 +1996,7 @@ async function mgmtRejected() {
               ? `<span class="badge" title="冷却期内可随时恢复；期满自动物理删除">⏳ 冷却剩 ${x.cooling_days_left} 天</span>`
               : `<span class="badge" title="冷却期已满，下次 ksync 自动物理删除">⏳ 冷却期满</span>`)
           : `<span class="badge" title="历史舍弃（未设冷却起点），不会自动删除">不计冷却</span>`;
-        return `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
+        return `<div class="entry" data-id="${x.id}">` + linkOrText(rawHref(x.locator, x.id), x.title)
           + `<span class="badge">${srcLabel(x.source_type)}</span>` + cool
           + `<button class="restore-btn" data-id="${x.id}">↩恢复</button></div>`;
       }).join("")

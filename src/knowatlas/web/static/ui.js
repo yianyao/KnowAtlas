@@ -112,10 +112,33 @@
     p.resolve(val);
   }
 
+  // ---- 原文链接口径（2026-10-26 P4 后置项 B）----
+  // file:// 存的是「配置根相对路径」：浏览器既把首段当主机名、又禁止 http 页面跳
+  // file://，原样塞进 href 就是假链接（用户报障「反查可溯源，但打不开」）。统一口径：
+  //   http(s)            → 直接开原文
+  //   file:// + entryId  → 站内代理 /api/entries/<id>/file（服务端按 roots 解析，PDF 内联）
+  //   其它（emmx/synth…）→ 空串，调用方退化为 locator 纯文本 + 复制（第三十七批纪律）
+  function rawHref(locator, entryId) {
+    var loc = String(locator == null ? "" : locator);
+    if (/^https?:/i.test(loc)) return loc;
+    if (loc.indexOf("file://") === 0 && entryId) {
+      return "/api/entries/" + encodeURIComponent(String(entryId)) + "/file";
+    }
+    return "";
+  }
+  // 行内渲染：能开就 <a>，不能开就纯文本（不出现「点了没反应」的空链接）
+  function linkOrText(href, labelHtml, attrs) {
+    if (!href) return "<span>" + labelHtml + "</span>";
+    return '<a href="' + href + '" target="_blank" rel="noopener"'
+      + (attrs || "") + ">" + labelHtml + "</a>";
+  }
+
   window.ka = {
     toast: toast,
     alert: function (msg, title) { return openDialog({ mode: "alert", msg: msg, title: title }); },
     confirm: function (msg, title) { return openDialog({ mode: "confirm", msg: msg, title: title }); },
-    prompt: function (msg, def, title) { return openDialog({ mode: "prompt", msg: msg, def: def, title: title }); }
+    prompt: function (msg, def, title) { return openDialog({ mode: "prompt", msg: msg, def: def, title: title }); },
+    rawHref: rawHref,
+    linkOrText: linkOrText
   };
 })();

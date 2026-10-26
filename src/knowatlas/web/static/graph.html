@@ -109,7 +109,7 @@
 <button id="fsExit" title="退出全屏（Esc）">⤢ 退出全屏</button>
 <div id="revpanel" hidden></div>
 <div id="nodecard" hidden></div>
-<script src="/ui.js"></script>
+<script src="/ui.js?v=20261026"></script>
 <script>
 const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
                      llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
@@ -125,6 +125,10 @@ function fmtReason(r) {
   return tail ? `${head}·${tail}` : `${head}:${raw}`;
 }
 const KIND_NAME = { category: "分类", entry: "条目", point: "知识点" };
+// 原文链接口径（2026-10-26 P4 后置项 B，实现见 ui.js）：file:// 走站内代理
+// /api/entries/<id>/file，http(s) 直开，emmx:// 等不出假链接（第三十七批纪律）。
+// 兜底：ui.js 被浏览器缓存成旧版时不至于整页 TypeError（退化为不出链接）。
+const rawHref = ka.rawHref || (() => "");
 const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
                         same_host: "同域名", thread: "同线索", host_member: "域内条目",
                         same_book: "同书", same_section: "同章节", sim: "语义近邻",
@@ -214,13 +218,14 @@ function showCard(d, cx, cy) {
   keepCard();
   cardKey = String(d.id);
   // 知识点节点（批次 88 主题视图 / P4 点级图）：text 直显 + 书籍章节路径 + 溯源链接，
-  // 不 fetch 条目概要；点层藏了条目卡，溯源链接就是原文入口（http(s) 才出真链接）
+  // 不 fetch 条目概要；点层藏了条目卡，溯源链接就是原文入口
+  // （file:// 走站内代理，其它 scheme 仍是纯文本——见 ui.js::rawHref）
   if (d._point || d.kind === "point") {
     const srcs = (d.sources || []).map(s => {
       const title = String(s.title || s.entry_id || "");
-      const loc = s.locator || "";
-      return /^https?:/i.test(loc)
-        ? `<a class="copen" href="${loc}" target="_blank" rel="noopener">${title}</a>`
+      const href = rawHref(s.locator, s.entry_id);
+      return href
+        ? `<a class="copen" href="${href}" target="_blank" rel="noopener">${title}</a>`
         : title;
     }).join("；");
     nodecard.innerHTML = `<div class="ct">◆ 知识点</div><div class="cs"></div>`
@@ -238,18 +243,17 @@ function showCard(d, cx, cy) {
   if (d.path) info.push(`<div class="cp">路径：${d.path}</div>`);
   if (d.reasons && d.reasons.length)
     info.push(`<div class="cp">关联：${d.reasons.map(fmtReason).join("；")}</div>`);
-  // 打开原文只对 http(s) 出真链接；file://（配置根相对路径）/emmx://（脑图引用）
-  // 浏览器打不开（第三十七批：不再渲染假链接，改 locator 文本 + 复制）
+  // 打开原文（第三十七批纪律 + P4 后置项 B）：http(s) 直开；file:// 条目走站内代理
+  // /api/entries/<id>/file（浏览器打不开本地路径）；emmx:// 等仍不出假链接，退 locator 文本 + 复制
   const loc = d.locator || "";
-  let openPart = "";
-  if (/^https?:/i.test(loc))
-    openPart = `<a class="copen" href="${loc}" target="_blank" rel="noopener">▶ 打开原文 ↗</a>`;
-  else if (loc)
-    openPart = `<span class="cpath" title="${loc.startsWith("file://")
-      ? "本地文件（配置根相对路径），复制后在文件管理器打开"
-      : "脑图节点引用，请在 MindMaster 中打开对应文件"}">${loc}</span>`
-      + `<button class="ccopy" data-loc="${loc.replace(/"/g, "&quot;")}">⧉ 复制</button>`;
   const eid = d.kind === "entry" ? String(d.id).slice(2) : "";
+  const href = rawHref(loc, eid);
+  let openPart = "";
+  if (href)
+    openPart = `<a class="copen" href="${href}" target="_blank" rel="noopener">▶ 打开原文 ↗</a>`;
+  else if (loc)
+    openPart = `<span class="cpath" title="脑图节点引用，请在 MindMaster 中打开对应文件">${loc}</span>`
+      + `<button class="ccopy" data-loc="${loc.replace(/"/g, "&quot;")}">⧉ 复制</button>`;
   nodecard.innerHTML =
     `<div class="ct">${d.name}（${KIND_NAME[d.kind] || d.kind}）</div>` + info.join("")
     + (d.kind === "entry" ? `<div class="cp">ID：<span class="ccid" data-cid="${eid}"
@@ -667,7 +671,12 @@ chart.on("click", p => {
   if (d.kind === "point" && String(d.id).startsWith("p:")) { showRadiate(String(d.id)); return; }
   if (radial && (d.kind === "category" || d.kind === "entry")) { showRadiate(String(d.id)); return; }
   if (d.kind === "category" && String(d.id).startsWith("c:")) showSubtree(String(d.id).slice(2));
-  else if (d.kind === "entry" && d.locator) window.open(d.locator, "_blank", "noopener");
+  else if (d.kind === "entry") {
+    // file:// 条目 → 站内代理打开原文；emmx:// 等浏览器打不开的就别装能开
+    const href = rawHref(d.locator, String(d.id).slice(2));
+    if (href) window.open(href, "_blank", "noopener");
+    else if (d.locator) tip.textContent = "该条目原文浏览器打不开（脑图请在 MindMaster 打开）——悬停卡片可复制路径。";
+  }
 });
 
 // ---- 反查面板：哪些焦点能到达当前焦点 ----
@@ -682,13 +691,15 @@ document.getElementById("reverseBtn").onclick = async () => {
   revpanel.innerHTML = `<h3>🔍 反查：谁指向「${data.focus.id}」`
     + `<button class="rclose" title="关闭（Esc）">✕</button></h3>` +
     (data.items.length ? data.items.map(it => {
+      // 点反查的溯源条目带 locator → 能开就直开（file:// 走站内代理；emmx:// 仍是纯文本，
+      // 第三十七批纪律：不渲染打不开的假链接——用户 2026-10-26 报障的就是这里）
+      const entryHref = it.kind === "entry" ? rawHref(it.locator, String(it.id).slice(2)) : "";
       const inner = it.kind === "thread"
         ? `<a href="${it.url}" target="_blank" rel="noopener">${it.name} ↗</a>`
         : (it.kind === "category"
             ? `<span class="crumbit" data-cat="${it.id.slice(2)}" style="cursor:pointer;color:var(--accent-text)">${it.name}</span>`
-            // 点反查的溯源条目带 locator → 直接开原文（P4 后置项）
-            : (it.locator
-                ? `<a href="${it.locator}" target="_blank" rel="noopener">${it.name} ↗</a>`
+            : (entryHref
+                ? `<a href="${entryHref}" target="_blank" rel="noopener">${it.name} ↗</a>`
                 : it.name));
       return `<div class="ritem"><span class="rkind">${KC[it.kind] || it.kind}</span>${inner}`
            + (it.path ? `<br><span class="rpath">路径：${it.path}</span>` : "")

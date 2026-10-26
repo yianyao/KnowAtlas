@@ -4,6 +4,14 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 条目原文站内代理（修「反查可溯源，但打不开」，2026-10-26）
+
+- **为什么**：用户 Ctrl+F5 验收 P4 点级反查后报障「反查可溯源，但打不开」。定位：反查面板把 `it.locator` 原样塞进 `<a href>`，而真库 30 条 active 条目里 **29 条 folder 的 locator 是 `file://<相对 [sources.folders].roots 的路径>`**（多数 PDF）——`file://` 后第一段被浏览器当主机名，且 http 页面跳 `file://` 一律被拦；`index.html` 12 处条目链接同样是假链接。不是数据问题，是第三十七批「不渲染打不开的假链接」纪律在反查面板（21:32 新加代码）与首页列表上漏守。
+- **接口**（`web/api.py`）：新增只读 `GET /api/entries/{entry_id}/file`——按 roots 逐根解析 `file://<rel>`，`realpath` 必须 `is_relative_to` 根（`..`/反斜杠/盘符绝对路径解析前即 403 `OUT_OF_ROOT`）；PDF/图片 `inline`、md/txt `text/plain; charset=utf-8`、**HTML/SVG/Office/emmx 强制 `attachment` + `application/octet-stream`**（否则以本服务同源执行、能读走 localStorage 写令牌）；一律带 `nosniff`；错误码 `NOT_FOUND`/`NOT_SUPPORTED`/`FILE_MISSING`/`OUT_OF_ROOT`，不回显绝对路径。零写库、零 LLM。
+- **前端**（`ui.js` + `graph.html` + `index.html`）：新增共享 `ka.rawHref(locator, entryId)`/`ka.linkOrText()`——http(s) 直开、`file://`+entryId 走站内代理、其它 scheme 返回空串（退化纯文本 + ⧉ 复制）。替换 graph.html 四处（点卡溯源/条目「打开原文」/反查面板/条目节点点击）与 index.html 12 处 `href="${locator}"`；`ui.js` 引用加 `?v=20261026` 防旧缓存，页面侧留 `ka.rawHref` 缺失兜底。
+- **测试**：新增 `tests/test_entry_file.py` 10 例（PDF 内联 / md 文本 / HTML 强制下载 / 子目录相对路径 / 缺失 404 / `..` 与盘符 403 / emmx+https 404 / 未知条目 404）；`tests/test_web_api.py` 静态探针改为断言 `rawHref` 与「locator 不得原样进 href」。全量 **653 passed / 1 skipped**（原 643）；canary 六项零漂移。
+- **实测**：线上 `GET /api/entries/9f118bf8f0d79592/file` → 200 `application/pdf` + `inline` + `nosniff`（11.6 MB）；`4e3fcf4dc53d4a88` → 5.6 MB 同款；headless Edge 反查面板链路 `/api/entries/75781c6e900f6fca/file` fetch 200 `text/plain; charset=utf-8`；首页 `entryHTML/entryCard/预览面板「打开原文」` 均指向代理，emmx 条目退化为纯文本，控制台无异常。
+
 ### 维护 · 正文库孤儿回收（TODO 8.15，2026-10-26）
 
 - **为什么**：`content_hash` 变了（重抓 / 换解析通道 / 改清洗规则）时，旧正文只按**引用计数**回收——条目一旦换 hash 或消失，旧块就永久留在 `content_store`；`purge_source` 管不到这条路径。97b 重灌后实测留下 6 行（2,552,280 字符）无条目引用的正文，白占库体积。**正文是缓存**（条目/点/向量一字不在其中），删了可重抓，所以是安全的显式回收。

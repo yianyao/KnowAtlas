@@ -14,9 +14,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from fastapi import Body, FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ..datalayer.db import REJECT_COOLING_DAYS
 from ..errors import AdapterError, ContractError
@@ -367,6 +368,88 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 {"error": {"code": "PARSE_FAILED", "message": str(e)}},
                 status_code=422)
         return {"id": entry_id, "title": entry.title, **tree}
+
+    # ---- 条目原文站内代理（2026-10-26 P4 后置项 B：修「反查可溯源，但打不开」） ----
+    # file:// 存的是「配置根相对路径」（可迁移铁律），浏览器既把首段当主机名、又禁止
+    # http 页面跳 file:// —— 由服务端按 [sources.folders].roots 解析成绝对路径再流式返回。
+    # 只读、零写库、零 LLM：Host/Origin 已由中间件守，路径做根内包含性校验。
+    _INLINE_IMAGE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                     ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
+    # 纯文本类：走 text/plain，浏览器当正文显示（不会执行）
+    _INLINE_TEXT = {".md", ".markdown", ".txt", ".csv", ".log", ".json", ".yaml", ".yml"}
+
+    def _file_locator_rel(locator: str) -> str | None:
+        """file://<rel> → rel（口径同 fetchers/file_reader.py）；非法返回 None。
+
+        拒空串、反斜杠、`..`、盘符绝对路径——file:// 只允许配置根相对路径（§5 可迁移铁律）。
+        """
+        parts = urlparse(locator)
+        if parts.scheme != "file":
+            return None
+        rel = unquote(parts.netloc + parts.path).lstrip("/")
+        if not rel or "\\" in rel or ".." in Path(rel).parts:
+            return None
+        if len(rel) >= 2 and rel[1] == ":":
+            return None
+        return rel
+
+    def _file_response(path: Path) -> Response:
+        """按后缀分流：可安全内联的才 inline，其余强制下载。
+
+        HTML/SVG/XML 若 inline 会以**本服务同源**执行，能读走 localStorage 里的
+        写令牌 → 一律 attachment + octet-stream（Office/emmx 浏览器本来也渲染不了）。
+        """
+        suffix = path.suffix.lower()
+        if suffix == ".pdf":
+            media_type, disp = "application/pdf", "inline"
+        elif suffix in _INLINE_IMAGE:
+            media_type, disp = _INLINE_IMAGE[suffix], "inline"
+        elif suffix in _INLINE_TEXT:
+            media_type, disp = "text/plain; charset=utf-8", "inline"
+        else:
+            media_type, disp = "application/octet-stream", "attachment"
+        return FileResponse(path, media_type=media_type, filename=path.name,
+                            content_disposition_type=disp,
+                            headers={"X-Content-Type-Options": "nosniff"})
+
+    @app.get("/api/entries/{entry_id}/file")
+    def entry_file(entry_id: str):
+        """条目原文（浏览器可打开的站内代理；只读）。
+
+        `file://` 条目（文件夹源）→ 按 `[sources.folders].roots` 逐根解析成绝对路径，
+        realpath 必须落在根内（符号链接跑出根按不存在处理，错误响应不回显绝对路径）；
+        PDF/图片/文本内联，其余附件下载。非 `file://`（https/emmx/…）→ 404 NOT_SUPPORTED，
+        前端据此退化为纯文本（第三十七批纪律：不渲染打不开的假链接）。
+        """
+        entry = dl.get_entry(entry_id)
+        if entry is None:
+            return JSONResponse(
+                {"error": {"code": "NOT_FOUND", "message": "条目不存在"}},
+                status_code=404)
+        loc = entry.locator or ""
+        if not loc.startswith("file://"):
+            scheme = loc.split("://", 1)[0] if "://" in loc else "空"
+            return JSONResponse(
+                {"error": {"code": "NOT_SUPPORTED",
+                           "message": f"该条目原文不是本地文件（{scheme} 链接），"
+                                      "网页条目直接在浏览器打开，脑图条目看站内大纲树"}},
+                status_code=404)
+        rel = _file_locator_rel(loc)
+        if rel is None:
+            return JSONResponse(
+                {"error": {"code": "OUT_OF_ROOT",
+                           "message": "locator 不是配置根相对路径"
+                                      "（禁 .. / 反斜杠 / 盘符绝对路径）"}},
+                status_code=403)
+        for root in (cfg.get("sources.folders.roots") or []):
+            root_path = Path(str(root)).resolve()
+            target = (root_path / rel).resolve()
+            if target.is_file() and target.is_relative_to(root_path):
+                return _file_response(target)
+        return JSONResponse(
+            {"error": {"code": "FILE_MISSING",
+                       "message": f"文件不在 [sources.folders].roots 下或已被移动：{rel}"}},
+            status_code=404)
 
     @app.post("/api/points/{point_id}/explain")
     async def point_explain(point_id: str, request: Request,

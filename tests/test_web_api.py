@@ -278,9 +278,17 @@ def test_static_pages_consumption_defaults():
     from knowatlas.web.app import _STATIC_DIR
 
     graph = (_STATIC_DIR / "graph.html").read_text(encoding="utf-8")
-    assert "/^https?:/i.test(loc)" in graph       # 只有 http(s) 渲染「打开原文」链接
-    assert "ccopy" in graph                       # file:// / emmx:// 走 locator+复制
+    # 原文链接口径（2026-10-26 P4 后置项 B）：file:// 走站内代理 /api/entries/<id>/file，
+    # http(s) 直开，emmx:// 退 locator+复制；locator 不得原样塞进 href（假链接）
+    ui = (_STATIC_DIR / "ui.js").read_text(encoding="utf-8")
+    assert "rawHref" in ui and "/api/entries/" in ui
+    assert "rawHref" in graph and "ccopy" in graph
+    assert 'href="${it.locator}"' not in graph
     index = (_STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "rawHref" in index
+    for tmpl in ('href="${e.locator}"', 'href="${x.locator}"',
+                 'href="${n.locator', 'href="${s.locator}"'):
+        assert tmpl not in index
     # 六页签齐全（第五十九批）：检索 / 关系图 / 串联 / 词云 / 时间线 / 管理
     for v in ("search", "graph", "thread", "cloud", "timeline", "mgmt"):
         assert f'data-view="{v}"' in index
