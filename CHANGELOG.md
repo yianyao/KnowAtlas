@@ -4,6 +4,16 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 维护 · 正文库孤儿回收（TODO 8.15，2026-10-26）
+
+- **为什么**：`content_hash` 变了（重抓 / 换解析通道 / 改清洗规则）时，旧正文只按**引用计数**回收——条目一旦换 hash 或消失，旧块就永久留在 `content_store`；`purge_source` 管不到这条路径。97b 重灌后实测留下 6 行（2,552,280 字符）无条目引用的正文，白占库体积。**正文是缓存**（条目/点/向量一字不在其中），删了可重抓，所以是安全的显式回收。
+- **数据层**（`datalayer/db.py::gc_orphan_contents`）：孤儿 = `content_store` 中不存在任何 `entries.content_hash` 指向的行；**阈值保护** `max_age_days`（默认 1 天）防「刚抓完、条目尚未 upsert」的竞态，`fetched_at` 缺失或不可解析的历史行按「最老」处理（不可证明是新的就当老的，缓存风险仅为多抓一次）；实跑只删 `content_store` + `content_fts`（正文检索索引同步清，不留悬挂行），写一条 `task_log(content_gc)` 审计；`dry_run` 零写入、不记日志。**SQL 全部在 datalayer 内**（防腐化红线）。
+- **CLI**（`cli.py`）：`kcheck --gc-content [--gc-days N] [--dry-run]`——该模式不联网、不调 LLM，与链接体检互斥走早退分支。
+- **测试**：新增 `tests/test_content_gc.py`（4 例：dry-run 零写入、只删孤儿且 `content_fts` 同步清 + 审计一次、幂等（重跑 eligible/deleted 0）、`--gc-days 0` 连过新孤儿一起收）。
+- **实测（真库）**：`--dry-run` → 孤儿 6 / 可回收 6 / 释放 2,552,280 字符；备份 `temp/knowledge.pre-gc.db`（120.6 MB）后实跑 → `content_store` **55→49**、`orphans 0`、`content_fts 49`、有引用的 49 行原样、`entries 241` / `points 4,552` 零变化；重跑 `candidates 0`。
+- **契约**：表结构 / 字段 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 能力注册表**零变更**（canary 零漂移），故无新工单，口径写在 TODO 8.15。
+- **顺带判停**：P4 第四类边「引用/指涉」经三层探针实测（点正文 0.2% 命中、可解析 0）**不做**，门槛与数字写进 `变更工单-2026-10-26-P4点级图.md` §7。
+
 ### 变更工单 · P4 后置项：点级反查（`reverse` 支持 `p:`，2026-10-26）
 
 - **为什么**：P4 点级图交付时把点级反查留空——`reverse_reach()` 只认 `c:`/`e:`/`d:`，`p:` 落进分类分支 → 404。图页这条路径是可达的（点层点节点一点就 `showRadiate("p:…")` 切焦点，此时「🔍 反查」传的就是 `p:`），用户看到的是「该节点不支持反查（域名节点无反查）」——提示词本身也说错了。放射视图回答「这个点连到谁」，缺的另一半是「这个点从哪来」。

@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Sequence
 
@@ -49,6 +49,18 @@ def _consumable(alias: str = "e") -> str:
             f" AND COALESCE(json_extract({alias}.meta,'$.link_status'),'ok')!='dead'"
             f" AND COALESCE(json_extract({alias}.meta,'$.dedupe_master'),'')=''"
             f" AND COALESCE(json_extract({alias}.meta,'$.freshness_flag'),'ok')!='stale'")
+
+
+def _parse_iso(raw: Any) -> datetime | None:
+    """ISO 时间串 → aware datetime；空串/坏串/非串一律 None（调用方按「最老」处理）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        ts = datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
 
 
 # 点级语义去重副点退出消费面（批次 94，条目级 dedupe_master 的点层对应物）：
@@ -594,6 +606,61 @@ class DataLayer:
             (max(0, int(limit)), content_hash),
         ).fetchone()
         return row["head"] if row else None
+
+    # ---- 内容库回收（TODO 8.15，2026-10-26） ----
+
+    def gc_orphan_contents(self, max_age_days: float = 1.0,
+                           dry_run: bool = True) -> dict[str, Any]:
+        """回收无条目引用的正文块（content_store 孤儿；TODO 8.15）。
+
+        口径：
+        - 孤儿 = `content_store` 中不存在任何 `entries.content_hash` 指向的行
+          （content_hash 变了 / 换解析通道 / 改清洗规则后留下的旧正文）；
+        - 阈值保护 = 只回收 `fetched_at` 早于 `max_age_days` 的行，防同步进行中的
+          竞态（刚抓完、条目尚未 upsert 的那一瞬）；`fetched_at` 缺失或不可解析的
+          历史行按「最老」处理——正文是**缓存**，条目/点/向量一字不动，删了可重抓；
+        - 只动 `content_store` + `content_fts`（正文检索索引同步清）；dry-run 零写入、
+          不记 task_log，实跑写一条 `task_log(content_gc)` 审计。
+
+        返回 {candidates, eligible, skipped_recent, deleted, freed_chars, max_age_days}。
+        """
+        horizon = datetime.now(timezone.utc) - timedelta(days=max(0.0, max_age_days))
+        rows = self._conn.execute(
+            "SELECT cs.content_hash, cs.fetched_at, LENGTH(cs.text) AS n"
+            " FROM content_store cs"
+            " WHERE NOT EXISTS (SELECT 1 FROM entries e"
+            "                   WHERE e.content_hash=cs.content_hash)"
+        ).fetchall()
+        eligible: list[str] = []
+        freed_chars = 0
+        for r in rows:
+            ts = _parse_iso(r["fetched_at"])
+            if ts is not None and ts > horizon:
+                continue                      # 过新：可能是同步进行中的竞态行
+            eligible.append(r["content_hash"])
+            freed_chars += int(r["n"] or 0)
+        deleted = 0
+        if eligible and not dry_run:
+            at = datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+            with self.transaction() as conn:
+                for i in range(0, len(eligible), 400):   # 分批：避开 SQLite 变量上限
+                    batch = eligible[i:i + 400]
+                    marks = ",".join("?" * len(batch))
+                    conn.execute(f"DELETE FROM content_fts WHERE content_hash IN ({marks})",
+                                 batch)
+                    deleted += conn.execute(
+                        f"DELETE FROM content_store WHERE content_hash IN ({marks})",
+                        batch).rowcount
+                conn.execute(
+                    "INSERT INTO task_log (at, task_name, action, target, detail)"
+                    " VALUES (?,?,?,?,?)",
+                    (at, "content_gc", "gc_orphan", "content_store",
+                     _meta_json({"candidates": len(rows), "deleted": deleted,
+                                 "freed_chars": freed_chars,
+                                 "max_age_days": max_age_days})))
+        return {"candidates": len(rows), "eligible": len(eligible),
+                "skipped_recent": len(rows) - len(eligible), "deleted": deleted,
+                "freed_chars": freed_chars, "max_age_days": max_age_days}
 
     # ---- 分类 ----
 

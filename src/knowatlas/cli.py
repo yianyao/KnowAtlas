@@ -89,9 +89,18 @@ def build_parser() -> argparse.ArgumentParser:
     ktest.add_argument("--dry-run", action="store_true",
                        help="（regress --seed-from-log）只统计回填规模，不写库")
 
-    kcheck = sub.add_parser("kcheck", help="链接体检：检测可达性（404/410 标记 dead）")
+    kcheck = sub.add_parser("kcheck", help="库体检：链接可达性（404/410 标记 dead）"
+                                            " / 正文库孤儿回收（--gc-content）")
     kcheck.add_argument("--limit", type=int, default=100, help="本次最多检测条数（默认 100）")
     kcheck.add_argument("--qps", type=float, default=4.0, help="检测速率（默认 4 条/秒）")
+    kcheck.add_argument("--gc-content", action="store_true",
+                        help="回收无条目引用的正文块（content_store 孤儿；不联网、"
+                             "不动条目/点/向量，正文可重抓）")
+    kcheck.add_argument("--gc-days", type=float, default=1.0,
+                        help="（--gc-content）只回收抓取时间早于 N 天的孤儿正文"
+                             "（默认 1；阈值防同步进行中的竞态）")
+    kcheck.add_argument("--dry-run", action="store_true",
+                        help="（--gc-content）只统计不删除")
 
     kpoints = sub.add_parser(
         "kpoints", help="知识点抽取：规则判定（文学创作=split 切点，其余 integral 整条即点，"
@@ -481,6 +490,18 @@ def _cmd_kcheck(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     setup_logging(cfg.log_level)
+    if args.gc_content:
+        dl = _open(cfg)
+        try:
+            stats = dl.gc_orphan_contents(max_age_days=args.gc_days,
+                                          dry_run=args.dry_run)
+        finally:
+            dl.close()
+        head = "OK 试跑完成（dry-run 未删除）" if args.dry_run else "OK 正文库回收完成"
+        print(f"{head}：孤儿 {stats['candidates']} 行 / 可回收 {stats['eligible']} 行 / "
+              f"已删 {stats['deleted']} 行 / 释放 {stats['freed_chars']:,} 字符"
+              f"（阈值 {stats['max_age_days']} 天，过新跳过 {stats['skipped_recent']} 行）")
+        return _EXIT_OK
     _warn_if_llm_unavailable(cfg, "kcheck")
     dl = _open(cfg)
     try:
