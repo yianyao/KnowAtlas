@@ -1021,6 +1021,7 @@ uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.
 - P3 全部勾完（TODO 已标）。P4 点级图 / P5 扩散抓取加固未开工。
 - `serve`（PID 14220）仍是旧代码：`/api/entries/{id}/form`（强制重抽）走的是进程内旧函数，
   重启后才对长文打 pending 标记。本次未重启——改的是 CLI 与管道主路径，Web 侧只有那个按钮受影响。
+  （**2026-10-26 19:21 已重启并验证，见文末「serve 重启」**）
 
 ## 2026-10-26 19:25 用户报障：词云点卡的「34 点」是重复渲染（待修，未动代码）
 
@@ -1098,3 +1099,38 @@ uv run python -m knowatlas kpoints --dry-run --limit 5   # pending_kpe=0、alrea
 - 过程脚本（`temp/probe_*`、`temp/e2e_*`、`temp/normalize_files.py`）随时可删；e2e 临时库已删除。
 
 <!-- HANDOFF {"session":"session-ac30a055-31f6-467c-a14b-4ba483781484","compactions":0,"tokens":172000,"at":"2026-10-26T19:26:00+08:00","status":"HANDOFF","goal":"P3 全部收口（6203015/43d752c，616 passed/1 skipped）；另查明用户报障「词云雪花 19 点各挂 34 点」= 前端点卡复用条目卡骨架导致重复渲染，未动代码","next":"新会话先跑 session_check 与 pytest -o addopts= -q（616/1）；然后按 log「19:25 用户报障」修 index.html（点卡加 .pt-card，attachPointChips/cid-btn 选择器排除点卡，点卡标题改点摘要而非条目名），Ctrl+F5 验收；之后再由用户裁决 P4/P5；若要 Web 强制重抽走新口径，重启 serve（先导入 KNOWATLAS_WEB_TOKEN）","not_rerun":"P3 核查与批 111 全部验证（616/1、canary、真库 dry-run、临时库端到端）；词云数据侧核查（20 点/19 可见/34 点属同一条目，已确认无误）；kpe chunks 两个样本；全库重抽与三本试点（重复劳动）；P1b 原因码回填与 P2 lifecycle","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 616 passed, 1 skipped；uv run python temp/probe_snowflake.py -> 20 点全属 39e9415a86480b70（34 点条目）","done":"6203015 docs 核查；43d752c 批 111；1dab949 交接块；19:25 词云点卡报障定性（前端 index.html:1366 + attachPointChips 752）"} -->
+
+## 2026-10-26 19:21 serve 重启：旧进程换成新代码（PID 14220 → 27416）
+
+**起因**：交接块记的 `serve` PID 14220 启动于 **00:32:50**，早于 `43d752c`（19:11:01 提交）。
+Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}/form`（强制重抽）
+仍会截断长文抽点，而不是落 `points_pending_kpe` 交 kpe。
+
+**做法**：
+
+- 先导入用户级 `KNOWATLAS_WEB_TOKEN`、`KNOWATLAS_LLM_API_KEY_SF1`、`KNOWATLAS_LLM_API_KEY`；
+- `Stop-Process 14220` 后以 `.venv\Scripts\python.exe -m knowatlas serve --port 8420` 重启。
+  注意 uv 的 `venv\Scripts\python.exe` 是转发壳：壳进程 **16512**，真正监听 8420 的是子进程
+  **27416**（同为 19:21:09 启动）——下次按 PID 停服务要停 27416。
+- 源码是 editable 安装（`__editable__.knowatlas-0.2.0.pth` → `src/`），重启即加载工作区当前代码。
+
+**令牌**：重启前后指纹一致，`/api/token-hint` → `2ad28785`（= 用户级 `KNOWATLAS_WEB_TOKEN`），
+页面 localStorage 里的令牌不用重填，写操作不失效。
+
+**证据（HTTP 层，真库零触碰）**：用 `sqlite3 backup` 把真库复制到 `temp/e2e_serve/knowledge.db`，
+以 `KNOWATLAS_CONFIG=temp/e2e_serve/knowatlas.toml` 起 8431 端口的同代码实例，对
+72,980 字的条目 `447e7a2a2d187f5d` POST `/api/entries/447e7a2a2d187f5d/form {"form":"split"}`：
+
+- 响应：`purged_sources: 81`、`points_created: 0`、`errors: []`、`points: []`，耗时 **149 ms**；
+- meta：`points_pending_kpe = {"chars": 72980, "why": "正文超过管道单次上限…"}`（SQL 复核 code point 正常）；
+- 即「长文不再截断抽点、落 pending」的新口径已在 Web 端点生效，且未触发任何 LLM 调用。
+  （旧代码在同一输入下会走 split → 截断正文 → 调 LLM。）
+
+第二实例与 `temp/e2e_serve/`（含 127 MB 临时库）已删除。
+
+**环境顺带**：本会话开头 `temp/` 目录缺 `WRITE_OWNER`，`uv` 无法建 cache、临时文件写不进；
+用 `diagnose-windows-sandbox-acl` 给当前用户补 FullControl 后恢复（备份与恢复脚本在
+`temp/acl-repair-out/`）。仓库根的临时测试文件已清掉，`git status` 干净。
+
+**遗留**：19:25 的词云点卡重复渲染是**前端**问题，跟 serve 新旧无关；
+`index.html` 由 StaticFiles 直出且 `Cache-Control: no-store`，改完 Ctrl+F5 就生效，不用重启。
