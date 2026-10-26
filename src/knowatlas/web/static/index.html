@@ -1806,13 +1806,14 @@ async function mgmtNonk() {
   _mgmtDesc().textContent = "规则或 LLM 判为「非具体知识」的候选（站点门户/资源列表/纯资源文件）。仅标记，由你决定。";
   const data = await (await fetch("/api/not-knowledge")).json();
   const reasonLabel = { resource_file: "资源文件", portal_homepage: "站点首页", index_subdir: "列表子页",
+                        index_page: "书目索引页",
                         unreachable: "无法访问", unparseable: "解析失败", garbled: "乱码" };
   const body = _mgmtBody();
   body.innerHTML = data.entries.length
     ? data.entries.map(x =>
         `<div class="entry" data-id="${x.id}"><a href="${x.locator}" target="_blank" rel="noopener">${x.title}</a>`
         + `<span class="badge">${srcLabel(x.source_type)}</span>`
-        + (x.reason ? `<span class="badge" title="结构规则判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
+        + (x.reason ? `<span class="badge" title="价值守卫判定：${x.reason}">${reasonLabel[x.reason] || x.reason}</span>` : "")
         + `<button class="reject-btn" data-id="${x.id}" data-title="${x.title.replace(/"/g, "&quot;")}">🚫舍弃</button>`
         + `<button class="keep-btn" data-id="${x.id}">↩是知识，保留</button></div>`).join("")
     : "<small>没有待清理候选。跑一次 ksync --value-scan（纯规则、零费用）或 ksync --reclassify（LLM 全量评估）。</small>";
