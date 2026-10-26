@@ -1021,3 +1021,55 @@ uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.
 - P3 全部勾完（TODO 已标）。P4 点级图 / P5 扩散抓取加固未开工。
 - `serve`（PID 14220）仍是旧代码：`/api/entries/{id}/form`（强制重抽）走的是进程内旧函数，
   重启后才对长文打 pending 标记。本次未重启——改的是 CLI 与管道主路径，Web 侧只有那个按钮受影响。
+
+## 交接（2026-10-26 19:11，effective 109.8% CRITICAL 立即停止）
+
+### 当前目标
+
+P3 已**全部收口**（批 111，提交 `43d752c`）。本轮把交接里「P3 未开工、要花 ¥11.6 重抽全库」的错误前提纠正为：
+全库 4,552 点早已是 kpe 全文分块产物，重抽是重复劳动；真正缺口只是原生管道对新长文档的截断抽点，已修。
+
+### 已完成（本会话两笔提交）
+
+- **`6203015`**（只动文档）：P3 现状核查——4,552 点全部 `extractor=kpe` 且带 `book`/`section_path`/`quote`，
+  溯源 `char_offset` 最远 2,477,908（证明吃全文）、front matter 名下 0 点、点级检索生效；
+  TODO 里「重抽全库」撤销，验收标为真库已达。
+- **`43d752c`** 批 111（工单 `docs/design/变更工单-2026-10-26-P3点层取全文.md`）：
+  `_entry_body` 取 inline 与 `content_store` 的**较长者**；正文 > `_BODY_CAP`（6,000）**不再截断抽点**，
+  落 `meta.points_pending_kpe` 并跳过；`_candidates` 跳过已标记条目；删除 `body_truncated` 与三处截断分支；
+  `kpeimport` 同口径取较长者 + 导入成功后清标记；`kpoints` 报告新增 `PENDING n 条…` + kpe 三步提示。
+- 实测：**616 passed / 1 skipped**；canary 零漂移；真库 `--dry-run` → `pending_kpe: 0`、既有 4,552 点零扰动；
+  临时库端到端（9,000 字条目）：首次打标记 + 零 LLM、二次 `skip_counts.pending_kpe=1`、
+  `kpeimport` 后标记变 `None`。真库复核仍 4,552 点、分布不变。
+
+### 下一步（按序，首步可直接执行）
+
+1. 新会话开场按协议跑 `session_check` + `pytest -o addopts= -q`（预期 NEW_SESSION / 616+1）。
+2. 由用户裁决 P4（点级图：点成为 `kind=point` 节点，四类边）还是 P5（扩散抓取加固，小件）；
+   两项 TODO 均有验收口径，未动一行业务代码。
+3. 若要 Web「强制重抽」也按新口径走，重启 `serve`（PID 14220 是旧代码）；重启前先导入用户级
+   `KNOWATLAS_WEB_TOKEN`，否则令牌会变、页面写入失效。
+
+### 不要重跑
+
+- **P3 核查与批 111 的全部验证**（616/1、canary、真库 dry-run、临时库端到端都已做过，结论在上面）。
+- **`kpe chunks` 两个样本**（`temp/kpe-helloagents`/`temp/kpe-ch5b` 已有产物）。
+- **全库重抽 / 三本试点**：已证明是重复劳动（点已在库）。
+- **P1b 原因码回填、P2 lifecycle**：已落库，重跑零写入。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应判 NEW_SESSION
+uv run python -m pytest -o addopts="" -q                 # 616 passed, 1 skipped
+uv run python -m knowatlas kpoints --dry-run --limit 5   # pending_kpe=0、already_done=26
+```
+
+### 已知失败 / 注意
+
+- 本会话 `effective_pct` 冲到 **109.8%**（161,452 / baseline 147,059，未压缩）→ 按协议立即停，P4/P5 未开工。
+- `serve` 未重启，`/api/entries/{id}/form` 仍是旧逻辑（长文会截断抽点）；CLI 与管道已是新口径。
+- 探针坑：`dl.points_of_entries()` 返回的 dict **不含 `meta`**（内部 pop 只回填 `explain`），判 meta 必须走 SQL。
+- 过程脚本（`temp/probe_*`、`temp/e2e_*`、`temp/normalize_files.py`）随时可删；e2e 临时库已删除。
+
+<!-- HANDOFF {"session":"session-ac30a055-31f6-467c-a14b-4ba483781484","compactions":0,"tokens":161452,"at":"2026-10-26T19:11:13+08:00","status":"HANDOFF","goal":"P3 全部收口：核实全库 4,552 点已是 kpe 全文分块产物（撤销 ¥11.6 重抽），修掉原生管道对新长文档的截断抽点（points_pending_kpe 交 kpe），提交 6203015/43d752c","next":"新会话先跑 session_check 与 pytest -o addopts= -q（616/1）；再由用户裁决 P4 点级图或 P5 扩散抓取加固；若要 Web 强制重抽也走新口径，重启 serve（先导入 KNOWATLAS_WEB_TOKEN，PID 14220 是旧代码）","not_rerun":"P3 核查与批 111 全部验证（616/1、canary、真库 dry-run、临时库端到端）；kpe chunks 两个样本；全库重抽/三本试点（重复劳动）；P1b 原因码回填与 P2 lifecycle","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 616 passed, 1 skipped；uv run python -m knowatlas kpoints --dry-run --limit 5 -> pending_kpe=0, already_done=26","done":"6203015 docs 核查；43d752c 批 111（points.py/_kpe_import.py/cli.py/db.py 注释 + 6 条测试）；616 passed/1 skipped；真库 4,552 点零扰动"} -->
