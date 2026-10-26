@@ -1376,3 +1376,73 @@ CONFIG_SCHEMA_KEYS/接口签名，故无工单，canary 四常量零漂移）。
 
 不要重跑：全量测试与真库 dry-run（21:12）。下一步：用户 Ctrl+F5 验收图页；之后 P4 后置项
 （点级反查 `reverse` 对 `p:`、引用/指涉边）。
+<!-- HANDOFF {"at":"2026-10-26T21:10:11.475951+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2110.md","draft":true,"goal":"上下文到 HANDOFF（87.5%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843","status":"HANDOFF","tokens":128614,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-26 21:10 交接：P5 扩散加固已交付（634 passed），上下文 88.5% 停会话
+
+### 当前目标
+
+P5 已交付并提交；用户下一步是浏览器验收图页，之后在**新会话**开 P4 后置项（点级反查 / 引用指涉边）。
+
+### 已完成（含产物路径与现场数字）
+
+- **提交**：`2d2ec99` feat(expand) P5 扩散加固（7 文件 +259/−21）；`2b65fa3` feat(web) 待清理候选加
+  「书目索引页」reason 标签；`1780466` docs 点标签缩回阈值补测。
+- **P5 三条全落地**：
+  - `semantic/value_guard.py::is_index_page`：正文层判据（表格成型 / 列名关键词 ≥2 / 数据行带链接
+    ≥50% / 表格占非空行 ≥40%；代码块不统计）。
+  - `pipeline/expand.py`：`_candidate_links` 提取层剔 `${`/`{{`/`<%` 占位符与自链接
+    （`filtered_placeholder`；自链接仍计入 `already_known`）；入库前 `is_index_page` 拦截
+    （`stats.index_page` + `log_task("index_page_skip")`）；docstring 增「已知限制」。
+  - `pipeline/sync.py::_value_scan`：URL 判不出时补判正文（只读 `inline_content`），
+    `value_flag_reason="index_page"`。
+  - 文档：`docs/design/知识索引工具-TODO.md` P5 三条打勾；使用手册第 10 节第 5 条改写。
+- **测试**：`pytest -o addopts= -q` → **634 passed / 1 skipped**（21:04 与 21:08 两次）；
+  `tests/test_canary.py` → 1 passed（四常量零漂移，无工单）。
+- **真库实测（只读）**：49 条有正文条目中 20 条书目页全部命中、其余 0 误报；
+  `ksync --value-scan --dry-run` → `value_scan_total 30 / new_flagged 0 / by_reason {}`，零写入。
+  脚本：`temp/probe_is_index_page.py`、`temp/probe_index_minrows.py`（temp 可清）。
+- **图页补测**：点标签「缩回阈值以下」分支已闭环（zoom 0.83 隐藏、位移 0；回放大 2.14 仍 0），
+  脚本 `temp/ui_label_zoomout_verify.js`。
+
+### 下一步（按序，首步可直接执行）
+
+1. 用户 `Ctrl+F5` 打开 `http://127.0.0.1:8420/graph.html`：点层 205 点视图滚轮放大出标签、
+   缩回消失；切焦点仍全屏、右上角有退出按钮（验收 20:57 + 20:59 两轮实测）。
+2. 新会话开场：`session_check`（期望 NEW_SESSION）+ `pytest -o addopts= -q`（期望 634 passed / 1 skipped）。
+3. P4 后置项二选一，**都需先出方案再动代码**：
+   - 点级反查：`reverse` 支持 `p:`（当前 404，见 TODO P4「已知限制」）；
+   - 引用/指涉边：最贵通道，需新工单。
+4. 可选验收动作：真跑一次 `uv run python -m knowatlas ksync --value-scan`（当前 active 30 条命中 0，
+   零副作用；以后新条目才会被标 `index_page`）。
+
+### 不要重跑
+
+- 全量测试（634 passed / 1 skipped，21:08）——除非改业务代码；
+- 真库 `--value-scan --dry-run`（21:12 已跑，命中 0）；
+- 图页缩放显隐两向实测（20:57 / 20:59）；
+- `kpe chunks`、全库重点、P3 全库重抽（历史结论，见前几条交接块）。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应 NEW_SESSION
+uv run python -m pytest -o addopts= -q                   # 634 passed, 1 skipped
+uv run python -m knowatlas ksync --value-scan --dry-run  # value_scan_total 30 / new_flagged 0
+curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8420/graph.html   # 200
+```
+
+### 已知失败与处理
+
+- `www.liaoxuefeng.com` 现网 TLS 握手超时（本机出网限制），占位符过滤只有单测覆盖，未做真站复核。
+- 沙箱内 headless Edge 起不来（`mojo platform_channel` 建命名管道被拒 0x5）：UI 实测需完全权限；
+  profile 用 `%TEMP%\edge-qa-*`，跑完即关。
+- `docs/交接/` 是 watcher 草稿产物，未跟踪、不要提交。
+
+### 会话指纹
+
+`session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843`，compactions=0，tokens≈130,185，
+baseline 147,059，effective 88.5%（HANDOFF），2026-10-26T21:10+08:00。
+
+<!-- HANDOFF {"at":"2026-10-26T21:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2110","draft":false,"goal":"P5 扩散加固已交付（2d2ec99 / 634 passed），待用户浏览器验收图页","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 graph.html 点层缩放显隐与全屏；新会话先 session_check + pytest（634/1），再出 P4 后置项方案（点级反查 reverse 对 p: 或引用/指涉边）","not_rerun":"全量测试（634 passed，21:08）；真库 value-scan dry-run（21:12）；图页缩放显隐两向实测（20:57/20:59）","schema":1,"session":"session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843","status":"HANDOFF","tokens":130185,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+
