@@ -61,6 +61,8 @@ def _consumable(alias: str = "e") -> str:
 # 点层同理（P0，2026-10-25）：points.meta 的 kind/kind_why/kind_at/kind_model 是
 # 分诊后处理结论（change ticket 变更工单-2026-10-25-点分诊.md），永不加进
 # _SOURCE_FIELDS；点 meta 只有 merge_meta_of_point 的浅合并入口。
+# 同理 points_pending_kpe（P3，2026-10-26：长文待 kpe 分块的标记，变更工单-2026-10-26-P3点层取全文.md）
+# 与 points_gate（自洽性闸门阻断）——都是后处理键，永不进 _SOURCE_FIELDS。
 _SOURCE_FIELDS = (
     "title", "locator", "locator_canonical", "native_path",
     "inline_content", "content_hash", "created_at",

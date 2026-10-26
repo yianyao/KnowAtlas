@@ -541,10 +541,11 @@ reader: 执行者（人与 agent）
 
 - [x] **摸底**（2026-10-26）：确认全文在 `content_store`；`_entry_body` 优先级是「只看到 4,000 字」的真因；
       确认 KPE 工具链可用（两本书已有基线：65 块→385 点 / 69.8s；96 块→571 点 / ¥0.85 / 130s）。
-- [ ] `pipeline/points.py::_entry_body` 改为**优先 `content_store` 全文**（短文档仍可 integral）；
-      块内抽点与跨块去重交给 `kpe` + `kpeimport`，不再在管道里重复实现切块。
-      **（2026-10-26 19:05 核查后确认：这是 P3 唯一剩余项——库内 4,552 点已全是全文分块产物，
-      但新同步的长文档仍会走「预览 4,023 字 + `_BODY_CAP` 截断」→ 一篇一点。改管道口径需用户点头。）**
+- [x] `pipeline/points.py::_entry_body` 改为**取 inline 预览与 `content_store` 全文的较长者**（短文档行为不变）；
+      正文 > `_BODY_CAP`（6,000）的长文**不再截断抽点**，落 `meta.points_pending_kpe` 交 `tools/kpe` 分块 + `kpeimport`；
+      `kpeimport` 落地时清标记。块内抽点与跨块去重仍只在 kpe 一侧实现，管道不重复造轮子。
+      **已实施（2026-10-26，工单 `变更工单-2026-10-26-P3点层取全文.md`）**：测试 616 passed / 1 skipped，
+      canary 零漂移，真库 `kpoints --dry-run` 验证既有 4,552 点零扰动（`pending_kpe=0`）。
 - [x] front matter 过滤：`kpe chunks` 已默认跳过前言/引言（`--keep-front` 关），落地时确认书名页/版权/目录未被抽点。
       **已核查（2026-10-26）：`FRONT_SECTIONS` 名下 0 点；`0.关于本书`（4,665 字）被正确丢弃。**
 - [x] ~~**重抽全库**（用户裁决点）：实测 ≈¥11.6 / ≈22 分钟 / ≈6,000 点；建议先 3–5 本试点~~ ——

@@ -4,6 +4,9 @@
 
 链路：候选条目（active、有正文、未抽过）→ **骨架守门**（批次 92：页面骨架
 正文 merge_meta body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏）
+→ **长文分流**（P3，2026-10-26：正文 > `_BODY_CAP` 不截断抽点，落
+meta.points_pending_kpe 交 `tools/kpe` 分块 + `kpeimport` 入库——截断的点会
+「假装覆盖全文」，下游分诊/勘误据此判错源头）
 → **形态判定=三路确定性规则**：
 - 文学创作类（分类祖先链含锚词）→ forced split：LLM 只提炼切点不判定；
 - 杂烩目录（目录信号粗规则，批次 67 用户口径：项目内文档≈方案、杂烩≈知识点）
@@ -50,7 +53,9 @@ from .point_gate import gate_point
 
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _WS = re.compile(r"\s+")
-_BODY_CAP = 6000      # 送 LLM 的正文字符上限（控成本；截断计数进 stats）
+_BODY_CAP = 6000      # 管道单次上限：正文超过即交 kpe 分块（P3，2026-10-26）
+# 为什么不再截断：截断后的点会「假装覆盖全文」，下游 P0 分诊/ P1 勘误据此判错源头。
+# 长文一律落 meta.points_pending_kpe，由 tools/kpe 分块抽取后 kpeimport 入库。
 _MIN_BODY_CHARS = 50  # 短于此的正文跳过（无点可抽）
 _POINT_BODY_CAP = 20000  # integral 点 text 上限（零 LLM 不心疼 token，保真优先）
 _SPLIT_CATEGORY_HINT = "文学创作"  # 用户口径：此分类子树 = 知识点（切），其余 = 方案
@@ -94,10 +99,16 @@ def point_hash(text: str) -> str:
 
 
 def _entry_body(dl: Any, entry: Any) -> str:
-    """条目正文：inline_content 优先，缺了从 content_store 取（K1 未抓正文则为空）。"""
+    """条目正文：inline 预览与 content_store 全文取**较长者**（P3 收口，2026-10-26）。
+
+    旧口径「inline 优先」让长文档只覆盖开头——`adapters/dbfile.py::_INLINE_CAP=4000`
+    决定 inline 只是预览。短文档两者等价，取长者行为等同原样。
+    """
     body = (entry.inline_content or "").strip()
-    if not body and entry.content_hash:
-        body = (dl.get_content(entry.content_hash) or "").strip()
+    if entry.content_hash:
+        full = (dl.get_content(entry.content_hash) or "").strip()
+        if len(full) > len(body):
+            return full
     return body
 
 
@@ -113,7 +124,7 @@ def _candidates(dl: Any, limit: int,
     """
     done = dl.point_source_entry_ids()
     skipped = {"no_body": 0, "not_knowledge": 0, "already_done": 0,
-               "too_short": 0, "gate_blocked": 0}
+               "too_short": 0, "gate_blocked": 0, "pending_kpe": 0}
     out: list[Any] = []
     pool = ([dl.get_entry(eid) for eid in only_ids] if only_ids
             else dl.list_entries(status="active", limit=10000))
@@ -126,6 +137,11 @@ def _candidates(dl: Any, limit: int,
         if (only_ids is None and not retry_blocked
                 and e.meta.get("points_gate")):
             skipped["gate_blocked"] += 1
+            continue
+        # 长文已交 kpe（P3）：标记在则不再重复读全文，等 kpeimport 清标记
+        if (only_ids is None and not retry_blocked
+                and e.meta.get("points_pending_kpe")):
+            skipped["pending_kpe"] += 1
             continue
         if str(e.meta.get("value_flag", "")) == "not_knowledge":
             skipped["not_knowledge"] += 1
@@ -236,7 +252,8 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                              "points_created": 0, "points_linked": 0,
                              "points_rejected": 0, "gate_blocked": 0,
                              "reject_reasons": {}, "rejected": [],
-                             "body_truncated": 0, "errors": []}
+                             "pending_kpe": 0, "pending_kpe_detail": [],
+                             "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
     try:
         cand, skipped = _candidates(dl, limit, only_ids=entry_ids,
@@ -260,6 +277,21 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
             if (not dry_run and (entry_ids or retry_blocked)
                     and e.meta.get("points_gate")):
                 dl.merge_meta(e.id, {"points_gate": None})
+            # points_pending_kpe 不在此清：长文只有 kpe 分块 + kpeimport 才能真正解决，
+            # 清掉只会让下一轮重复读全文再打回标记（--retry-blocked 对它等同空转）。
+            # 长文分流（P3）：一次调用吃不下，截断=假装覆盖全文 → 不抽点，交 kpe。
+            # 宁缺勿脏（与骨架守门同哲学）；kpeimport 落地时清此标记。
+            if len(body) > _BODY_CAP:
+                stats["pending_kpe"] += 1
+                if len(stats["pending_kpe_detail"]) < _REJECTED_DETAIL_CAP:
+                    stats["pending_kpe_detail"].append(
+                        {"entry_id": e.id, "title": str(e.title)[:40],
+                         "chars": len(body)})
+                if not dry_run:
+                    dl.merge_meta(e.id, {"points_pending_kpe": {
+                        "chars": len(body), "at": _now_iso(),
+                        "why": "正文超过管道单次上限，请用 tools/kpe 分块抽取后 kpeimport"}})
+                continue
             # 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则——
             # "integral" 强制合（文学创作/杂烩也整条即点）；"split" 强制拆
             # （非文学创作也走 LLM 切点）；无/auto → 回归规则。
@@ -272,9 +304,6 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": "split 需 LLM 切点但 llm 未启用"})
                     continue
-                if len(body) > _BODY_CAP:
-                    body = body[:_BODY_CAP]
-                    stats["body_truncated"] += 1
                 res = point_extract.run(
                     {"entry_id": e.id, "title": e.title,
                      "source_type": e.source_type, "body": body,
@@ -292,9 +321,6 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": "杂烩目录需 LLM 判定但 llm 未启用"})
                     continue
-                if len(body) > _BODY_CAP:
-                    body = body[:_BODY_CAP]
-                    stats["body_truncated"] += 1
                 res = point_extract.run(
                     {"entry_id": e.id, "title": e.title,
                      "source_type": e.source_type, "body": body},
@@ -305,11 +331,8 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     continue
             elif llm is not None:
                 # integral 提炼（批次 92 裁决 12：概要/全文照抄 → LLM 整理后的
-                # 知识陈述；截断 _BODY_CAP 控费用）
+                # 知识陈述；正文已保证 ≤ _BODY_CAP，长文在上方就转 kpe 了）
                 stats["force_overrides"] += 1 if force == "integral" else 0
-                if len(body) > _BODY_CAP:
-                    body = body[:_BODY_CAP]
-                    stats["body_truncated"] += 1
                 res = point_extract.run(
                     {"entry_id": e.id, "title": e.title,
                      "source_type": e.source_type, "body": body,
@@ -321,8 +344,6 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     continue
             else:
                 # 降级：LLM 未启用 → 照抄保真（原文零风险；理由注明未经提炼）
-                if len(body) > _POINT_BODY_CAP:
-                    stats["body_truncated"] += 1
                 res = _integral_result(e, body)
             # 自洽性闸门（TODO 8.5，用户裁决 1）：LLM 产出的每个点独立复核——
             # 裸名词/步骤残缺/截断/未闭合代码块不落库（不污染检索·词云·关系图），

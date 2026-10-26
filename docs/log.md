@@ -975,3 +975,49 @@ uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.
   否则会得出「meta 全空」的错误结论（本轮踩过，已纠正）。
 - PowerShell 5.1 的 `Out-File -Encoding utf8` 写 BOM；Python 读要 `utf-8-sig`。
 - `python -c` 里带引号/中文在 PS 5.1 会被打断 → 一律落 `temp/*.py`。
+
+## 2026-10-26 19:20 批 111：P3 收口——点层取全文，长文交 kpe（用户批方案后落地）
+
+工单 `docs/design/变更工单-2026-10-26-P3点层取全文.md`（用户先选「修 `_entry_body`（小批）」，
+再批「按工单开工」）。
+
+### 改了什么
+
+- `pipeline/points.py`：`_entry_body` → **inline 预览与 `content_store` 全文取较长者**；
+  正文 > `_BODY_CAP`（6,000）**不截断抽点**，落 `meta.points_pending_kpe` 并跳过；
+  `_candidates` 跳过已标记条目（`skip_counts.pending_kpe`）；删除 `body_truncated` 统计与三处截断分支
+  （长文分流后永不触发，留着误导读者）。
+- `pipeline/kpe_import.py`：`body` 同口径取较长者（否则 `char_offset` 与管道错位）；
+  导入成功后清 `points_pending_kpe`（一点未落地时保留标记）。
+- `cli.py`：`kpoints` 报告新增 `PENDING n 条正文超管道上限` + kpe 三步提示。
+- `datalayer/db.py`：仅注释登记 `points_pending_kpe` 为后处理键、永不进 `_SOURCE_FIELDS`。
+- `tests/test_points.py`：新增 5 例 + **改写** `test_pipeline_truncates_long_body_for_llm`
+  （它断言的正是被替换的旧口径）。
+
+### 实测
+
+- 全量 **616 passed / 1 skipped**（36.07s）；`tests/test_points.py` 43 passed；canary 1 passed（六项指纹零漂移）。
+- 真库 `kpoints --dry-run --limit 5`：`pending_kpe: 0`、`already_done: 26`、`processed: 1`
+  （`0.关于本书` 4,665 字，旧行为不变）→ **既有 4,552 点零扰动**。
+
+### 与工单草案的唯一偏差
+
+草案写「`--retry-blocked` 清标记后正常抽点」——落地发现清完会被主循环立刻打回（长文在管道里无解），
+改为**只有 `kpeimport` 清标记**，单测相应改成 `test_retry_blocked_does_not_bypass_pending_kpe`。
+
+### 端到端（临时库副本，真库零触碰）
+
+用 `temp/e2e-kpoints.toml` 指向 `data/knowledge.db` 的副本，注入一条 9,000 字长条目后实测：
+
+- 第一次 `kpoints --limit 20`：`pending_kpe: 1`，`pending_kpe_detail` 带条目与字数，
+  CLI 打印 `PENDING 1 条正文超管道上限…` + kpe 三步提示；该条目**零 LLM 调用、零点入库**。
+- 第二次同命令：`skip_counts.pending_kpe: 1`、`processed: 0`（幂等，不重复读全文）。
+- `kpeimport temp/kpe-ch5b --entry <该条目>`：`created 40 / linked 10` 后
+  `meta.points_pending_kpe` 变为 **None**（标记被清，符合「kpe 已解决」）。
+- 真库复核：仍 **4,552 点**，hard/opinion/unjudgeable/dupe 分布不变。临时库与 toml 已删除。
+
+### 下一步
+
+- P3 全部勾完（TODO 已标）。P4 点级图 / P5 扩散抓取加固未开工。
+- `serve`（PID 14220）仍是旧代码：`/api/entries/{id}/form`（强制重抽）走的是进程内旧函数，
+  重启后才对长文打 pending 标记。本次未重启——改的是 CLI 与管道主路径，Web 侧只有那个按钮受影响。

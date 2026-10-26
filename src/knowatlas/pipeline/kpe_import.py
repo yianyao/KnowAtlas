@@ -151,9 +151,11 @@ def import_kpe_dir(cfg: Any, dl: Any, out_dir: str | Path, *,
         points = points[:limit]
 
     entry = resolve_entry(dl, str(manifest.get("book") or ""), entry_id, match)
-    # 与 points._entry_body 同口径：inline_content 优先，缺了从 content_store 取
-    body = ((entry.inline_content or "").strip()
-            or (dl.get_content(entry.content_hash or "") or "").strip())
+    # 与 points._entry_body 同口径（P3，2026-10-26）：inline 预览与全文取较长者——
+    # 否则长文只在 4,023 字预览里找 quote，char_offset 会与管道口径错位。
+    inline_body = (entry.inline_content or "").strip()
+    full_body = (dl.get_content(entry.content_hash or "") or "").strip()
+    body = full_body if len(full_body) > len(inline_body) else inline_body
 
     stats: dict[str, Any] = {
         "out": str(out), "entry": entry.id, "title": entry.title,
@@ -214,5 +216,10 @@ def import_kpe_dir(cfg: Any, dl: Any, out_dir: str | Path, *,
         )
         stats[status] += 1
         existing.add(ph)
+
+    # kpe 已解决该条目：清「长文待分块」标记（P3，2026-10-26）——留着会让
+    # 游标（已抽过）与标记（待抽）互相矛盾。一个点都没落地时保留标记：仍有活要干。
+    if not dry_run and (stats["created"] + stats["linked"]) > 0:
+        dl.merge_meta(entry.id, {"points_pending_kpe": None})
 
     return stats

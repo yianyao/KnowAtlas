@@ -4,6 +4,16 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P3 点层取全文与长文交 kpe（2026-10-26）
+
+- **为什么**：07:00 交接把「**hard 子集** 1,579」当成「**全库点数**」，据此要花 ¥11.6 重抽全库。19:05 核查推翻了它——库内 4,552 点**全部**是 kpe 全文分块产物（`extractor=kpe`、`book`/`section_path`/`quote` 全覆盖，溯源 `char_offset` 最远 2,477,908），三本试点书（820/571/420）早已抽完，front matter 名下 0 点，点级检索已生效。**真正的缺陷只剩原生管道**：新同步的长文档仍会「一篇一点，只覆盖开头 4,000 字」。
+- **管道**（`pipeline/points.py`）：`_entry_body` 由「inline 优先」改为「inline 预览与 `content_store` **全文取较长者**」——旧口径只看到 `_INLINE_CAP=4000` 的预览；正文 > `_BODY_CAP`（6,000）**不再截断抽点**，落 `meta.points_pending_kpe` 交 kpe（截断的点会假装覆盖全文，是分诊/勘误的污染源）；`_candidates` 跳过已标记条目（幂等）；`body_truncated` 统计与三处截断分支删除（永不再触发，留着误导）。
+- **入库对齐**（`pipeline/kpe_import.py`）：`body` 同口径取较长者（否则 `char_offset` 与管道错位）；导入成功后清 `points_pending_kpe`（kpe 已解决；一个点都没落地时保留标记）。
+- **CLI**：`kpoints` 报告新增 `PENDING n 条正文超管道上限` + kpe 三步提示；`--retry-blocked` 对长文**刻意空转**（清标记会被主循环立刻打回，且不愿让「重试」把截断抽点放回来）。
+- **契约**：`points.meta` 新增 `points_pending_kpe`（后处理键，不进 `_SOURCE_FIELDS`，已在 `db.py` 注释登记）；`point_sources.char_offset` 语义统一为「全文字符偏移」；表结构 / `SOURCE_TYPES` / `STATUSES` / scheme / `CONFIG_SCHEMA_KEYS` / REST / 能力注册表**零变更**，canary 六项指纹零漂移。
+- **测试**：`tests/test_points.py` 新增 5 例 + 改写 1 例（原 `test_pipeline_truncates_long_body_for_llm` 断言的正是被替换的旧口径）；全量 **616 passed, 1 skipped**。
+- **真库**：`kpoints --dry-run --limit 5` → `pending_kpe: 0`、`already_done: 26`，既有 4,552 点零扰动。
+
 ### 变更工单 · P2 点级老化两型（2026-10-26）
 
 - **为什么**：老化一直是被动的——L1 日期规则先标 suspect，点级老化才跟进；技术栈层面的过时（Python 2.7 教程、jQuery 1.x 写法）既不写在日期里，也不会自己变成 suspect，永远等不到人看。

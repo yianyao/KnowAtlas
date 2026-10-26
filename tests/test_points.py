@@ -13,7 +13,7 @@ import uuid
 
 from knowatlas.models import Entry
 from knowatlas.pipeline.points import (
-    normalize_point_text, point_hash, run_points_extract,
+    _entry_body, normalize_point_text, point_hash, run_points_extract,
 )
 from knowatlas.semantic.base import TaskContext
 from knowatlas.semantic.llm import LlmError
@@ -81,6 +81,20 @@ def _seed_entries(dl, n: int = 1, *, body: str = "FTS5 中文检索用 trigram �
           for i in range(n)]
     dl.upsert_entries(es)
     return es
+
+
+def _long_body_entry(dl, chars: int, key: str) -> Entry:
+    """正文只存 content_store（inline 为空）：验证「取全文」与「长文转 kpe」（P3）。"""
+    from knowatlas.models import FetchResult
+
+    dl.put_content(FetchResult(text="长" * chars, content_hash=key, fetcher="test",
+                               fetched_at="2026-10-26T00:00:00+08:00"))
+    e = Entry.build(source_type="folder", source_key=f"pt:{key}:0",
+                    title=f"长文 {chars}", locator=f"file:///d/{key}.md",
+                    inline_content=None, content_hash=key,
+                    meta={"source_type": "folder"})
+    dl.upsert_entries([e])
+    return e
 
 
 def _attach_lit(dl, entries: list[Entry], *, child: bool = False) -> None:
@@ -351,42 +365,69 @@ def test_pipeline_dry_run_writes_nothing(cfg, dl):
     assert dl.point_source_entry_ids() == set()      # 游标未推进（重跑可真写）
 
 
-def test_pipeline_truncates_long_body_for_llm(cfg, dl):
-    """送 LLM 的长正文截断（_BODY_CAP 6000，split/integral 同口径控费用）；
-    integral 零 LLM 降级才全文保真（_POINT_BODY_CAP 20000）。"""
-    from knowatlas.models import FetchResult
+def test_pipeline_long_body_goes_pending_kpe(cfg, dl):
+    """P3（2026-10-26）：正文 > _BODY_CAP 不再截断抽点，落 meta.points_pending_kpe 交 kpe。
 
-    long_text = "长" * 9000
-    dl.put_content(FetchResult(text=long_text, content_hash="pt-long-0001",
-                               fetcher="test", fetched_at="2026-10-22T00:00:00+08:00"))
-    e = Entry.build(source_type="folder", source_key="pt:long:0", title="长文",
-                    locator="file:///d/long.md", inline_content=None,
-                    content_hash="pt-long-0001", meta={"source_type": "folder"})
-    dl.upsert_entries([e])
-    _attach_lit(dl, [e])  # split 路径
+    旧口径（截断 6,000 字照抽）产出的点会「假装覆盖全文」——下游分诊/勘误据此判错源头。
+    """
+    e = _long_body_entry(dl, 9000, "pt-long-0001")
+    _attach_lit(dl, [e])  # split 路径：旧口径会截断后送 LLM
     llm = FakeLlm([_SPLIT_ONLY_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
-    assert stats["body_truncated"] == 1
-    assert len(llm.calls[0]) < 9000                  # 提示词远小于原文
+    assert stats["pending_kpe"] == 1
+    assert stats["pending_kpe_detail"][0]["chars"] == 9000
+    assert stats["processed"] == 0 and stats["points_created"] == 0
+    assert llm.calls == []                            # 零 LLM 调用：不截断硬抽
+    assert dl.count_points() == 0
+    flag = dl.get_entry(e.id).meta["points_pending_kpe"]
+    assert flag["chars"] == 9000 and flag["at"]
 
-    # integral 长文走 LLM 提炼（截 6000 送 LLM）
-    dl.put_content(FetchResult(text="方案" * 4500, content_hash="pt-long-0002",
-                               fetcher="test", fetched_at="2026-10-22T00:00:00+08:00"))
-    e2 = Entry.build(source_type="folder", source_key="pt:long2:0", title="长方案",
-                     locator="file:///d/long2.md", inline_content=None,
-                     content_hash="pt-long-0002", meta={"source_type": "folder"})
-    dl.upsert_entries([e2])
-    stats2 = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_INTEGRAL_REFINE_REPLY]))
-    assert stats2["body_truncated"] == 1
-    pt = [p for p in dl.list_points() if p["judge"] == "integral"][0]
-    assert "EXPLAIN" in pt["text"]                   # 提炼产物非全文照抄
 
-    # 零 LLM 降级（entry_ids 直取重抽，绕游标）：照抄保真全文（≤20000 不截断）
-    stats3 = run_points_extract(cfg, dl, limit=5, entry_ids=[e2.id])
-    assert stats3["processed"] == 1 and stats3["body_truncated"] == 0
-    p3 = [p for p in dl.list_points()
-          if p["text"].startswith("方案")][0]
-    assert len(p3["text"]) == 9000 and p3["text"].endswith("方案")
+def test_pending_kpe_is_idempotent(cfg, dl):
+    """标记在 → 下一轮直接跳过（不重复读全文、不重复写、零 LLM）。"""
+    _long_body_entry(dl, 9000, "pt-long-0002")
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_SPLIT_ONLY_REPLY]))
+    llm2 = FakeLlm([_SPLIT_ONLY_REPLY])
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2)
+    assert stats2["skip_counts"]["pending_kpe"] == 1
+    assert stats2["pending_kpe"] == 0
+    assert llm2.calls == []
+    assert dl.count_points() == 0
+
+
+def test_retry_blocked_does_not_bypass_pending_kpe(cfg, dl):
+    """--retry-blocked 只绕过候选过滤，长文仍转 kpe（不退回截断抽点）。"""
+    _long_body_entry(dl, 9000, "pt-long-0003")
+    run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_SPLIT_ONLY_REPLY]))
+    llm2 = FakeLlm([_SPLIT_ONLY_REPLY])
+    stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2, retry_blocked=True)
+    assert stats2["pending_kpe"] == 1 and stats2["points_created"] == 0
+    assert llm2.calls == []
+
+
+def test_long_body_dry_run_writes_no_flag(cfg, dl):
+    """dry-run 只报账不写标记（改口径后仍可重跑观察）。"""
+    e = _long_body_entry(dl, 9000, "pt-long-0004")
+    stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), dry_run=True)
+    assert stats["pending_kpe"] == 1
+    assert "points_pending_kpe" not in dl.get_entry(e.id).meta
+
+
+def test_entry_body_prefers_longer_full_text(cfg, dl):
+    """正文取 inline 预览与全文的较长者（短文档行为不变）。"""
+    e = _long_body_entry(dl, 20000, "pt-long-0005")
+    short = Entry.build(source_type="folder", source_key="pt:short:0", title="短预览",
+                        locator="file:///d/short.md", inline_content="预览" * 50,
+                        content_hash="pt-long-0005", meta={"source_type": "folder"})
+    dl.upsert_entries([short])
+    assert len(_entry_body(dl, short)) == 20000      # inline 100 字 < 全文 20,000 字
+    assert len(_entry_body(dl, e)) == 20000          # 无 inline 时取全文
+
+
+def test_entry_body_keeps_inline_when_no_full_text(cfg, dl):
+    """没有 content_store 正文时保留 inline（不因缺全文而丢正文）。"""
+    e = _seed_entries(dl, 1, body="文" * 2000)[0]
+    assert len(_entry_body(dl, e)) == 2000
 
 
 # ---- 流水线：目录信号三路（批次 67，用户粗规则）----

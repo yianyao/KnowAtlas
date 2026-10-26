@@ -569,6 +569,16 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
         print(f"  GATE 拦下 {stats.get('points_rejected', 0)} 点（{reasons or '无明细'}）；"
               f"整条阻断 {stats.get('gate_blocked', 0)} 条"
               f"（meta.points_gate；改口径后用 --retry-blocked 重抽）")
+    if stats.get("pending_kpe"):
+        detail = "、".join(f"{d['title']}（{d['chars']:,} 字）"
+                          for d in stats.get("pending_kpe_detail", [])[:5])
+        print(f"  PENDING {stats['pending_kpe']} 条正文超管道上限"
+              f"（meta.points_pending_kpe）：{detail}")
+        print("    这些长文不截断抽点；用 kpe 分块后导入：")
+        print("      uv run python -m kpe chunks <源文件> --out temp/kpe-<名>")
+        print("      uv run python -m kpe extract temp/kpe-<名> --base-url <url>"
+              " --model <model> --api-key-env <KEY_ENV>")
+        print('      uv run python -m knowatlas kpeimport temp/kpe-<名> --match "<书名通配>"')
     if not args.dry_run:
         print("（点列表：points 表；溯源数=可信度信号；判定理由在点 meta.judge_reason）")
     return _EXIT_OK
