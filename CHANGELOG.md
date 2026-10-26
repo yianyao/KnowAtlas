@@ -4,6 +4,15 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P4 后置项：点级反查（`reverse` 支持 `p:`，2026-10-26）
+
+- **为什么**：P4 点级图交付时把点级反查留空——`reverse_reach()` 只认 `c:`/`e:`/`d:`，`p:` 落进分类分支 → 404。图页这条路径是可达的（点层点节点一点就 `showRadiate("p:…")` 切焦点，此时「🔍 反查」传的就是 `p:`），用户看到的是「该节点不支持反查（域名节点无反查）」——提示词本身也说错了。放射视图回答「这个点连到谁」，缺的另一半是「这个点从哪来」。
+- **数据层**（`datalayer/db.py`）：`reverse_reach` 新增 `point` 分支 → `_point_reverse_items`：① **溯源条目**（`kind="entry"`、`reason="source:point"`、带 `locator`）；② 这些条目挂的**分类**（`kind="category"`、`reason="attach:<origin>"`、带 `path`，按 `category_id` 去重、origin 取首次出现）。消费面闸门直接复用 `_point_row`（stale / `dupe_of` / 溯源条目全不可消费 → `None` → 404），与 `radiate` 点焦点、`search_points`、`get_point_hit` 同源，不另立口径。**对称边（same_book / same_section / sim）刻意不反向枚举**——反向等于把放射视图再列一遍。
+- **接口**（`web/api.py`）：`GET /api/graph/reverse?node_id=p:<point_id>` 由 404 变 200，`focus.kind="point"`；条目项新增**可选**字段 `locator`。`c:`/`e:` 分支逐字不动，`d:` 仍 404。表结构 / 字段 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 能力注册表**零变更**，canary 零漂移。
+- **前端**（`web/static/graph.html`）：`KIND_LABEL` 补 `source:"溯源"` / `point:"知识点"`（`source:point` → 「溯源·知识点」）；反查面板里带 `locator` 的条目渲染成外链（直接开原文）；404 文案改成「域名与未知节点无反查」。
+- **测试**：`tests/test_graph_point_layer.py` +5 例（条目/分类项与理由、消费面闸门、stale/dupe 缺席、`limit` 且条目预算优先、API 200/404 与域名不回归）+ 前端静态探针补 2 条断言；全量 **639 passed / 1 skipped**（原 634）。
+- **实测**：真库只读副本 4/4 点可反查（`p:5c07508429801ddf` → 1 entry `source:point` + 1 category `人工智能/智能体`，与 `radiate` 的 `focus.sources` 完全一致）；线上 API `200`；headless Edge 点焦点 → 反查面板出现「条目 8.部署智能体与智能体系统 ↗（理由：溯源·知识点）」+「分类 智能体（路径：人工智能/智能体）」，控制台无异常。
+
 ### 变更工单 · P4 点级图（点成为一等节点，2026-10-26）
 
 - **为什么**：关系图三种焦点（分类/条目/域名）的第三层一直是**条目卡**（文件维度），而知识早已在点层——4,552 个点全部带 `book`/`section_path`、点向量 4,552 条（bge-m3，1024 维）、点级检索与词云点 facet 均已点优先。点只能在「🧠 主题」视图里**冒充 `kind:"entry"`**：点击不切焦点、没有理由边、看不到「同一章/同主题的其他知识点」。P4 让点成为一等节点。

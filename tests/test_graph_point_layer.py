@@ -144,6 +144,65 @@ def test_radiate_point_unknown_and_unconsumable(dl, seeded):
     assert dl.radiate(f"p:{d}") is None
 
 
+# ---- 数据层：reverse 点反查（工单 变更工单-2026-10-26-P4点级反查.md） ----
+
+def test_reverse_point_returns_sources_and_categories(dl, seeded):
+    """点反查 = 溯源条目（source:point）+ 这些条目挂的分类（attach:<origin>）。"""
+    r = dl.reverse_reach(f"p:{seeded['a']}")
+    assert r is not None
+    assert r["focus"] == {"id": f"p:{seeded['a']}", "kind": "point"}
+    entries = [i for i in r["items"] if i["kind"] == "entry"]
+    cats = [i for i in r["items"] if i["kind"] == "category"]
+    assert [i["id"] for i in entries] == [f"e:{seeded['es'][0].id}"]
+    assert entries[0]["reason"] == "source:point"
+    assert entries[0]["locator"] == seeded["es"][0].locator
+    assert [i["id"] for i in cats] == [f"c:{seeded['sub'].id}"]
+    assert cats[0]["path"] == "AI 书/智能体"
+    assert cats[0]["reason"] == "attach:rule"
+    # 对称边（同书/同章节/语义近邻）不反向枚举，避免与放射视图重复
+    kinds = {i["kind"] for i in r["items"]}
+    assert kinds == {"entry", "category"}
+
+
+def test_reverse_point_unconsumable_is_none(dl, seeded):
+    """闸门与 radiate 同源：未知点 / 空 id / 溯源条目全不可消费 → None。"""
+    assert dl.reverse_reach("p:nope") is None
+    assert dl.reverse_reach("p:") is None
+    d = _seed_point(dl, seeded["es"][1].id, "只能靠归档条目溯源的孤立点",
+                    {"book": "归档书", "section_path": "x"})
+    dl.set_status([seeded["es"][1].id], "archived")
+    assert dl.reverse_reach(f"p:{d}") is None
+
+
+def test_reverse_point_stale_and_dupe_out_of_scope(dl, seeded):
+    """stale 点与 dupe 副点不在消费面，反查同样缺席（不另立口径）。"""
+    dl.set_point_aging(seeded["a"], "stale", "版本过时")
+    assert dl.reverse_reach(f"p:{seeded['a']}") is None
+    dl.merge_meta_of_point(seeded["b"], {"dupe_of": seeded["a"]})
+    assert dl.reverse_reach(f"p:{seeded['b']}") is None
+    dl.merge_meta_of_point(seeded["b"], {"dupe_of": ""})
+    assert dl.reverse_reach(f"p:{seeded['b']}") is not None
+
+
+def test_reverse_point_limit_entries_first(dl, seeded):
+    """多条溯源：条目在前、分类在后，limit 对合并后的 items 生效。"""
+    extra = [_entry(20 + i, f"重复书稿{i}") for i in range(3)]
+    dl.upsert_entries(extra)
+    for e in extra:
+        dl.attach_category(e.id, seeded["sub"].id, 1.0, "rule", "p4")
+    text = "知识点甲：容器化部署"      # 与 seeded["a"] 同文 → 同 content_hash
+    for e in extra:
+        dl.put_point({"content_hash": point_hash(text), "text": text, "summary": "",
+                      "source_type": "manual", "judge": "integral", "meta": {}},
+                     {"entry_id": e.id, "char_offset": 0, "anchor": text[:120]})
+    full = dl.reverse_reach(f"p:{seeded['a']}", limit=10)
+    assert len([i for i in full["items"] if i["kind"] == "entry"]) == 4
+    assert len([i for i in full["items"] if i["kind"] == "category"]) == 1  # 同类去重
+    tight = dl.reverse_reach(f"p:{seeded['a']}", limit=2)
+    assert len(tight["items"]) == 2
+    assert all(i["kind"] == "entry" for i in tight["items"])   # 条目预算优先
+
+
 # ---- 数据层：subtree 点层 ----
 
 def test_subtree_point_layer_nodes_and_links(dl, seeded):
@@ -221,6 +280,17 @@ def test_api_subtree_bad_layer_400(client, seeded):
     assert r.status_code == 400
 
 
+def test_api_reverse_point(client, seeded):
+    r = client.get(f"/api/graph/reverse?node_id=p:{seeded['a']}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["focus"]["kind"] == "point"
+    assert {i["kind"] for i in body["items"]} == {"entry", "category"}
+    assert client.get("/api/graph/reverse?node_id=p:nope").status_code == 404
+    # 域名仍不支持反查（不回归）
+    assert client.get("/api/graph/reverse?node_id=d:some.host").status_code == 404
+
+
 # ---- 前端静态探针（无浏览器，锁关键接线） ----
 
 def test_graph_html_point_layer_wiring():
@@ -233,3 +303,5 @@ def test_graph_html_point_layer_wiring():
     assert "PAL.point" in html
     assert "same_section" in html              # 通道标签齐全
     assert "溯源：" in html                     # 点卡溯源入口
+    assert 'source: "溯源"' in html             # 点反查理由 source:point 的中文标签
+    assert "it.locator" in html                # 溯源条目带 locator → 反查面板开原文

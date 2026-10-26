@@ -114,7 +114,8 @@
 const KIND_LABEL = { same_host: "同域名", prior: "文件夹先验", rule: "关键词规则",
                      llm: "语义判断", manual: "人工校正", embedding: "向量聚类",
                      child: "子分类", parent: "父分类", attach: "挂接",
-                     thread: "同线索", host_member: "域内条目" };
+                     thread: "同线索", host_member: "域内条目",
+                     source: "溯源", point: "知识点" };   // source:point → 溯源·知识点（点反查）
 // relation_reason 显示格式化：attach:rule → 挂接·关键词规则；未识别的段原样透出
 function fmtReason(r) {
   const i = r.indexOf(":");
@@ -675,9 +676,9 @@ document.getElementById("reverseBtn").onclick = async () => {
                : currentSubtree ? "c:" + currentSubtree : null;
   if (!nodeId) { tip.textContent = "先进入放射视图或子树下钻，再反查。"; return; }
   const r = await fetch(`/api/graph/reverse?node_id=${encodeURIComponent(nodeId)}`);
-  if (r.status === 404) { tip.textContent = "该节点不支持反查（域名节点无反查）。"; return; }
+  if (r.status === 404) { tip.textContent = "该节点不支持反查（域名与未知节点无反查）。"; return; }
   const data = await r.json();
-  const KC = { category: "分类", entry: "条目", domain: "域名", thread: "线索" };
+  const KC = { category: "分类", entry: "条目", domain: "域名", thread: "线索", point: "知识点" };
   revpanel.innerHTML = `<h3>🔍 反查：谁指向「${data.focus.id}」`
     + `<button class="rclose" title="关闭（Esc）">✕</button></h3>` +
     (data.items.length ? data.items.map(it => {
@@ -685,7 +686,10 @@ document.getElementById("reverseBtn").onclick = async () => {
         ? `<a href="${it.url}" target="_blank" rel="noopener">${it.name} ↗</a>`
         : (it.kind === "category"
             ? `<span class="crumbit" data-cat="${it.id.slice(2)}" style="cursor:pointer;color:var(--accent-text)">${it.name}</span>`
-            : it.name);
+            // 点反查的溯源条目带 locator → 直接开原文（P4 后置项）
+            : (it.locator
+                ? `<a href="${it.locator}" target="_blank" rel="noopener">${it.name} ↗</a>`
+                : it.name));
       return `<div class="ritem"><span class="rkind">${KC[it.kind] || it.kind}</span>${inner}`
            + (it.path ? `<br><span class="rpath">路径：${it.path}</span>` : "")
            + `<br><span class="rpath">理由：${fmtReason(it.reason)}</span></div>`;

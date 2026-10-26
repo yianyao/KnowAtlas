@@ -1444,5 +1444,35 @@ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8420/graph.html   # 200
 `session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843`，compactions=0，tokens≈130,185，
 baseline 147,059，effective 88.5%（HANDOFF），2026-10-26T21:10+08:00。
 
+## 2026-10-26 21:25 P4 后置项：点级反查（`reverse` 支持 `p:`，639 passed / 1 skipped）
+
+- 用户裁决选 A（点级反查）。工单 `docs/design/变更工单-2026-10-26-P4点级反查.md`（先工单、后代码）。
+- **数据层** `db.reverse_reach` 增 `point` 分支 → `_point_reverse_items`：① 溯源条目
+  （`kind=entry`、`reason=source:point`、带 `locator`）② 这些条目挂的分类
+  （`kind=category`、`attach:<origin>`、带 `path`、按 `category_id` 去重）。闸门复用
+  `_point_row`（stale / dupe_of / 溯源全回收 → None → 404），与 radiate 点焦点同源。
+  对称边（same_book/same_section/sim）**刻意不反向枚举**（= 把放射视图再列一遍）。
+- **接口** `/api/graph/reverse?node_id=p:<id>` 404→200、`focus.kind=point`、条目项多可选
+  `locator`；`c:`/`e:` 逐字不动、`d:` 仍 404。表结构/字段/locator scheme/`SOURCE_TYPES`/
+  `STATUSES`/`CONFIG_SCHEMA_KEYS`/能力注册表零变更（canary 零漂移）。
+- **前端** `graph.html`：`KIND_LABEL` 补 `source:"溯源"`/`point:"知识点"`（→「溯源·知识点」）；
+  反查面板 entry 带 `locator` 渲染外链；404 文案改「域名与未知节点无反查」。
+- **测试** `tests/test_graph_point_layer.py` +5 例 + 静态探针 2 条断言；
+  全量 `pytest -o addopts= -q` → **639 passed / 1 skipped**（原 634），57 s。
+- **实测**：真库只读副本 4/4 点可反查——`p:5c07508429801ddf` → entry
+  `8.部署智能体与智能体系统`（`file://…md`）+ category `人工智能/智能体`（`attach:llm`），
+  与 `radiate` 的 `focus.sources` 完全一致（脚本 `temp/probe_reverse_point.py`）；
+  重启 serve（8420，PID **15968**）后 `curl …/reverse?node_id=p:5c07…` → **200**，
+  `d:example.com` / `p:nope` 仍 404；graph.html 200 / 46,477 B。
+- **UI 实测**（headless Edge + CDP，`temp/ui_reverse_point_check.js`）：点焦点（放射 19 节点）→
+  点「🔍 反查」→ 面板两行：「条目 8.部署智能体与智能体系统 ↗（理由：溯源·知识点）」+
+  「分类 智能体（路径：人工智能/智能体，理由：挂接·语义判断）」，外链 href 为 file://，无 console 异常。
+- **环境**：本会话 `workspace-write` 下 pytest 全红（431 个 PermissionError，dsh 临时目录与
+  `.pytest_cache` WinError 5）——不是代码问题；切完全权限后 f绿、Edge 可用。跑测试/UI 实测都要完全权限。
+- **下一步**：用户 Ctrl+F5 验收图页（点层 → 点聚焦 → 🔍 反查）；之后 P4 第四类边「引用/指涉」
+  需单独工单（规则先行 + 可选 LLM 复核，见工单 §7）。
+- **不要重跑**：全量测试（639 passed，21:23）；真库反查探针（只读副本，21:18）；
+  UI 反查实测（21:21）；serve 刚重启（PID 15968 已载本轮代码，前端改动 Ctrl+F5 即生效）。
+
 <!-- HANDOFF {"at":"2026-10-26T21:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2110","draft":false,"goal":"P5 扩散加固已交付（2d2ec99 / 634 passed），待用户浏览器验收图页","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 graph.html 点层缩放显隐与全屏；新会话先 session_check + pytest（634/1），再出 P4 后置项方案（点级反查 reverse 对 p: 或引用/指涉边）","not_rerun":"全量测试（634 passed，21:08）；真库 value-scan dry-run（21:12）；图页缩放显隐两向实测（20:57/20:59）","schema":1,"session":"session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843","status":"HANDOFF","tokens":130185,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 

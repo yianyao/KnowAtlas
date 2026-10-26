@@ -985,7 +985,8 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/graph/reverse")
     def graph_reverse(node_id: str, limit: int = 20):
-        """双向反查：哪些焦点能到达该节点（分类带 path、线索带 thread.html url）。"""
+        """双向反查：哪些焦点能到达该节点（分类带 path、线索带 thread.html url、
+        知识点带溯源条目与分类链——P4 后置项）。"""
         data = dl.reverse_reach(node_id, limit=max(1, min(limit, 50)))
         if data is None:
             return JSONResponse({"error": {"code": "NOT_FOUND",

@@ -1327,7 +1327,9 @@ class DataLayer:
         """双向反查：哪些焦点能到达该节点。
 
         条目焦点 → 直挂分类（带 path）+ 同域名 + 同线索（kind=thread，带 thread.html url）；
-        分类焦点 → 父分类 + 挂接条目 Top-N；域名节点不支持反查（返回 None）。
+        分类焦点 → 父分类 + 挂接条目 Top-N；点焦点 → 溯源条目（source:point，带 locator）
+        + 这些条目挂的分类（attach:<origin>，P4 后置项，工单 变更工单-2026-10-26-P4点级反查.md）；
+        域名节点不支持反查（返回 None）。
         """
         prefix, _, raw_id = node_id.partition(":")
         kind = self._RADIATE_KINDS.get(prefix)
@@ -1358,6 +1360,11 @@ class DataLayer:
                 items.append({"kind": "thread", "id": t["id"], "name": t["name"],
                               "url": f"/thread.html?id={t['id']}",
                               "reason": f"thread:{t['name']}"})
+        elif kind == "point":
+            point_items = self._point_reverse_items(raw_id, limit)
+            if point_items is None:
+                return None
+            items = point_items
         else:  # category
             cat = self._conn.execute(
                 "SELECT id, name FROM categories WHERE id=?", (raw_id,)).fetchone()
@@ -2555,6 +2562,38 @@ class DataLayer:
             " WHERE ps.point_id=? AND e.status='active'" + _consumable("e") +
             " ORDER BY ps.created_at LIMIT ?", (point_id, limit)).fetchall()
         return [dict(r) for r in rows]
+
+    def _point_reverse_items(self, point_id: str,
+                             limit: int) -> list[dict[str, Any]] | None:
+        """点反查项：溯源条目（source:point）+ 这些条目挂的分类（attach:<origin>）。
+
+        消费面闸门与 radiate 点焦点同源（`_point_row`：stale / dupe_of / 溯源条目全回收
+        即不在消费面），不满足返回 None → API 404。只出**非对称**关系：同书 / 同章节 /
+        语义近邻都是对称边，反向枚举等于把放射视图再列一遍，故不出。
+        条目在前、分类在后，合并后统一 items[:limit]（与既有 reverse 口径一致）。
+        """
+        if self._point_row(point_id) is None:
+            return None
+        items: list[dict[str, Any]] = []
+        seen_cats: dict[str, str] = {}
+        for s in self._point_sources(point_id, limit=limit):
+            items.append({"kind": "entry", "id": f"e:{s['entry_id']}",
+                          "name": (s["title"] or s["locator"] or "")[:40],
+                          "locator": s["locator"],
+                          "reason": "source:point"})
+            for r in self._conn.execute(
+                    "SELECT category_id, origin FROM entry_categories WHERE entry_id=?",
+                    (s["entry_id"],)).fetchall():
+                seen_cats.setdefault(r["category_id"], r["origin"])
+        for cid, origin in seen_cats.items():
+            crow = self._conn.execute(
+                "SELECT name FROM categories WHERE id=?", (cid,)).fetchone()
+            paths = self.get_category_paths(cid)
+            items.append({"kind": "category", "id": f"c:{cid}",
+                          "name": crow["name"] if crow else "?",
+                          "path": paths[0] if paths else "",
+                          "reason": f"attach:{origin}"})
+        return items[:limit]
 
     @staticmethod
     def _point_book_section(meta_raw: Any) -> tuple[str, str]:
