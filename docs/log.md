@@ -1322,3 +1322,20 @@ zoom 1 → 32.6 px；1.6 → 60.6；2.2 → 81.8；3.0 → 111.5。另有一条�
 `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8420/graph.html` → 200。
 
 <!-- HANDOFF {"at":"2026-10-26T20:58:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2058","draft":false,"goal":"点标签随缩放显隐已交付并浏览器实测，待用户 Ctrl+F5 验收","host":"dsh","kind":"handoff","next":"用户验收点层缩放显隐与全屏；之后 P5 或 P4 后置项","not_rerun":"P4 后端与全量测试（629 passed）；缩放显隐实测（20:57）；serve 已重启勿重复","schema":1,"session":"session-14998ff3-54df-4879-8410-09ac03713ee2","status":"HANDOFF","tokens":150000,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-26 21:00 补测：点标签「缩回阈值以下」（20:57 标为未测的分支已闭环）
+
+上一轮只测了放大方向，缩回方向留了空（`branch 对称、留待验收顺手看`）。本轮用 headless Edge + CDP
+补测，脚本 `temp/ui_label_zoomout_verify.js`（真实滚轮事件，1600×900，点层 205 点视图）：
+
+- 初始 zoom 1 / layout force / 标签 5（仅分类），tip 提示「放大到约 1.7× 显示」；
+- 滚轮放大 10 格 → zoom 2.59 / layout none / 标签 205（分类 5 + 点 200）；
+- **缩回 12 格 → zoom 0.83（低于阈值 1.71）→ 标签回到 5（仅分类）**，tip 恢复「放大到约 1.7× 显示」；
+  与放大后快照比：**moved 0 / maxDelta 0**，布局包围盒 1112×1064 未变——force 没重跑、坐标没被二次缩放；
+- 再放大回 2.14 → 标签 205、位移仍 0；控制台无异常。
+
+结论：显隐两向对称，`refreshPointLabels → freezeLayout → render(layout:"none")` 在「转为隐藏」分支
+同样保位。环境备注：沙箱内 Edge 起不来（`mojo platform_channel` 建命名管道被拒 0x5），
+UI 实测必须切完全权限；profile 用 `%TEMP%\edge-qa-*`，跑完即关。
+
+不要重跑：本项实测（20:59）。下一步仍是用户 Ctrl+F5 验收 + P5 扩散加固 / P4 后置项（点级反查）。
