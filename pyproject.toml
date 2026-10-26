@@ -1,68 +1,35 @@
+[project]
+name = "kpe"
+version = "0.1.0"
+description = "Extract self-contained knowledge points from long books (PDF/Markdown/plain text)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "yianyao" }]
+requires-python = ">=3.10"
+dependencies = ["pdfplumber>=0.11"]
+keywords = ["knowledge-extraction", "llm", "pdf", "chunking", "notes"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.urls]
+Homepage = "https://github.com/yianyao/kpe"
+Source = "https://github.com/yianyao/kpe"
+
+[project.scripts]
+kpe = "kpe.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[project]
-name = "knowatlas"
-version = "0.2.0"
-description = "知道 KnowAtlas —— 个人知识统一索引与分类导航工具"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "MIT" }
-# 依赖声明（0.2.0 契约修订：原"依赖不入 pyproject"与 uv 工具链冲突——uv run 只按
-# pyproject 装依赖，导致 fastapi 缺失）。core 运行依赖入 dependencies；
-# pytest 入 dev extra；sentence-transformers / psycopg 入 optional extra。
-# requirements-core.txt / requirements-optional.txt 保留给 pip 用户，两处同步维护。
-dependencies = [
-    "fastapi",
-    "uvicorn",
-    "httpx",
-    "jieba",
-    "readability-lxml",
-    "markitdown",
-    # markitdown 各格式转换器的可选依赖（0.2.0 第二十八批：裸装 markitdown 时
-    # docx/xlsx/xls/pptx 全部 MissingDependencyException，Office 文档从未解析成功过）
-    "mammoth",
-    "openpyxl",
-    "pandas",
-    "xlrd",
-    "python-pptx",
-    "pdfplumber",
-    "mail-parser-reply>=1.36",
-    # R11（2026-10-26）：点聚类快路径用 numpy 向量化（真库 4,552 点 × 1,024 维，
-    # 纯 Python 双循环 378.7 s → 约 1.5 s）。原本只从 pandas 传递获得，不靠传递依赖。
-    "numpy",
-]
-
-[project.optional-dependencies]
-dev = ["pytest"]
-optional = [
-    "sentence-transformers",
-    "psycopg[binary]",
-    # 旧版 .doc/.ppt 的 Windows COM 解析后端（fetchers/office_legacy.py 可选能力：
-    # Windows + 本机装有 MS Office 时生效；缺失时优雅降级并指路）
-    "pywin32; sys_platform == 'win32'",
-]
-
-# 命令行入口（0.2.0 批 100 打包）：装完 wheel 后直接 `knowatlas serve`，
-# 不用再记 `python -m knowatlas`。
-[project.scripts]
-knowatlas = "knowatlas.cli:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-# 迁移 SQL + Web 静态资源都必须进包：`web/app.py` 按 `Path(__file__).parent/"static"`
-# 挂载，漏打时 wheel 装完 `serve` 能起但页面 404（0.2.0 批 100 打包时补全）。
-knowatlas = [
-    "datalayer/migrations/*.sql",
-    "web/static/*.html",
-    "web/static/*.css",
-    "web/static/*.js",
-    "web/static/vendor/*.js",
-]
+[tool.setuptools]
+packages = ["kpe"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"

@@ -1,51 +1,11 @@
-# KnowAtlas git 模板 —— 2026-10-19 从复用区模板复制；修正：config 例外放行 example（见 CHANGELOG 0.1.0）
-
-# ---- Python ----
+.venv/
 __pycache__/
-*.py[cod]
+*.pyc
 *.egg-info/
 build/
 dist/
-.venv/
-venv/
 .pytest_cache/
-.ruff_cache/
-
-# ---- 凭证（铁律：凭证只进 config/；example 模板放行入库）----
-config/*
-!config/*.example.toml
-*.env
-.env
-
-# ---- 运行期数据（唯一事实源 DB、正文库、快照；备份纪律见 SOP §2.2，不随仓库分发）----
-data/
-exports/
-*.db
-*.db.bak*
-*.sqlite
-*.sqlite3
-
-# ---- 过程文件目录（实施约束规范 §3：temp 兄弟目录纪律；若位于项目根内则整目录排除）----
 temp/
-handoff/
-# 会话守卫 watcher 自动写的交接草稿（每 2 分钟一次事件级草稿，draft=true）——
-# 值得留存的结论一律回写 docs/log.md，草稿不进仓库
-docs/交接/
-.agents/
-
-# ---- 本机层记忆（机器专属事实，换机按实际改，永不提交）----
-AGENTS.local.md
-CLAUDE.local.md
-
-# ---- 工作区兄弟目录（若项目根=记录树，以下目录不进仓库）----
-复用区/
-knowledge/
-knowledge-pre-move-backup-*.zip
-*.bundle
-
-# ---- 编辑器/系统 ----
 .vscode/
 .idea/
 .DS_Store
-Thumbs.db
-.playwright-cli/

@@ -1,74 +1,113 @@
-# 知道 KnowAtlas
+# kpe —— 长文知识点抽取
 
-个人知识统一索引与分类导航工具：不动原始数据，为分散在各处的知识源建立共享的结构化元数据，
-以分类树 / 词云 / 关系图为入口，逐层下钻并回溯到原始来源。
+把一本长书（PDF / Markdown / 纯文本）切成结构块，逐块抽「能脱离原文独立读懂」
+的知识点，产出可复核的 JSONL + Markdown 复核稿。
 
-- 仓库：https://github.com/yianyao/KnowAtlas
-- 契约文档：`docs/design/`（权威版本）；命名定稿：中文「知道」，英文 **KnowAtlas**
-  （包名 `knowatlas`，环境变量前缀 `KNOWATLAS_`，写操作头 `X-KnowAtlas-Token`，配置 `config/knowatlas.toml`）
+- **不依赖任何框架**：只用标准库 + `pdfplumber`，模型走任意 OpenAI 兼容接口；
+- **不写数据库**：产物就是一目录文件，可版本化、可 diff；
+- **可断点续跑**：每块响应落盘缓存，重跑不重复花钱；
+- **成本可控**：先用 `chunks` 免费看结构，再用 `--limit 3` 花几分钱试通。
 
-## 架构一句话
+## 安装
 
-三层 + 两契约：**源适配器**（只翻译，不抓取不分类）→ **内容获取器**（按 locator scheme 注册，跨源共享）
-→ **语义处理器**（按 task 注册，与源无关）；两契约 = 统一数据层（SQLite，唯一事实来源）+ 能力注册表。
-
-## 快速开始
+需要 Python ≥ 3.10。
 
 ```bash
-# 1. 环境——二选一：
-
-# A. uv（推荐）：依赖已声明在 pyproject.toml，一条命令装齐
-uv sync --extra dev
-
-# B. pip（Windows Git Bash 示例；路径按本机 venv 调整）
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements-core.txt
-.venv/Scripts/python -m pip install -e .
-
-# 2. 配置：复制示例并填入本机路径（config/ 不入库，凭证只存环境变量名）
-cp config/knowatlas.example.toml config/knowatlas.toml
-
-# 3. 初始化数据层（建表 + 注册内置能力 + 首条 run 记录）
-#    uv 用户把下面的 .venv/Scripts/python 换成 uv run python
-.venv/Scripts/python -m knowatlas kinit
-
-# 4. 手动入口：贴一个链接，自动 抓正文 → 归类 → 入树
-.venv/Scripts/python -m knowatlas kadd https://example.org/some/article
-
-# 5. 本地服务（默认 127.0.0.1:8420；写操作需 KNOWATLAS_WEB_TOKEN）
-.venv/Scripts/python -m knowatlas serve
+git clone https://github.com/yianyao/kpe.git
+cd kpe
+uv run --with pdfplumber python -m kpe --version      # 0.1.0
 ```
 
-## 打包与分发（0.2.0 批 100）
+或装进当前环境（之后可直接 `python -m kpe`）：
 
 ```bash
-uv build                     # 产出 dist/knowatlas-0.2.0-py3-none-any.whl 与 .tar.gz
-# 在干净环境里安装并运行（不需要源码树）：
-uv venv /tmp/ka && uv pip install --python /tmp/ka/bin/python dist/knowatlas-0.2.0-py3-none-any.whl
-/tmp/ka/bin/knowatlas --version        # 装完即有 knowatlas 命令（[project.scripts] 入口）
-KNOWATLAS_CONFIG=config/knowatlas.toml /tmp/ka/bin/knowatlas serve
+pip install .
 ```
 
-- **wheel 里带什么**：全部 Python 包 + `datalayer/migrations/*.sql` + `web/static/**`
-  （页面、样式、`vendor/echarts.min.js`）——静态资源漏打时 `serve` 能起但页面 404，已由 `package-data` 钉住。
-- **不带什么**：`config/`（含真实路径与凭证引用）、`data/`、`dist/`、`temp/`、`tests/`、`desktop/`。
-  首次运行仍需自己写 `config/knowatlas.toml`（`cp config/knowatlas.example.toml`）。
-- **可选依赖不进 wheel**：`sentence-transformers`（语义向量）、`psycopg`（PG 后端）、`pywin32`（旧版 Office）
-  都在 extra 里，缺哪个就优雅降级哪条能力。
+> **Windows 提示**：部分机器的应用程序控制策略会拦控制台入口 `kpe.exe`
+> （报 `os error 4551`）。遇到就统一用 `python -m kpe ...`，功能完全一样。
 
-## 目录速览
+## 三步
 
-| 路径 | 说明 |
+```bash
+# 1) 分块（不花钱）：先确认章节路径、页码、块大小
+python -m kpe chunks examples/sample.md --out temp/sample
+
+# 2) 抽取（花钱）：只有 --base-url/--model/--api-key-env 需要按你的服务商改
+set KNOWATLAS_LLM_API_KEY=sk-...
+python -m kpe extract temp/sample ^
+  --base-url https://api.siliconflow.cn/v1 ^
+  --model deepseek-ai/DeepSeek-V4.1-Flash ^
+  --api-key-env KNOWATLAS_LLM_API_KEY ^
+  --thinking off --workers 4 --price-in 2 --price-out 8
+
+# 3) 复核稿
+python -m kpe review temp/sample
+```
+
+先花几分钱试 3 块，确认 key、网络、JSON 都通：
+
+```bash
+python -m kpe extract temp/sample ... --limit 3
+```
+
+## 四个命令
+
+| 命令 | 作用 |
 |---|---|
-| `src/knowatlas/datalayer/` | 唯一允许碰 SQLite 的模块（防腐化红线） |
-| `src/knowatlas/adapters/` | 第一层：每源一个文件，只产出统一条目 |
-| `src/knowatlas/fetchers/` | 第二层：按 scheme 注册的获取器 |
-| `src/knowatlas/semantic/` | 第三层：先验 → 规则 → embedding/LLM 三级流水线 |
-| `src/knowatlas/registry/` | 能力注册表（新能力 = 新文件 + builtins.py 一行） |
-| `tests/` | 契约 / canary / 数据层 / kadd 端到端 |
+| `chunks` | 只分块，不调模型；打印页数、目录条数、页偏移、块数 |
+| `extract` | 逐块抽点；`--chapter` 选章、`--limit N` 试跑、`--retry-failed` 补失败、`--redo` 全重跑 |
+| `review` | 按章生成 `review.md`；`--with-sections` 带每节路径与页码 |
+| `stats` | 打印 manifest + 按现有产物现算的总点数/token/耗时 |
 
-## 纪律（详见 docs/design/知识索引工具-实施约束规范.md）
+完整参数见 [`使用手册.md`](使用手册.md)。
 
-- 改任何契约（字段/scheme/表结构/接口签名）必须先写变更工单，改完跑 `pytest tests/test_canary.py`。
-- 过程文件一律落盘到工作区 `temp/`，不进项目根；`config/` 凭证与 `data/` 运行数据永不入库。
-- 仓库内文本一律 LF（`.gitattributes` 锁定）；本地 pre-commit 门禁 + CI 兜底双层。
+## 产物（`--out` 目录）
+
+| 文件 | 内容 |
+|---|---|
+| `manifest.json` | 书元数据、目录条数、页偏移、分块参数、块数 |
+| `chunks.jsonl` | 每块：章节路径、页码、字符数、正文 |
+| `cache/<id>.json` | 每次模型原始响应 + usage（断点续跑的依据） |
+| `points.jsonl` | 点：章节、页码、text、quote、quote_ok、模型 |
+| `rejected.jsonl` | 被闸门拒掉的点及原因（调 prompt 用） |
+| `failed.jsonl` | 失败块（`--retry-failed` 重跑） |
+| `stats.json` | 块/点/拒/重复/失败/quote 命中/token/耗时 |
+| `review.md` | 按章分组的复核稿 |
+
+## 分块与校验规则（摘要）
+
+- **分块**：PDF 优先解析目录页（印刷页码 + 页偏移），按章/节/小节合并到
+  ~6,000 字；无目录时退化到 Markdown 标题或 6,000 字窗口；跳过前言/目录/
+  致谢/思考题/本章小结（`--keep-front` 可保留前言）。
+- **抽取**：每块 1–6 条，自包含、一条一事、`quote` 逐字 15–40 字、逐段扫描。
+- **校验**：JSON 容错（解析失败自动修复重问一次）；`quote` 去标点后模糊匹配；
+  最小自洽闸门（过短 / 代词开头 / 截断 / 目录 / 围栏）；书内去重。
+
+## 实测成本参考
+
+《AI-Agents-in-Depth》304 页 / 44 万字，DeepSeek 关思考、4 并发：
+
+| 指标 | 值 |
+|---|---:|
+| 块数 | 96 |
+| 知识点 | 571 |
+| quote 命中 | 570 / 571 |
+| 成本 | ≈ ¥0.85 |
+| 耗时 | 130 s |
+
+换模型只改 `--base-url / --model / --api-key-env`；`--thinking` 用
+`off`（DeepSeek）、`on` 或 `omit`（不传该参数，混元等）。
+
+## 目录结构
+
+```
+kpe/
+  kpe/{cli,pdf,chunk,prompt,llm,validate,store,review}.py
+  tests/          # 14 项 pytest，零网络
+  examples/       # 零成本自检样例
+```
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。

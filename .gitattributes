@@ -1,39 +1,6 @@
-# KnowAtlas git 模板 —— 2026-10-19 从复用区模板复制；修正：config 例外放行 example（见 CHANGELOG 0.1.0）
-# 改动须同步更新 docs/design/知识索引工具-实施约束规范.md §5
-
-# 统一换行符：仓库内一律 LF（跨机器迁移 diff 噪声最小化；项目可迁移铁律）
 * text=auto eol=lf
-*.py text eol=lf
-*.md text eol=lf
-*.json text eol=lf
-*.toml text eol=lf
-*.yaml text eol=lf
-*.yml text eol=lf
-*.html text eol=lf
-*.css text eol=lf
-*.js text eol=lf
-*.txt text eol=lf
-*.sql text eol=lf
-
-# 例外：Windows 批处理必须 CRLF——cmd.exe 对 LF-only 的 .cmd 解析不可靠
 *.bat text eol=crlf
 *.cmd text eol=crlf
-
-# 二进制资产不参与换行转换
 *.png binary
 *.jpg binary
-*.jpeg binary
-*.gif binary
-*.webp binary
-*.ico binary
 *.pdf binary
-*.zip binary
-*.docx binary
-*.xlsx binary
-*.pptx binary
-*.emmx binary
-*.db binary
-*.sqlite binary
-*.sqlite3 binary
-*.pq binary
-*.model binary
