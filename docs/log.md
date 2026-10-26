@@ -1194,3 +1194,49 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 
 <!-- HANDOFF {"at":"2026-10-26T20:08:11.679924+08:00","compactions":1,"doc":"docs/交接/2026-10-26-2008.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"OK","tokens":88550,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 <!-- HANDOFF {"at":"2026-10-26T20:14:10.737227+08:00","compactions":1,"doc":"docs/交接/2026-10-26-2014.md","draft":true,"goal":"上下文到 HANDOFF（93.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"HANDOFF","tokens":137840,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+<!-- HANDOFF {"at":"2026-10-26T20:16:10.742960+08:00","compactions":1,"doc":"docs/交接/2026-10-26-2016.md","draft":true,"goal":"上下文到 CRITICAL（98.0%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"CRITICAL","tokens":144131,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-26 20:16 交接：P4 点级图已交付（94b17e2），上下文 CRITICAL 停会话
+
+**当前目标**：P4 点级图已完成并提交；下一步由用户浏览器验收，之后可开 P5。
+
+**已完成（现场数字）**：
+
+- 提交 `94b17e2`：feat(graph) P4——点成为一等节点。改动 10 文件 +796/−54；
+  新增工单 `docs/design/变更工单-2026-10-26-P4点级图.md`、测试 `tests/test_graph_point_layer.py`（13 例）。
+- `radiate("p:<id>")` 四通道：`attach:`/`same_book:`/`same_section:`/`sim:`（点向量，阈值 0.5，
+  纯标准库余弦，4,552 点实测 0.2 s）；`section_path == book` 不出章节通道。
+- `/api/graph/subtree?layer=points&point_limit=N`：第三层换 `p:` 点卡、边 `p→c` 标 `kind="point"`；
+  无点范围回退条目层 + note；默认 `layer=entries` 响应与旧版一致（无 `layer` 键）。
+- 前端：`--point` 令牌；「◆ 点层」开关默认开 + localStorage；点节点点击即 `showRadiate`；
+  点卡显示正文/书籍章节/可点溯源；主题视图点节点 `kind:"point"`；有点时禁用分层铺开。
+- 全量测试 **629 passed / 1 skipped**；canary 1 passed；`node --check` 通过；`git diff --check` 干净。
+- serve 已重启加载新代码：trampoline **26840**，监听 **4196**（8420），令牌指纹 `2ad28785` 未变；
+  HTTP 实测 `/api/graph/radiate?node_id=p:5c07508429801ddf` → 18 节点/18 边全部有理由，
+  连点两次切焦点仍非空；`/api/graph/subtree?...&layer=points&point_limit=5` → 5 点 +
+  `truncated.points=4460`；`/graph.html` 已含 `pointLayer` / `layer=points` / `kind === "point"`。
+
+**下一步（按序，首步可直接执行）**：
+
+1. 用户浏览器 Ctrl+F5 打开 `http://127.0.0.1:8420/graph.html`：勾选「◆ 点层」→ 下钻到叶子层
+   看知识点；点任一点节点切焦点（连点两次不空）；悬停点卡看正文/书籍章节/溯源链接。
+2. 若验收有 UI 反馈，改 `graph.html` 即可（静态文件 no-store，无需重启 serve）。
+3. 之后再做 TODO P5（扩散抓取加固）或 P4 后置项（引用/指涉边、点级反查 `reverse` 对 `p:`）。
+
+**不要重跑**：
+
+- P4 实现与全量测试（629 passed / 1 skipped，2026-10-26 20:14）；
+- 不要重跑 P3 全库重点——库内 4,552 点已是 kpe 全文分块产物（`extractor=kpe`）；
+- 不要重启 serve（4196 已加载 94b17e2；前端改动 Ctrl+F5 即可）；
+- 不要提交 `docs/交接/`（session-guard watcher 的草稿产物，未跟踪）。
+
+**验证命令**：
+
+- `uv run python -m pytest -o addopts= -q` → 期望 `629 passed, 1 skipped`；
+- `uv run python -m pytest tests/test_canary.py -o addopts= -q` → 1 passed；
+- `curl "http://127.0.0.1:8420/api/graph/radiate?node_id=p:5c07508429801ddf"`（Host: 127.0.0.1:8420）
+  → `focus.kind=point`、18 节点/18 边、`truncated={same_book:50, sim:1205}`。
+
+**已知失败与处理**：无。上下文 95.2%（CRITICAL），按协议停会话写交接。
+
+<!-- HANDOFF {"at":"2026-10-26T20:16:40+08:00","compactions":1,"doc":"docs/log.md#2026-10-26-2020","draft":false,"goal":"P4 点级图已交付（94b17e2），待浏览器验收","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 /graph.html 点层；之后 P5 或 P4 后置项","not_rerun":"P4 实现与全量测试（629 passed）；P3 全库重点；serve 重启（PID 4196 已载 94b17e2）","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"HANDOFF","tokens":140038,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
