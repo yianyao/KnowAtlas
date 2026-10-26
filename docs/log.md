@@ -1722,3 +1722,67 @@ uv run python -m pytest -o addopts= -q                              # 654 passed
 `session-2a7c292a-01be-455d-80c8-7d9fbb88de92`，compactions=0，tokens≈62,000，
 baseline 147,059，effective≈42%（OK），2026-10-26T22:08+08:00。
 
+<!-- HANDOFF {"at":"2026-10-26T22:12:11.194029+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2212.md","draft":true,"goal":"上下文到 HANDOFF（86.8%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-2a7c292a-01be-455d-80c8-7d9fbb88de92","status":"HANDOFF","tokens":127616,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-26T22:24:11.160100+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2224.md","draft":true,"goal":"上下文到 CRITICAL（98.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-2a7c292a-01be-455d-80c8-7d9fbb88de92","status":"CRITICAL","tokens":144308,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-26 22:24 交接：8.3/8.4/R10 收口 + 8.6 验收通过；R11「知识主题」378 s 待修（CRITICAL 98.1% 停会话）
+
+### 当前目标
+
+Phase 8 阶段 A 收尾：8.3（书签）、8.4（本地文本）、8.6（三视图）、R10（LLM 降级可见化）本轮全部收口；
+剩 R11（「知识主题」端点真库规模下不可用）待用户挑口径后修，以及用户侧 Ctrl+F5 验收站内代理。
+
+### 已完成（含现场数字）
+
+- **8.3 书签**：预筛 191 个 url 节点 → 库内 bookmark **191 条**（161 pending + 30 rejected），1:1；
+  `distinct canonical=186`（5 个同 URL 多文件夹收藏按契约各一条）；`native_path` 中文根标签+层级；
+  真抓 3 条导航残留 0（简书 9,626→9,604、博客园 11,461→11,209）；知乎 403 = simple 后端无抗反爬，真同步走 deepseek 兜底。
+- **8.4 本地文本**：沙箱 `temp/ka84`（`KNOWATLAS_CONFIG` 覆盖 + 独立库）9 文件 → 8 条入库，
+  `skipped_hidden=1`/`skipped_ext=1`，`native_path` 四层全对，同名不同目录各一条；
+  乱码 → `fetch_status=garbled`、空文件 → **`fetch_status=empty` + `value_flag=not_knowledge`**（本轮新修）。
+- **R10**：启动 WARN（`kcheck/kpoints/...`）+ `kpoints` 报告新增 `llm_available`（无 key 时 false），两半都落。
+- **8.6 三视图**：`异步` 38 点/9 条目（条目区 100% via=point）、`async` 31/9、`协程` 1/1，**零裸文件名**；
+  词云 60 词 0.41 s 零文件名残渣；overview 3 大类 15 ms、subtree 30 节点 3 ms、
+  逐层 人工智能 27 → 智能体 8 / 智能体工程 2 / 大模型技术报告 2 / 智能体开发 4 类。
+- **提交**：`8e030aa`（空正文守门 + llm_available + 两处回归 + 文档）、`9152862`（`docs/交接/` 自动草稿移出仓库）。
+- **测试**：`pytest -o addopts= -q` → **654 passed / 1 skipped**（22:07）；canary 1 passed 零漂移。
+
+### 下一步（按序，首步可直接执行）
+
+1. **用户挑 R11 口径**（见 `docs/design/知识索引工具-TODO.md` R11）：P0 numpy 快路径 + 批量取点（不改接口）/
+   P1 进程内 TTL 缓存 / P2 前端只画 top-N。P1/P2 动接口或响应字段 → 先写 `docs/design/变更工单-*.md`。
+2. **用户 Ctrl+F5 验收站内代理**：`graph.html` ◆点层 → 点节点 → 🔍 反查 → 溯源条目「打开原文」（应新标签开 PDF）；
+   首页条目/预览同样可开（22:00 交接内容，仍未由用户确认）。
+3. 之后：8.1b（trafilatura 换装 A/B）或 Phase B 凭证源（B站/IMA/腾讯文档，等凭证）。
+
+### 不要重跑
+
+- 全量测试与 canary（654 passed / 1 skipped，22:07）；8.3 真抓 3 条（22:05）；8.4 沙箱（`temp/ka84`，22:05 复跑）。
+- 8.6 只读探针（`temp/probe_86*.py`，22:17–22:25，含检索/词云/overview/subtree）。
+- **`/api/graph/topics` 全量计时**（378.7 s，22:20）——别为了「再确认一下」白等 6 分钟。
+- 站内代理真库 PDF 实测（2 个 PDF，22:00 交接）。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 期望 NEW_SESSION（本块）
+uv run python -m pytest -o addopts= -q                   # 654 passed, 1 skipped
+uv run python temp/probe_86.py                           # 检索三级 + 词云 + overview（不要跑 topics）
+uv run python temp/ka84/probe_flags.py                   # 空文件 meta：fetch_status=empty + not_knowledge
+```
+
+### 已知失败与处理
+
+- 知乎等反爬页 `403`：simple 后端能力边界，真同步自动走 `fetch.fallback_backend=deepseek`；不是缺陷。
+- `/api/graph/subtree` 的 `category_id` 只收**裸 id**，传 `c:<id>` → 404（前端传裸 id，正常）。
+- `/api/graph/topics` 378.7 s / 1,003 主题：R11，修之前不要在浏览器点「知识主题」。
+- 本 agent shell 看不到用户级 LLM key（进程早于 setx）：需要 LLM 的命令先
+  `foreach ($n in 'KNOWATLAS_LLM_API_KEY_SF1','KNOWATLAS_LLM_API_KEY','KNOWATLAS_WEB_TOKEN') { $v=[Environment]::GetEnvironmentVariable($n,'User'); if($v){Set-Item -Path "env:$n" -Value $v} }`。
+
+### 会话指纹
+
+`session-2a7c292a-01be-455d-80c8-7d9fbb88de92`，compactions=0，tokens=144,308，
+baseline 147,059，effective **98.1%**（CRITICAL），2026-10-26T22:24+08:00。
+
+<!-- HANDOFF {"at":"2026-10-26T22:24:38+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2224","draft":false,"goal":"8.3/8.4/8.6/R10 已收口（654 passed）；R11 知识主题端点 378s 待选口径后修","host":"dsh","kind":"handoff","next":"用户挑 R11 口径（P0/P1/P2）后修；用户 Ctrl+F5 验收站内代理；之后 8.1b 或 Phase B 凭证源","not_rerun":"全量测试 654/1；8.3 真抓 3 条；8.4 沙箱；8.6 只读探针；/api/graph/topics 全量计时 378.7s","schema":1,"session":"session-2a7c292a-01be-455d-80c8-7d9fbb88de92","status":"CRITICAL","tokens":144308,"verify":"uv run --with zstandard python tools/session_check.py"} -->
