@@ -99,3 +99,104 @@ def test_api_graph_topics_endpoint(cfg, dl, registries, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert "topics" in body and "threshold" in body    # 空库也 200（note 提示）
+
+
+# ---- R11（2026-10-26 工单 变更工单-2026-10-26-R11知识主题top-N.md） ----
+
+def _seed_three_topics(dl: DataLayer) -> dict[str, list[str]]:
+    """三个互不相似的主题（各 2 点）+ 一个落单点，向量 8 维（正交基近邻）。"""
+    es = [Entry.build(source_type="manual", source_key=f"tl:{i}",
+                      title=f"条目{i}", locator=f"https://e.example/l{i}",
+                      locator_canonical=None, inline_content=f"正文{i}",
+                      native_path=None, meta={})
+          for i in range(7)]
+    dl.upsert_entries(es)
+    texts = {
+        "git": ["git 提交规范与分支策略", "git 命令行常用操作"],
+        "py": ["python 装饰器原理", "python 生成器用法"],
+        "docker": ["docker 镜像构建", "docker 容器编排"],
+        "lonely": ["完全无关的落单知识点"],
+    }
+    pids: dict[str, list[str]] = {}
+    vec_by_text = {
+        "git 提交规范与分支策略": [1.0, 0, 0, 0, 0, 0, 0, 0],
+        "git 命令行常用操作": [0.98, 0.1, 0, 0, 0, 0, 0, 0],
+        "python 装饰器原理": [0, 1.0, 0, 0, 0, 0, 0, 0],
+        "python 生成器用法": [0.1, 0.98, 0, 0, 0, 0, 0, 0],
+        "docker 镜像构建": [0, 0, 1.0, 0, 0, 0, 0, 0],
+        "docker 容器编排": [0, 0.05, 0.99, 0, 0, 0, 0, 0],
+        "完全无关的落单知识点": [0, 0, 0, 1.0, 0, 0, 0, 0],
+    }
+    i = 0
+    for key, group in texts.items():
+        for text in group:
+            from knowatlas.pipeline.points import point_hash
+            pid = point_hash(text)[:16]     # 与 put_point 的确定性 id 同源
+            dl.put_point({"content_hash": point_hash(text), "text": text,
+                          "summary": "", "source_type": "manual",
+                          "judge": "integral", "meta": {}},
+                         {"entry_id": es[i].id, "char_offset": 0,
+                          "anchor": text[:120]})
+            i += 1
+            dl.put_point_vectors([{"point_id": pid, "dim": 8, "model": "fake:test",
+                                   "vector": vec_to_blob(
+                                       normalize(vec_by_text[text]))}])
+            pids.setdefault(key, []).append(pid)
+    return pids
+
+
+def test_topic_clusters_limit_truncates(dl):
+    """limit 截断：total 报全量、truncated=True、topics 只留按点数降序的前 N。"""
+    _seed_three_topics(dl)
+    r = topic_clusters(dl, limit=2)
+    assert r["total"] == 3 and len(r["topics"]) == 2
+    assert r["truncated"] is True and r["limit"] == 2
+    assert all(t["size"] == 2 for t in r["topics"])
+
+
+def test_topic_clusters_limit_none_returns_all(dl):
+    """limit=None → 不截断（全量口径），truncated=False。"""
+    _seed_three_topics(dl)
+    r = topic_clusters(dl, limit=None)
+    assert r["total"] == 3 and len(r["topics"]) == 3
+    assert r["truncated"] is False
+
+
+def test_api_graph_topics_limit_param(cfg, dl, registries):
+    """端点 limit 查询参数生效（默认 80，显式传值回声到响应）。"""
+    _seed_three_topics(dl)
+    from knowatlas.web.app import create_app as _ca
+    app = _ca(cfg, dl, *registries)
+    client = TestClient(app, headers={"Host": "127.0.0.1:8420"})
+    body = client.get("/api/graph/topics?limit=1").json()
+    assert body["limit"] == 1 and len(body["topics"]) == 1
+    assert body["total"] == 3 and body["truncated"] is True
+    assert client.get("/api/graph/topics").json()["limit"] == 80
+
+
+def test_greedy_clusters_numpy_matches_pure():
+    """R11 数值等价：numpy 快路径的簇划分/簇内序必须与纯 Python 逐簇相同。"""
+    import random
+
+    from knowatlas.pipeline.embed_index import _greedy_clusters, _greedy_pure
+
+    rnd = random.Random(20261026)
+    centers = [[rnd.gauss(0, 1) for _ in range(64)] for _ in range(8)]
+    vecs: dict[str, list[float]] = {}
+    for i in range(300):
+        c = centers[i % len(centers)]
+        vecs[f"p{i:03d}"] = normalize(
+            [x + rnd.gauss(0, 0.15) for x in c])
+    fast = _greedy_clusters(vecs, 0.72)      # 300 ≥ _NUMPY_MIN → numpy 路径
+    pure = _greedy_pure(vecs, 0.72)
+    assert [c["ids"] for c in fast] == [c["ids"] for c in pure]
+
+
+def test_greedy_clusters_dim_mismatch_falls_back():
+    """向量维度不一致（多模型混排）→ 退回纯 Python，不抛异常。"""
+    from knowatlas.pipeline.embed_index import _greedy_clusters
+
+    vecs = {f"p{i}": [1.0, 0.0, 0.0] for i in range(70)}
+    vecs["p70"] = [1.0, 0.0]                 # 维度不齐
+    out = _greedy_clusters(vecs, 0.72)
+    assert sum(len(c["ids"]) for c in out) == 71

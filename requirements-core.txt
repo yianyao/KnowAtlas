@@ -15,4 +15,6 @@ pandas
 xlrd
 python-pptx
 pdfplumber
+# R11（2026-10-26）：点聚类快路径（embed_index._greedy_np）；与 pyproject.toml 同步维护
+numpy
 pytest

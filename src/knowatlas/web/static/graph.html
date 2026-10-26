@@ -586,14 +586,22 @@ async function doSearch(q, push = true) {
 }
 
 // ---- 知识主题聚合视图（批次 88 试点：点向量聚类主题节点，条目退溯源层） ----
+// R11（2026-10-26）：真库 1,003 个主题 / 全量 378.7 s——默认只取点数最多的前
+// TOPIC_LIMIT 个（服务端 limit 截断 + 只对返回的主题命名），副标题说明总量。
+const TOPIC_LIMIT = 80;
 async function showTopics(push = true) {
-  const data = await (await fetch("/api/graph/topics")).json();
+  const data = await (await fetch(`/api/graph/topics?limit=${TOPIC_LIMIT}`)).json();
   currentRadiate = null; currentSubtree = null;
   if (data.note || !(data.topics || []).length) {
     tip.textContent = data.note || "还没有可聚合的知识主题（需要 ≥2 个语义相近的知识点）。";
     render({ nodes: [], links: [] }, "知识主题");
     return;
   }
+  const total = (data.total ?? data.topics.length);
+  const shown = data.topics.length;
+  const head = data.truncated
+    ? `知识主题 ${shown} 个 / 共 ${total} 个（按点数取前 ${data.limit}；阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`
+    : `知识主题 ${shown} 个（阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`;
   const nodes = [], links = [], seen = new Set();
   data.topics.forEach((t, i) => {
     const tid = "t:" + i;
@@ -610,9 +618,10 @@ async function showTopics(push = true) {
       links.push({ source: tid, target: pid, kind: "attach" });
     }
   });
-  render({ nodes, links, truncated: {}, focus: { id: "" } },
-         `知识主题 ${data.topics.length} 个（阈值 ${data.threshold}，落单 ${data.singles} 点未聚合）`);
-  tip.textContent = "主题=语义相近知识点聚合（共享词命名）；悬停成员点看知识内容与溯源条目。";
+  render({ nodes, links, truncated: {}, focus: { id: "" } }, head);
+  tip.textContent = data.truncated
+    ? `主题=语义相近知识点聚合（共享词命名）；全库共 ${total} 个，图上只画点数最多的前 ${shown} 个，点主题节点可下钻成员点。`
+    : "主题=语义相近知识点聚合（共享词命名）；悬停成员点看知识内容与溯源条目。";
   if (push) {
     nav.push({ label: "知识主题", load: p => showTopics(false) });
     renderBread();

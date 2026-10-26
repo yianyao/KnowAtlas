@@ -4,6 +4,16 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · R11 知识主题端点：numpy 快路径 + top-N 截断（2026-10-26）
+
+- **为什么**：8.6 验收实测 `GET /api/graph/topics` 在真库 **378.7 s**（HTTP 30 s / 300 s 全超时），前端点「知识主题」卡 6 分钟；返回 1,003 个主题、平均 2.4 点/簇，图也不可读。`temp/probe_r11.py` 抽样拆分（800/1,600 点 + 二次外推）：`_greedy_clusters` 纯 Python 双循环占 **~340 s（九成）**、1,003 次 `shared_words` 命名 ≈ **29 s**、`_all_point_hits` 逐点 `get_point_hit` 仅 **0.3 s**——原 TODO 猜的「批量取点」热点不成立，不必做。
+- **聚类**（`pipeline/embed_index.py`）：`_greedy_clusters` 拆为 `_greedy_pure`（原实现，兜底）+ numpy 快路径（簇心矩阵预分配 `(n, dim)` float64，逐点 `C[:k] @ v` → 取最大值、并列取**末位**以保持纯 Python 的 `>=` 更新序）；numpy 缺失 / 向量维度不一致（多模型混排）/ 点数 < 64 → 自动退回纯 Python，行为与改造前一致。签名与返回形状（`ids` / `centroid` 为 `list[float]`）不变。
+- **端点**（`web/api.py` + `pipeline/graph_topics.py`）：`topic_clusters(dl, threshold=0.72, limit=80)`——先聚簇、按点数降序、**只对截断后返回的 N 个主题**算共享词名（第二热点）；响应新增 `total` / `limit` / `truncated`，`topics` / `singles` / `vectors` / `threshold` 语义不变。端点加 `limit` 查询参数（默认 80，夹到 `[1, 500]`）。表结构 / 字段 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 能力注册表**零变更**，canary 零漂移。
+- **前端**（`web/static/graph.html::showTopics`）：请求带 `?limit=80`；副标题在截断时显示「知识主题 80 个 / 共 1003 个（按点数取前 80；阈值 0.72，落单 1768 点未聚合）」，tip 说明只画前 N。
+- **依赖**（`pyproject.toml` + `requirements-core.txt`）：`numpy` 显式入 core 依赖（原本只从 pandas 传递获得）。
+- **测试**：新增 5 例（`limit` 截断 + `total`/`truncated`、`limit=None` 全量、端点 `?limit=1` 与默认 80、numpy 与纯 Python 300×64 维随机数据逐簇相等、维度不一致退回纯 Python）；全量 **659 passed / 1 skipped**（原 654）。
+- **实测**：真库直调 `topic_clusters(limit=80)` **2.69 s**（原 378.7 s，`total=1003`、`truncated=true`）；线上 `GET /api/graph/topics?limit=5` → 200 / **3.05 s**；headless Edge 走真实按钮 `#topicBtn` → **3.43 s** 出图，80 主题节点 + 485 成员点，副标题与 tip 文案正确，控制台零异常。P1 进程内 TTL 缓存**本轮不做**（工单 §5 记了理由）。
+
 ### 变更工单 · 条目原文站内代理（修「反查可溯源，但打不开」，2026-10-26）
 
 - **为什么**：用户 Ctrl+F5 验收 P4 点级反查后报障「反查可溯源，但打不开」。定位：反查面板把 `it.locator` 原样塞进 `<a href>`，而真库 30 条 active 条目里 **29 条 folder 的 locator 是 `file://<相对 [sources.folders].roots 的路径>`**（多数 PDF）——`file://` 后第一段被浏览器当主机名，且 http 页面跳 `file://` 一律被拦；`index.html` 12 处条目链接同样是假链接。不是数据问题，是第三十七批「不渲染打不开的假链接」纪律在反查面板（21:32 新加代码）与首页列表上漏守。

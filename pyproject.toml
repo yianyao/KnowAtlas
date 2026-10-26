@@ -29,6 +29,9 @@ dependencies = [
     "python-pptx",
     "pdfplumber",
     "mail-parser-reply>=1.36",
+    # R11（2026-10-26）：点聚类快路径用 numpy 向量化（真库 4,552 点 × 1,024 维，
+    # 纯 Python 双循环 378.7 s → 约 1.5 s）。原本只从 pandas 传递获得，不靠传递依赖。
+    "numpy",
 ]
 
 [project.optional-dependencies]

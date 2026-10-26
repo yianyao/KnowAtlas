@@ -262,12 +262,33 @@ def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
             "vectors": len(cands)}
 
 
+_NUMPY_MIN = 64        # 小于此规模纯 Python 更快（省掉建簇心矩阵的开销）
+
+
 def _greedy_clusters(vecs: dict[str, list[float]], threshold: float
                      ) -> list[dict[str, Any]]:
-    """贪心归簇（56 批口径，cluster_report 与 60 批 group_hits 共用）：
+    """贪心归簇（56 批口径，cluster_report 与 60/88 批共用）：
     按给定顺序遍历，与已有簇心（成员均值向量）比相似度，≥threshold 归入
     最高者，否则自立新簇。返回 [{"ids": [...], "centroid": [...]}, ...]，
-    簇序与簇内序 = 输入序（确定性）。"""
+    簇序与簇内序 = 输入序（确定性）。
+
+    R11（2026-10-26）：真库 4,552 点 / 1,024 维下纯 Python 双循环 378.7 s，
+    改 numpy 向量化（逐点 `C[:k] @ v`，簇心增量公式不变，float64 与 Python
+    float 同宽）→ 约 1.5 s，簇划分与纯 Python 逐簇一致（回归见
+    tests/test_embed_index.py）。numpy 缺失 / 向量维度不一致 / 点数
+    < _NUMPY_MIN → 退回 `_greedy_pure`，行为与改造前完全一致。
+    """
+    if len(vecs) >= _NUMPY_MIN:
+        try:
+            return _greedy_np(vecs, threshold)
+        except (ImportError, ValueError):
+            pass          # 无 numpy / 维度不齐（多模型混排）→ 纯 Python 兜底
+    return _greedy_pure(vecs, threshold)
+
+
+def _greedy_pure(vecs: dict[str, list[float]], threshold: float
+                 ) -> list[dict[str, Any]]:
+    """纯 Python 贪心（原实现，兜底路径；语义即 _greedy_clusters 的契约）。"""
     clusters: list[dict[str, Any]] = []
     for eid, vec in vecs.items():
         best, best_score = None, threshold
@@ -284,6 +305,43 @@ def _greedy_clusters(vecs: dict[str, list[float]], threshold: float
                 (x * (n - 1) + y) / n
                 for x, y in zip(best["centroid"], vec)]
     return clusters
+
+
+def _greedy_np(vecs: dict[str, list[float]], threshold: float
+              ) -> list[dict[str, Any]]:
+    """numpy 向量化贪心（R11 快路径）：簇心矩阵预分配 (n, dim) float64，
+    逐点与已建簇心做矩阵-向量积取最大相似度；返回值形状同 `_greedy_pure`
+    （centroid 转回 list[float]，一次性 C 层转换）。"""
+    import numpy as np  # noqa: PLC0415 惰性导入：缺 numpy 时由调用方兜底
+
+    names = list(vecs)
+    dims = {len(v) for v in vecs.values()}
+    if len(dims) != 1:
+        raise ValueError(f"向量维度不一致：{sorted(dims)}")  # → 纯 Python 兜底
+    dim = dims.pop()
+    cents = np.zeros((len(names), dim), dtype=np.float64)
+    counts = np.zeros(len(names), dtype=np.int64)
+    ids_of: list[list[str]] = [[] for _ in range(len(names))]
+    k = 0
+    for pid in names:
+        v = np.asarray(vecs[pid], dtype=np.float64)
+        if k:
+            scores = cents[:k] @ v
+            best = scores.max()
+            if best >= threshold:
+                # 纯 Python 用 `score >= best_score` 逐簇更新 → 并列时取**最后**一个；
+                # 这里同序取末位，保持「簇划分 + 归属」逐点一致（非仅集合一致）
+                j = int(np.flatnonzero(scores == best)[-1])
+                counts[j] += 1
+                cents[j] = (cents[j] * (counts[j] - 1) + v) / counts[j]
+                ids_of[j].append(pid)
+                continue
+        cents[k] = v
+        counts[k] = 1
+        ids_of[k].append(pid)
+        k += 1
+    cents_l = cents[:k].tolist()
+    return [{"ids": ids_of[i], "centroid": cents_l[i]} for i in range(k)]
 
 
 def cluster_report(dl: Any, embedder: Any, llm: Any,

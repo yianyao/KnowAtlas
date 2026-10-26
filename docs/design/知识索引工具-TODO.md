@@ -454,13 +454,19 @@ reader: 执行者（人与 agent）
       的 stats 增加 `llm_available`（`llm is not None`），`kpoints` 报告里直接可见 `"llm_available": false`。
       注意 WARN 只看**进程环境变量**：key 在用户级但进程早于 `setx` 启动时仍会报警，这正确
       （那种状态下语义层确实降级）。
-- [ ] R11 **「知识主题」端点真库规模下不可用**（2026-10-26 8.6 验收实测）：`/api/graph/topics`
-      在 4,552 点 / 4,552 条点向量上 **378.7 s**（HTTP 30 s / 300 s 都超时），前端 `graph.html:590`
-      点「知识主题」按钮即卡 6 分钟，返回 1,003 个主题（图本身也不可读）。热点：
-      `embed_index._greedy_clusters` 纯 Python O(n²)（4,552×~500 簇×1,024 维 ≈ 2.3 G 乘加）、
-      `graph_topics._all_point_hits` 每点一次 `get_point_hit`、1,003 个主题各跑一次 jieba `shared_words`。
-      注释里「真库 ~114 点」已过时。**待用户挑口径**：P0 numpy 快路径 + 批量取点（不改接口）/
-      P1 进程内 TTL 缓存 / P2 前端只画 top-N 主题。P1/P2 若动接口或响应字段，先写变更工单。
+- [x] R11 **「知识主题」端点真库规模下不可用**（2026-10-26 8.6 验收实测；**同日 22:40 已修**，口径 A）：
+      原状 `/api/graph/topics` 在 4,552 点 / 4,552 条点向量上 **378.7 s**（HTTP 30 s / 300 s 都超时），
+      前端 `graph.html:590` 点「知识主题」按钮即卡 6 分钟，返回 1,003 个主题（图本身也不可读）。
+      拆分实测（`temp/probe_r11.py`，抽样外推）：`_greedy_clusters` 纯 Python 双循环占 ~340 s、
+      1,003 次 jieba `shared_words` 命名 ≈ 29 s、`_all_point_hits` 逐点 `get_point_hit` 仅 **0.3 s**
+      （原猜测的「批量取点」热点不成立，未做）。
+      **已实施**（工单 `变更工单-2026-10-26-R11知识主题top-N.md`）：① `_greedy_clusters` numpy 快路径
+      （float64、并列取末位保持纯 Python 序，numpy 缺失/维度不齐/<64 点退回纯 Python）；
+      ② `topic_clusters(limit=80)` 只对返回的 top-N 命名，响应加 `total`/`limit`/`truncated`，
+      端点 `limit` 夹 `[1,500]`；前端副标题说明「80 个 / 共 1003 个」。
+      **现场数字**：真库直调 **2.69 s**（原 378.7 s）、线上 `?limit=5` 3.05 s、UI 点击 3.43 s；
+      全量 **659 passed / 1 skipped**（654+5）、canary 零漂移。
+      P1 TTL 缓存未做（工单 §5：等真出现「反复点」的诉求再加）。
 
 ## 阻塞项
 

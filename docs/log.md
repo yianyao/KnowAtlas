@@ -1786,3 +1786,51 @@ uv run python temp/ka84/probe_flags.py                   # 空文件 meta：fetc
 baseline 147,059，effective **98.1%**（CRITICAL），2026-10-26T22:24+08:00。
 
 <!-- HANDOFF {"at":"2026-10-26T22:24:38+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2224","draft":false,"goal":"8.3/8.4/8.6/R10 已收口（654 passed）；R11 知识主题端点 378s 待选口径后修","host":"dsh","kind":"handoff","next":"用户挑 R11 口径（P0/P1/P2）后修；用户 Ctrl+F5 验收站内代理；之后 8.1b 或 Phase B 凭证源","not_rerun":"全量测试 654/1；8.3 真抓 3 条；8.4 沙箱；8.6 只读探针；/api/graph/topics 全量计时 378.7s","schema":1,"session":"session-2a7c292a-01be-455d-80c8-7d9fbb88de92","status":"CRITICAL","tokens":144308,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+
+## 2026-10-26 22:45 R11 收口：知识主题端点 378.7 s → 2.69 s（口径 A：numpy 快路径 + top-N）
+
+会话 `session-b8a0d74d`（新会话，开场 effective 10.7%）。用户「继续」→ 按交接块第 1 步执行：
+**用户裁决 R11 口径 A = P0（numpy 快路径）+ P2（top-N 截断）**。
+
+### 先做的三件事
+
+- **8420 端口被上一会话遗留的 serve（PID 12672）占住且已无响应**：低完整性 shell 杀不掉
+  （`Stop-Process` 报「找不到进程」、`tasklist` 报拒绝访问），一次性提权 `taskkill /F` 清掉后重启。
+  重启后 `overview` 200 / 20 ms、首页 200 —— **站内代理验收现在可做**。
+- `temp/` 对低完整性 shell 仍不可写（`Tee-Object` 报拒绝访问），serve 日志改落 `$env:TEMP`。
+- uv 缓存照旧走 `$env:UV_CACHE_DIR="$env:TEMP\uvcache-knowatlas"` 兜底。
+
+### 热点拆分（`temp/probe_r11.py`，只读抽样，不重跑 378.7 s）
+
+| 热点 | 实测 | 全量 |
+|---|---|---|
+| `_greedy_clusters` 纯 Python | 800 点 21.0 s / 1,600 点 76.0 s | **~340 s（九成）** |
+| `shared_words` 命名 | 29 ms/主题 | ≈ 29 s |
+| `_all_point_hits` 逐点 `get_point_hit` | 0.07 ms/点 | **0.3 s（原猜的热点不成立）** |
+
+numpy 对照：800 点 0.067 s、1,600 点 0.188 s，外推 ≈1.5 s，且簇划分与纯 Python **逐簇一致**。
+
+### 落地（工单 `docs/design/变更工单-2026-10-26-R11知识主题top-N.md`）
+
+- `pipeline/embed_index.py`：`_greedy_clusters` → `_greedy_pure`（兜底）+ numpy 快路径
+  （float64 簇心矩阵、逐点 `C[:k] @ v`、并列取末位以保持纯 Python `>=` 更新序）；
+  numpy 缺失 / 维度不一致 / <64 点退回纯 Python；签名与返回形状不变。
+- `pipeline/graph_topics.py`：`topic_clusters(dl, threshold, limit=80)`——只对返回的 top-N 命名，
+  响应加 `total`/`limit`/`truncated`；`MAX_LIMIT=500`。
+- `web/api.py`：端点加 `limit` 查询参数并夹 `[1,500]`。
+- `web/static/graph.html`：`?limit=80`，副标题「80 个 / 共 1003 个」+ tip 说明。
+- `pyproject.toml` / `requirements-core.txt`：`numpy` 显式入 core（不再靠 pandas 传递）。
+
+### 现场数字
+
+- 真库直调 `topic_clusters(limit=80)`：**2.69 s**（原 378.7 s），`total=1003`、`truncated=true`、返回 80。
+- 线上 `GET /api/graph/topics?limit=5`：**3.05 s / HTTP 200**，字段齐全。
+- headless Edge 点 `#topicBtn`：**3.43 s** 出图，80 主题节点 + 485 成员点，副标题与 tip 文案正确，控制台零异常。
+- 测试：`pytest -o addopts= -q` → **659 passed / 1 skipped**（654 + 5 新增）；canary 未动契约（六项零漂移，未改 CANARY）。
+
+### 下一步
+
+1. 用户 Ctrl+F5 验收两处：图页「知识主题」按钮（应 3-4 s 出图、副标题显示「共 1003 个」）、
+   以及 22:00 起的站内代理（点层 ◆ → 点节点 → 🔍 反查 → 溯源条目「打开原文」开 PDF）。
+2. 之后：8.1b（trafilatura 换装 A/B）或 Phase B 凭证源（B站/IMA/腾讯文档，等凭证）。
+3. R11 的 P1（进程内 TTL 缓存）**刻意未做**：等真出现「反复点」的诉求再加（工单 §5）。
