@@ -1477,3 +1477,61 @@ baseline 147,059，effective 88.5%（HANDOFF），2026-10-26T21:10+08:00。
 
 <!-- HANDOFF {"at":"2026-10-26T21:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2110","draft":false,"goal":"P5 扩散加固已交付（2d2ec99 / 634 passed），待用户浏览器验收图页","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 graph.html 点层缩放显隐与全屏；新会话先 session_check + pytest（634/1），再出 P4 后置项方案（点级反查 reverse 对 p: 或引用/指涉边）","not_rerun":"全量测试（634 passed，21:08）；真库 value-scan dry-run（21:12）；图页缩放显隐两向实测（20:57/20:59）","schema":1,"session":"session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843","status":"HANDOFF","tokens":130185,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 
+## 2026-10-26 21:32 交接：点级反查已交付（93d6efa / 639 passed）
+
+### 当前目标
+
+P4 后置项 A（点级反查）已交付并提交；用户下一步是 Ctrl+F5 验收图页反查面板，
+之后若要继续 P4 只剩第四类边「引用/指涉」（需新工单，最贵）。
+
+### 已完成（含产物路径与现场数字）
+
+- **提交**：`93d6efa` feat(graph) 点级反查（9 文件 +273/−10）、`b1e469a` docs 补提交号。
+- **数据层** `db.reverse_reach` + `_point_reverse_items`（放在 `_point_*` 块内，紧跟 `_point_sources`）：
+  溯源条目（`source:point`，带 `locator`）+ 分类（`attach:<origin>`，带 `path`，按分类去重）；
+  闸门复用 `_point_row`；对称边不反向枚举。
+- **接口** `/api/graph/reverse?node_id=p:<id>` 404→200；`c:`/`e:` 不动、`d:` 仍 404；
+  条目项多可选 `locator`；无表结构/字段/scheme/四常量变更（canary 1 passed）。
+- **前端** `graph.html`：`KIND_LABEL` 补 source/point；反查面板 entry 带 locator 渲染外链；404 文案修正。
+- **测试** `tests/test_graph_point_layer.py` +5 例；全量 **639 passed / 1 skipped**（21:23 与 21:30 两次）。
+- **真库/线上**：只读副本 4/4 点可反查（`p:5c07508429801ddf` → entry + `人工智能/智能体`）；
+  serve 已重启（8420，PID **15968**），`/reverse?node_id=p:5c07…` → 200，graph.html 200 / 46,477 B；
+  headless Edge 实测面板两行、理由「溯源·知识点」/「挂接·语义判断」、无 console 异常。
+
+### 下一步（按序）
+
+1. 用户 `Ctrl+F5` → `http://127.0.0.1:8420/graph.html`：点层 → 点节点切焦点 → 「🔍 反查」，
+   应看到溯源条目（可点开原文）+ 分类链。
+2. 若继续做 P4 第四类边「引用/指涉」：**先出方案再动代码**（建议规则先行：`[n]` 编号引用、
+   `见 §x`、书名+章节号、内文 URL；LLM 只做候选复核），并新写工单 + 新 reason 通道 `cite:`。
+3. 其他候选（TODO P0–P3 收尾项）：无。
+
+### 不要重跑
+
+- 全量测试（639 passed / 1 skipped，21:30）；
+- 真库反查探针（`temp/probe_reverse_point.py`，只读副本，21:18）；
+- UI 反查实测（`temp/ui_reverse_point_check.js`，21:21）；
+- 不要重启 serve（PID 15968 已载本轮代码，前端改动 Ctrl+F5 即生效）。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py    # 新会话应 NEW_SESSION
+uv run python -m pytest -o addopts= -q                   # 639 passed, 1 skipped
+curl "http://127.0.0.1:8420/api/graph/reverse?node_id=p:5c07508429801ddf"   # 200，items 2 项
+```
+
+### 已知失败与处理
+
+- 本会话 `workspace-write` 模式下 pytest 全红（431 个 PermissionError：dsh 临时目录与
+  `.pytest_cache` WinError 5），**不是代码问题**；切完全权限（danger-full-access）后全绿，Edge 也可用。
+  跑测试 / UI 实测需完全权限。
+- `docs/交接/` 是 watcher 草稿产物，未跟踪、不要提交。
+
+### 会话指纹
+
+`session-0130f5c8-6441-4fe1-badc-66aadafbf63c`，compactions=0，tokens≈114,225，
+baseline 147,059，effective 77.7%，2026-10-26T21:32+08:00。
+
+<!-- HANDOFF {"at":"2026-10-26T21:32:10+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2132","draft":false,"goal":"点级反查已交付（93d6efa / 639 passed），待用户 Ctrl+F5 验收图页反查面板","host":"dsh","kind":"handoff","next":"用户验收 /graph.html 点聚焦后的反查面板；若继续做 P4 第四类边引用/指涉需先出方案+新工单（规则先行，LLM 只复核候选）","not_rerun":"全量测试（639 passed，21:30）；真库反查探针（只读副本）；UI 反查实测；serve 已重启（PID 15968）","schema":1,"session":"session-0130f5c8-6441-4fe1-badc-66aadafbf63c","status":"HANDOFF","tokens":114225,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+
