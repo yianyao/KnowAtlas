@@ -337,6 +337,12 @@ def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
                 _flag(e, "unparseable" if isinstance(last_exc, DegradedParseError)
                       else "unreachable", str(last_exc))
             continue
+        if not text.strip():
+            # 空正文守门（TODO 8.4 验收补充，2026-10-26）：0 字节文件/纯空白页
+            # 抓下来也是「没有知识」——与 expand 批次 94 的 empty_body 同口径。
+            # 只标记不删（用户可否决），但不得以「可消费 active 条目」进检索/分类/抽点。
+            _flag(e, "empty")
+            continue
         if is_garbled(text):
             _flag(e, "garbled")  # 乱码正文不入库不进 FTS，直接进待清理候选
             continue

@@ -247,6 +247,9 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     run_id = uuid.uuid4().hex[:16]
     dl.start_run(run_id, "kpoints")
     stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
+                             # R10 第二半（2026-10-26）：报告里显式带 LLM 是否连上——
+                             # 为 false 时 integral 点是「整篇照抄」降级产物，不是提炼结果。
+                             "llm_available": llm is not None,
                              "processed": 0, "integral": 0, "split": 0,
                              "mixed_dir": 0, "force_overrides": 0, "skeleton": 0,
                              "points_created": 0, "points_linked": 0,

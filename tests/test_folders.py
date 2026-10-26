@@ -179,3 +179,26 @@ def test_new_entries_default_active_unchanged(cfg, dl, registries, folder_tree):
     run_sync(cfg, dl, locators, semantics, full=True)
     e = dl.get_entry(dl.find_by_locator("file://笔记.txt")[0].id)
     assert e.status == "active"
+
+
+# ---- 空正文守门（TODO 8.4 验收补充 2026-10-26）：0 字节文件不进消费面 ----
+
+def test_fetch_flags_empty_file_as_not_knowledge(cfg, dl, registries, tmp_path):
+    """0 字节文件抓取后打 value_flag=not_knowledge（reason=empty），不以空正文混进检索/抽点。"""
+    root = tmp_path / "小样本"
+    root.mkdir()
+    (root / "正常.md").write_text("# 正常\n\n" + "正文内容。" * 40, encoding="utf-8", newline="\n")
+    (root / "空文件.md").write_text("", encoding="utf-8", newline="\n")
+    _enable(cfg, root)
+    locators, semantics = registries
+    run_sync(cfg, dl, locators, semantics, full=True)
+    stats = run_sync(cfg, dl, locators, semantics, fetch_limit=5)
+    assert stats["sources"]["folders"]["fetch_failed"] == 1
+    empty = dl.get_entry(dl.find_by_locator("file://空文件.md")[0].id)
+    assert empty.meta["value_flag"] == "not_knowledge"
+    assert empty.meta["value_flag_reason"] == "empty"
+    assert empty.meta["fetch_status"] == "empty"
+    assert not empty.content_hash                    # 空正文不入正文库
+    # 正常文件照常入库（守门不误伤非空正文）
+    normal = dl.get_entry(dl.find_by_locator("file://正常.md")[0].id)
+    assert normal.content_hash and "正文内容" in dl.get_content(normal.content_hash)

@@ -352,10 +352,19 @@ reader: 执行者（人与 agent）
       - **实测（2026-10-24）**：`Hello-Agents` 97.9 MB/720 页 25 分钟 → **3.29 s**；`厦大讲义` 51 MB/882 页 8 分钟未完 → **1.96 s**；其余 9 份 PDF 留在 markitdown（pdfium 对 `agentic-ai-guide` 只取到 30% 字符、对 `AI-Agents-in-Depth` 43%，所以 auto 阈值定在 **30 MB / 1500 页**，pdfium 只做逃生通道）
       - **扫描件**：平均每页 <20 字符 → `DegradedParseError("scanned_pdf")`，不产条目正文（OCR 不在本期）
       - 遗留：`content_store` 6 行孤儿正文（反复 `--force` 重灌留下）→ 见 8.15
-- [ ] 8.3 书签 + HTML 网页（`adapters/bookmark.py` 已就绪：配 `paths.edge|chrome` 后跑通；`http_simple` 接通用段清洗；导航/按钮墙/骨架不产条目）
-      - 探针：真实 Bookmarks JSON 同步，条目数=有效书签数；抓取页清洗后正文无导航残留
-- [ ] 8.4 本地文本/HTML 文件（`sources.folders` 先指一个**小目录**验 file:// 链路：md/txt/html 直读；Office/PDF 走 8.2）
-      - 探针：10 个以内文件入库，native_path 与目录层级一致；空文件/乱码文件不产条目
+- [x] 8.3 书签 + HTML 网页（`adapters/bookmark.py` 已就绪：配 `paths.edge|chrome` 后跑通；`http_simple` 接通用段清洗；导航/按钮墙/骨架不产条目）
+      - **2026-10-26 端到端验收通过**：预筛后 191 个 url 节点 → 库内 bookmark 191 条（161 pending + 30 rejected），
+        1:1 对齐；`distinct canonical=186`，5 个同 URL 多文件夹收藏按契约各建一条；`native_path` = 中文根标签 + 文件夹层级
+        （书签栏/AI 54、其他书签/js 37、其他书签/python 25 …）。真抓 3 条：简书 9,626→9,604 字、博客园 11,461→11,209 字，
+        导航词清洗前后均为 0（"注册"是正文"注册组件"）；知乎 403 = simple 后端无反爬能力，真同步走 fallback deepseek。
+- [x] 8.4 本地文本/HTML 文件（`sources.folders` 先指一个**小目录**验 file:// 链路：md/txt/html 直读；Office/PDF 走 8.2）
+      - **2026-10-26 沙箱验收**（`temp/ka84`，独立 config+库，不碰真库）：9 文件 → 入库 8 条，`skipped_hidden=1`、
+        `skipped_ext=1`；`native_path` 四层全对；根与子目录同名 `笔记A.md` 各一条不互相覆盖；
+        非法 UTF-8 文件 → `fetch_status=garbled` + `value_flag=not_knowledge`（不进消费面）✓。
+      - **首轮验收发现、当日已修（2026-10-26）**：0 字节空文件原先 `fetch_status=ok`、仍可消费；
+        已在 `pipeline/sync.py::_fetch_missing` 加空正文守门（`_flag(e, "empty")`，与 expand 批次 94 的
+        `empty_body` 同口径），沙箱复跑 `fetch_status=empty` + `value_flag=not_knowledge`；
+        回归 `tests/test_folders.py::test_fetch_flags_empty_file_as_not_knowledge`，全量 654 passed / 1 skipped。
 - [x] 8.5 **知识点自洽性闸门**（裁决 1）：点必须是可独立读懂的完整单元——带论据的观点/结论、概念解释或术语描述、完整步骤、独立数据；**禁裸名词、禁截断步骤**；一个文件只产 1 个点是合法输出
       ——**2026-10-24 已完成**（工单 `变更工单-2026-10-24-8.5自洽性闸门.md`）：新增
       `pipeline/point_gate.py` 确定性闸门（7 个原因码：过短/裸名词/步骤缺首/跳号/缺尾/
@@ -435,12 +444,11 @@ reader: 执行者（人与 agent）
       需真实库搬迁或阶段 A/B 灌数据后再议（费用 <¥1 与 ~¥3 的决策仍然有效）。
 
 新增（本轮实证发现，待开工）：
-- [ ] R10 **LLM 键缺失被静默降级**：`[llm] enabled=true` 但所有 `api_key_env` 指向的环境变量为空时，
-      语义层安静退回规则降级 —— 表现是 `kpoints` 产出"整篇 4023 字"的 integral 点、split 文档归零，
-      用户与 agent 都看不出"其实是没连上 LLM"（本轮实际踩到：key 早配在用户级环境变量，
-      但进程晚于 `setx` 启动导致读不到）。建议启动时对该状态打 **WARN + 明确提示"语义层降级"**，
-      并让 `kpoints` 报告里带上 `llm_available: false`。改动面：`config.py` 校验 + `cli` 启动输出 + 一处测试；
-      建议随 97a-2 一并落（同一批改动都在启动/配置路径）。
+- [x] R10 **LLM 键缺失被静默降级**（**2026-10-26 两半都落**）：`cli._warn_if_llm_unavailable`
+      在 `kadd/ksync/serve/kcheck/kpoints` 启动时打 `WARN 语义层降级：…`（已实测）；`run_points_extract`
+      的 stats 增加 `llm_available`（`llm is not None`），`kpoints` 报告里直接可见 `"llm_available": false`。
+      注意 WARN 只看**进程环境变量**：key 在用户级但进程早于 `setx` 启动时仍会报警，这正确
+      （那种状态下语义层确实降级）。
 
 ## 阻塞项
 

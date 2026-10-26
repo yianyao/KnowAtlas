@@ -1646,3 +1646,79 @@ baseline 147,059，effective 94.5%（HANDOFF），2026-10-26T22:00+08:00。
 
 <!-- HANDOFF {"at":"2026-10-26T22:00:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2200","draft":false,"goal":"条目原文站内代理已交付（653 passed），待用户 Ctrl+F5 验收反查与首页「打开原文」","host":"dsh","kind":"handoff","next":"用户验收 graph.html 反查面板与 index.html 打开原文；之后可做 R10 或 8.3/8.4 端到端验收","not_rerun":"全量测试（653 passed / 1 skipped）；站内代理真库实测；serve 已重启（PID 12672）","schema":1,"session":"session-36dab62e-d79a-41ff-80d4-2318745065a9","status":"HANDOFF","tokens":138943,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 
+## 2026-10-26 22:08 8.3/8.4 端到端验收收口 + R10 两半落地（654 passed / 1 skipped）
+
+### 当前目标
+
+Phase 8 阶段 A 收尾：把 8.3（书签 + 网页）与 8.4（本地文本/HTML）的探针从「单测覆盖」补成
+**真数据端到端证据**，并清掉两处小残留（空正文守门、kpoints 报告暴露 LLM 可用性）。
+结论：8.3 / 8.4 / R10 三项均可转 `[x]`。
+
+### 做了什么
+
+- **8.3 条目数对齐**：`data/bookmarks-edge-knowledge.json` 191 个 url 节点（181 https / 10 http）
+  → 库内 `source_type=bookmark` **191 条**（161 pending + 30 rejected），与有效书签数 1:1；
+  `distinct locator_canonical = 186`，5 个「同 URL 多文件夹收藏」按契约各建一条（M2 跨源去重留给 dedupe 层）。
+- **8.3 native_path**：中文根标签 + 文件夹层级 —— 书签栏/AI 54、其他书签/js 37、其他书签/python 25、
+  其他书签/php 16、书签栏/后端 10、书签栏/前端 9、书签栏/JS&TS 7 …（共 15 条路径）。
+- **8.3 导航残留**：真抓 3 条 —— 简书 9,626 → 9,604 字、导航词 0（"注册"4 次是正文"注册组件"）；
+  博客园 11,461 → 11,209 字、导航词 0；知乎 HTTP 403（simple 后端无反爬能力，真同步会走
+  fallback deepseek）。readability + `is_skeleton_body` 骨架闸门把按钮墙挡在入库前。
+- **8.4 沙箱（不碰真库/真配置）**：`KNOWATLAS_CONFIG=temp/ka84/config.toml` + 独立库；
+  fixture 9 文件 → **入库 8 条**，`skipped_hidden=1`、`skipped_ext=1`（png）；
+  `native_path` 四层全对（`知芯小样本` / `知芯小样本/同名` / `知芯小样本/子目录` / `知芯小样本/子目录/再深`）；
+  根 `笔记A.md` 与 `同名/笔记A.md` 各一条、互不覆盖。
+- **8.4 判定**：乱码文件（非法 UTF-8 10 字节）→ `fetch_status=garbled` + `value_flag=not_knowledge`，
+  **不进消费面** ✓；空文件（0 字节）首轮验收时 `fetch_status=ok`、无 value_flag（可消费）✗ → 已修（见下）。
+- **R10 两半**：`kcheck/kpoints` 在 key 缺失时打 `WARN 语义层降级：…`（本轮 shell 未导入 key 时实测）；
+  `run_points_extract` 的 stats 新增 `llm_available`，`kpoints` 报告现形如
+  `{"llm_available": false, "integral": 1, …}`。
+
+### 落了什么码（用户点头后）
+
+- `pipeline/sync.py::_fetch_missing`：`is_garbled` 之前加空正文守门 `if not text.strip(): _flag(e, "empty")`
+  —— `fetch_status=empty` + `value_flag=not_knowledge`（只标记不删，用户可否决），口径与
+  `expand.py` 批次 94 的 `empty_body` 一致。
+- `pipeline/points.py::run_points_extract`：stats 增加 `"llm_available": llm is not None`（R10 第二半）。
+- 测试：`tests/test_folders.py::test_fetch_flags_empty_file_as_not_knowledge`（0 字节 → 不产正文 + not_knowledge，
+  非空文件不误伤）、`tests/test_points.py` 两处断言（无 LLM 时 false / 注入 FakeLlm 时 true）。
+- 契约面：**零变更**（无表结构 / 无 source_type / 无 config 键；只新增 meta 取值 `fetch_status=empty`、
+  `value_flag_reason=empty` 与 stats 键 `llm_available`）。
+
+### 验收数字（复跑）
+
+- `pytest -o addopts= -q` → **654 passed / 1 skipped**（+1 新用例）；`tests/test_canary.py` → 1 passed（零漂移）。
+- 沙箱复跑（删库重来）：8 条入库，`fetched=6 / fetch_failed=2`（garbled + empty），
+  空文件 meta = `{"fetch_status":"empty","value_flag":"not_knowledge","value_flag_reason":"empty"}`、
+  `content_hash` 为空。
+- `kpoints --dry-run --limit 1`（无 key）：WARN + `"llm_available": false`。
+
+### 下一步（按序）
+
+1. **用户侧验收**：`Ctrl+F5` → `graph.html` ◆点层 → 点节点 → 🔍 反查 → 溯源条目「打开原文」
+   （应新标签开 PDF）；首页条目标题 / 预览面板同样可开（22:00 交接的站内代理）。
+2. 阶段 A 剩余：8.6 三视图知识聚合验收（探针：搜「异步」/「async」只出知识不出文件名）；
+   8.1b（trafilatura 换装）按原计划用同批样本 A/B。
+3. 阶段 B 前置：三凭证源（B站/IMA/腾讯文档）等用户凭证。
+
+### 不要重跑
+
+- 8.3 真抓实测（3 条，22:05，简书/博客园/知乎）；8.4 沙箱同步与读数（`temp/ka84`，22:05 复跑）。
+- 全量测试与 canary（654 passed / 1 skipped，22:07）；站内代理真库实测（2 个 PDF）。
+- 书签预筛（`temp/bookmarks_stage.py`，2026-10-25 18:02 产物 191 条）。
+
+### 验证命令
+
+```powershell
+$env:KNOWATLAS_CONFIG='temp/ka84/config.toml'
+uv run python -m knowatlas ksync --source folders --fetch-limit 20   # fetched=6 / fetch_failed=2 / 8 条入库
+uv run python temp/ka84/probe_flags.py                              # 空文件 meta：fetch_status=empty + not_knowledge
+uv run python -m knowatlas kpoints --dry-run --limit 1              # 报告含 "llm_available": false（无 key 时）
+uv run python -m pytest -o addopts= -q                              # 654 passed, 1 skipped
+```
+
+### 会话指纹
+
+`session-2a7c292a-01be-455d-80c8-7d9fbb88de92`，compactions=0，tokens≈62,000，
+baseline 147,059，effective≈42%（OK），2026-10-26T22:08+08:00。
+

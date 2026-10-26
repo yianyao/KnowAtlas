@@ -278,6 +278,7 @@ def test_pipeline_integral_refined_via_llm(cfg, dl):
     llm = FakeLlm([_INTEGRAL_REFINE_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
     assert stats["processed"] == 1 and stats["integral"] == 1 and stats["split"] == 0
+    assert stats["llm_available"] is True             # R10：注入 llm 时报告为 true
     assert stats["points_created"] == 1 and dl.count_points() == 1
     assert len(llm.calls) == 1 and "形态判定" not in llm.calls[0]  # 提炼-only
     p = dl.list_points()[0]
@@ -314,6 +315,7 @@ def test_pipeline_no_llm_integral_runs_split_errors(cfg, dl):
     es2 = _seed_entries(dl, 1, body="小说写法讨论：视角与节奏。示例 " * 8)
     _attach_lit(dl, es2)
     stats = run_points_extract(cfg, dl, limit=5)      # cfg 无 [llm] → llm=None
+    assert stats["llm_available"] is False            # R10：报告显式暴露「没连上 LLM」
     assert stats["integral"] == 1 and dl.count_points() == 1
     assert len(stats["errors"]) == 1
     assert stats["errors"][0]["entry_id"] == es2[0].id
