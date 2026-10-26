@@ -1473,6 +1473,7 @@ baseline 147,059，effective 88.5%（HANDOFF），2026-10-26T21:10+08:00。
   需单独工单（规则先行 + 可选 LLM 复核，见工单 §7）。
 - **不要重跑**：全量测试（639 passed，21:23）；真库反查探针（只读副本，21:18）；
   UI 反查实测（21:21）；serve 刚重启（PID 15968 已载本轮代码，前端改动 Ctrl+F5 即生效）。
+- **提交**：`93d6efa` feat(graph)：P4 后置项——点级反查（9 文件 +273/−10）。
 
 <!-- HANDOFF {"at":"2026-10-26T21:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2110","draft":false,"goal":"P5 扩散加固已交付（2d2ec99 / 634 passed），待用户浏览器验收图页","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 graph.html 点层缩放显隐与全屏；新会话先 session_check + pytest（634/1），再出 P4 后置项方案（点级反查 reverse 对 p: 或引用/指涉边）","not_rerun":"全量测试（634 passed，21:08）；真库 value-scan dry-run（21:12）；图页缩放显隐两向实测（20:57/20:59）","schema":1,"session":"session-4e57cc6b-3c18-4754-a4b8-81fedf2ae843","status":"HANDOFF","tokens":130185,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 
