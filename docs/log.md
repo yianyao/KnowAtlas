@@ -1134,3 +1134,25 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 
 **遗留**：19:25 的词云点卡重复渲染是**前端**问题，跟 serve 新旧无关；
 `index.html` 由 StaticFiles 直出且 `Cache-Control: no-store`，改完 Ctrl+F5 就生效，不用重启。
+
+## 2026-10-26 19:44 词云点卡重复渲染修复（`426f124`）
+
+**改法**（纯前端 + 一条静态探针）：
+
+- `index.html` 词云 facet 的点卡：`<div class="entry" data-id>` → `<div class="pt-card" data-eid>`。
+  不再冒充条目卡 → 条目通用钩子（`.entry-host .entry[data-id]`：点聚合、🆔、分类徽标、
+  确认归类、多选/拖拽、拆合按钮）全部不再命中点卡；
+- 点卡标题由「条目名」改为 `summary`（无则点正文前 40 字），19 张同名卡变成 19 个不同知识点；
+  底部「溯源：条目名」保留。标题与正文都过 `_escHtml`（原来未转义直出）。
+- `components.css`：`.entry, .pt-card` 共享基础外观与链接样式；`.pt-card` 加左缘强调线
+  （与 `.entry.point-hit` 同一视觉语言）。
+- 下方条目 facet 的条目卡保持 `.entry`——「◆ 34 点」只在那一张条目卡上出现一次，
+  正好承载「该条目还有哪些点」，不再逐张点卡重复。
+
+**验证**：`pytest -o addopts= -q` → **616 passed / 1 skipped**（新增静态探针断言点卡模板用
+`class="pt-card"` 且不再出现 `<div class="entry" data-id="${p.entry_id}">`）；
+`node --check` 两个内联 `<script>` 块语法通过；`GET /` 已含 `pt-card`、`components.css` 已含
+`.pt-card`。静态文件由 StaticFiles 直出且 `Cache-Control: no-store`，**不需要重启 serve**。
+
+**验收**：浏览器 Ctrl+F5 → 词云点「雪花」→ 19 张点卡标题各不相同、卡上不再出现「◆ 34 点」
+与 🆔；下方条目卡仍显示一次「◆ 34 点 ▸」。
