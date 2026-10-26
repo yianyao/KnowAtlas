@@ -1834,3 +1834,120 @@ numpy 对照：800 点 0.067 s、1,600 点 0.188 s，外推 ≈1.5 s，且簇划
    以及 22:00 起的站内代理（点层 ◆ → 点节点 → 🔍 反查 → 溯源条目「打开原文」开 PDF）。
 2. 之后：8.1b（trafilatura 换装 A/B）或 Phase B 凭证源（B站/IMA/腾讯文档，等凭证）。
 3. R11 的 P1（进程内 TTL 缓存）**刻意未做**：等真出现「反复点」的诉求再加（工单 §5）。
+<!-- HANDOFF {"at":"2026-10-26T23:36:11.514437+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2336.md","draft":true,"goal":"上下文到 HANDOFF（86.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-b8a0d74d-7abe-4cfc-9d3c-cae7ea1efb64","status":"HANDOFF","tokens":127852,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-26T23:46:12.113596+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2346.md","draft":true,"goal":"上下文到 HANDOFF（86.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-b8a0d74d-7abe-4cfc-9d3c-cae7ea1efb64","status":"HANDOFF","tokens":127852,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T06:36:11.050379+08:00","compactions":0,"doc":"docs/交接/2026-10-27-0636.md","draft":true,"goal":"上下文到 CRITICAL（103.0%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-b8a0d74d-7abe-4cfc-9d3c-cae7ea1efb64","status":"CRITICAL","tokens":151482,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-27 06:50 交接：KPE 独立成仓库（D:\kpe + MIT + subtree 单向传导），已定方案未动手
+
+> 触发：`context_probe` → currentTokens 184,088、**effective 125.2% CRITICAL**。
+> 按 AGENTS.md §0「≥95% 立即停」停会话；本块只记方案与命令，**代码一行未改**。
+> 注：本文件 1835–1840 行有两条 watcher 在 23:36/23:46 自动写的 draft 交接（86.9%），
+> 已被本块取代，不必按其行动。
+
+### 当前目标
+
+把 `tools/kpe` 独立成 **D:\kpe** 的独立仓库（MIT），推到 GitHub（`yianyao/kpe`）让其他 Agent
+clone 即用；KnowAtlas 侧保持 `tools/kpe` 为普通目录，用 **git subtree** 单向拉取升级。
+
+### 用户已裁决
+
+1. 位置 = **`D:\kpe`**（盘符根，用户明确要求）。
+2. 许可证 = **MIT**。
+3. 同步 = 「独立出去的 KPE 升级后，KnowAtlas 亦能升级」→ 定 **subtree 单向传导**
+   （不选 submodule：clone KnowAtlas 不该要求 `--recursive`；也不选"splite 双份"）。
+   以后：独立仓库为唯一开发处 → `git subtree pull --prefix=tools/kpe kpe main --squash`。
+
+### 可行性已验证（勿重跑）
+
+| 检查 | 结论 |
+|---|---|
+| 外部依赖 | 只有 `pdfplumber`；其余全标准库 |
+| import knowatlas | **零**（全是包内相对导入）；代码无 `D:\sData\…` 硬编码 |
+| 测试自足 | `tests/conftest.py` 自加 `sys.path`，独立跑 **14 passed** |
+| 主套件影响 | `pyproject.toml` `testpaths=["tests"]` **不含** `tools/kpe/tests` → 搬走不影响 659/1 基线 |
+| 工具链 | git **2.55.0**，`git subtree` 可用 |
+| 推送权限 | 凭据库 PAT 属于 `yianyao`，scopes `gist, repo, workflow` → **能建仓库**（注意 scopes 头带空格，判断要 trim） |
+| 网络 | 直连 github 不通；走 `127.0.0.1:7890` 代理可达（HTTP API 已验证 200） |
+| 现有服务 | 8420 serve 在跑（R11 已交付 `fac6c32` 且已推远端） |
+
+### 下一步（按序，首步可直接执行）
+
+```powershell
+# 0) 先提交本交接块（docs/log.md 已改动）
+cd D:\sData\git\KnowAltas; git add docs/log.md; git commit -m "docs: KPE 独立化方案交接（CRITICAL 125.2%）"
+
+# 1) 主仓库切出保留历史的独立分支（只含 tools/kpe 的提交）
+git subtree split --prefix=tools/kpe -b kpe-standalone
+
+# 2) 建 D:\kpe 并接上历史（非裸仓库不能直接 push 到当前分支，故用 fetch+reset）
+New-Item -ItemType Directory D:\kpe -Force | Out-Null
+cd D:\kpe; git init -b main
+git fetch D:\sData\git\KnowAltas kpe-standalone
+git reset --hard FETCH_HEAD
+
+# 3) 补独立仓库文件（顺序要紧：.gitignore 必须最先，否则 41.8 MB 的 tools/kpe/.venv 会被 add）
+#    .gitignore : .venv/  __pycache__/  *.egg-info/  build/  dist/  *.pyc  .pytest_cache/  temp/
+#    LICENSE    : MIT（2026, yianyao）
+#    AGENTS.md  : 给别的 Agent 的操作卡（装法/三命令/--limit 3 先试/续跑/勿用裸 kpe.exe）
+#    README.md  : 去掉全部 D:\sData\git\KnowAltas 路径 → 通用装法 + 产物说明 + 成本参考
+#    pyproject  : 补 readme = "README.md"、license = {text="MIT"}、[project.optional-dependencies] dev = ["pytest"]
+#    examples/sample.md : 10 行样例，供零成本自检 kpe chunks
+
+# 4) 本地验证（不花钱）
+cd D:\kpe
+uv run --with pdfplumber python -m kpe --version          # 0.1.0
+uv run --with pdfplumber --with pytest python -m pytest -q # 14 passed
+uv run --with pdfplumber python -m kpe chunks examples/sample.md --out temp/smoke
+
+# 5) 建远端仓库（token 从凭据库取，勿打印；必须走代理）
+$tok = ("protocol=https`nhost=github.com`n`n" | git -c credential.helper=wincred credential fill |
+        Select-String '^password=').ToString() -replace '^password=',''
+Invoke-RestMethod -Method Post -Uri "https://api.github.com/user/repos" `
+  -Headers @{Authorization="token $tok";"User-Agent"="kpe"} `
+  -Proxy "http://127.0.0.1:7890" -ContentType "application/json" `
+  -Body '{"name":"kpe","description":"Extract self-contained knowledge points from long books","private":false}'
+
+# 6) 推送（D:\kpe 没有 insteadOf 改写，直接走代理即可）
+cd D:\kpe; $env:HTTPS_PROXY="http://127.0.0.1:7890"; $env:HTTP_PROXY=$env:HTTPS_PROXY
+git remote add origin https://github.com/yianyao/kpe.git
+git -c credential.helper=wincred push -u origin main
+
+# 7) KnowAtlas 侧接上 subtree（该仓库的 insteadOf 会把 https://github.com 改写为 ghproxy，读得到）
+cd D:\sData\git\KnowAltas
+git remote add kpe https://github.com/yianyao/kpe.git
+git subtree pull --prefix=tools/kpe kpe main --squash   # 以后每次升级都跑这一条
+```
+
+### 不要重跑
+
+- KPE 可行性检查（依赖/导入/测试/`testpaths`/git subtree 探针）。
+- `uv run python -m pytest tools\kpe\tests -o addopts= -q`（14 passed，06:44）。
+- R11 全套（`fac6c32` 已推，659/1）；8420 serve 重启。
+
+### 验证命令（新会话开场）
+
+```powershell
+uv run --with zstandard python tools/session_check.py     # 期望 NEW_SESSION（本块）
+uv run --with zstandard python tools/context_probe.py     # 期望 effective 低水位
+Test-Path D:\kpe                                          # 期望 False（说明尚未开工）
+git -C D:\sData\git\KnowAltas status -sb                  # 期望无 pending
+```
+
+### 已知失败与处理
+
+- **`temp/` 对低完整性 shell 不可写**（`Tee-Object`/`Out-File` 报拒绝访问）：日志写 `$env:TEMP`。
+- **uv 缓存**：`$env:UV_CACHE_DIR="$env:TEMP\uvcache-knowatlas"`。
+- **github 直连不通**：一切 GitHub API / push 都要 `-Proxy http://127.0.0.1:7890`。
+- **insteadOf 只作用于 KnowAtlas 仓库**：新的 `D:\kpe` 不在改写范围，别多此一举去 unset。
+- **`tools/kpe/.venv` = 41.8 MB / 645 文件**：新仓库先写 `.gitignore` 再 `git add`。
+- **裸 `kpe` 命令会被应用控制策略拦**（`os error 4551`）：文档统一写 `python -m kpe`。
+- **PAT scopes 头带空格**：`x-oauth-scopes` 拆分后要 trim，否则误判"没有 repo 权限"。
+
+### 会话指纹
+
+`session-b8a0d74d-7abe-4cfc-9d3c-cae7ea1efb64`，compactions=0，tokens=184,088，
+baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00。
