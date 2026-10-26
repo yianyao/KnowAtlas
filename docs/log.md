@@ -1261,10 +1261,19 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 - 内联脚本 `new Function` 语法检查通过（648 行）；`git diff --check` 干净。
 - 线上 `GET /graph.html` → HTTP 200 / 42,467 B，含 `id="fsBtn"`、`id="fsExit"`、`body.fs header`、`PAL.labelEntry`
   （静态文件 no-store，无需重启 serve）。
-- headless Edge 截图本轮不可用：本会话 shell 是低完整性令牌，Edge 给 profile 目录授 sandbox 访问时报 0x5，
-  单进程模式又撞命名管道拒绝；`_edge*` / `_shot*.png` / `_syncheck.js` 探针已清理，未留痕。
-- **未经真实浏览器实测**，待用户 Ctrl+F5 验收：① 点「⛶ 全屏」画布吃满；② 全屏下点节点切焦点仍全屏、
-  右上角有退出；③ header 收起后贴顶边能唤出；④ 节点字清楚。
+- 全量测试 `uv run python -m pytest -o addopts= -q` → **629 passed, 1 skipped**（44.5 s）。
+- **headless Edge + CDP 实测通过**（脚本留在 `temp/ui_fs_metrics.js`、`temp/ui_fs_flow.js`、
+  `temp/ui_point_label_check.js`；1600×900，真实鼠标事件）：
+  - 点「⛶ 全屏」→ `document.fullscreenElement=true`、`body.fs`、画布 **1600×900**、
+    `#fsExit` display block @ (1500,10,88,27)、header `position: fixed`；
+  - 全屏下切焦点（`showRadiate("p:5c07508429801ddf")`）→ 19 节点、**仍全屏**、退出按钮仍在，
+    header 2.5 s 后 `is-hidden`（transform translateY(−67px)、opacity 0）；
+  - 全屏下用 `Input.dispatchMouseEvent` 真点另一个点节点（838,251）→ 焦点切到 `p:fc108e22bc03b803`、
+    **仍全屏**、退出按钮仍在，悬停出「◆ 知识点」卡；
+  - 点「⤢ 退出全屏」→ 全屏退出、header 回 `static`、按钮回「⛶ 全屏」、`#fsExit` 归 `display: none`；
+  - 字色实测（`chart.getOption().series[0].data[].label`）：焦点 `#DFA43E` 11px 粗 / 分类 `#E9EDF4` 13px /
+    知识点 `#6FCF97` 11px / 条目 `#9CC0F7` 11px / 关联解释 `#A6B0C0` 9px；无描边、无白底。
+- 旁证数据：点层根分类「人工智能」经典视图 → 205 节点 / 200 点（超过 60 点阈值时不显示常驻标签，靠悬停卡）。
 
 不要重跑：P4 后端与全量测试（629 passed / 1 skipped，20:14）；不要重启 serve（4196 已载 94b17e2，
 前端改动 Ctrl+F5 即生效）。
