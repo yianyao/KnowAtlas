@@ -15,12 +15,19 @@ blob 是确定性文件页（非门户/列表），**跳过 L0 价值守卫**；
 fetch_with_fallback（blob→raw 直链重写，批次 92），locator 保留 blob 原链
 （与用户书签一致、canonical 去重不受影响）。
 
-候选过滤链（顺序固定）：canonical 化去锚 → 排除种子自身 → 未入库
-（find_by_canonical / find_by_locator）→ L0 价值守卫（judge_value 放行，
-GitHub 文件页豁免）→ limit 截断。
-命中的候选逐条 fetch_with_fallback 抓正文入库：source_type="expand"
+候选过滤链（顺序固定）：canonical 化去锚 → 去模板占位符（`${…}`/`{{…}}`/`<%…%>`）
+→ 排除种子自身 → 未入库（find_by_canonical / find_by_locator）→ L0 价值守卫
+（judge_value 放行，GitHub 文件页豁免）→ limit 截断。
+命中的候选逐条 fetch_with_fallback 抓正文，入库前再过两道正文守门：`is_skeleton_body`
+（网页骨架）与 `is_index_page`（表格式书目/索引页，2026-10-26 P5）。
+正文入库：source_type="expand"
 （bookmark 会被书签源 full 同步 archive_missing 归档；manual 语义不准），
 meta 记 seed_entry_id + expand_reason（关联解释），照常走 classify_coarse 分类。
+
+已知限制（2026-10-26 P5 定稿）：扁平 ID 平台（知乎 `/p/`、掘金 `/post/`、简书 `/p/`、
+公众号 `/s/`）**同目录 ≠ 同主题**——这些站的路径里没有目录层级语义，同 host 同父目录
+说明不了任何主题相关性，扩散对它们不适用；「资源清单类仓库」（如按主题分文件的电子书
+合集）同理，靠 `is_index_page` 在正文层拦，拦不住时宁可人工 `bulk-status reject`。
 """
 
 from __future__ import annotations
@@ -43,6 +50,10 @@ from .kadd import ensure_category_path
 
 _USER_AGENT = "KnowAtlas/0.1 (+personal knowledge indexer)"
 _HREF_RE = re.compile(r"""href\s*=\s*["']([^"'#]+)["']""", re.IGNORECASE)
+# 模板占位符（P5，2026-10-26）：href 里带 `${…}` / `{{…}}` / `<%…%>` 的是模板串，
+# urljoin 后会变成「看起来合法的同目录 URL」并真去抓——实测廖雪峰教程页因此产出
+# 4 条假链接。提取层直接剔除，不占候选位。
+_PLACEHOLDER_MARKS = ("${", "{{", "<%")
 _GH_REPO = re.compile(
     r"^https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)((?:/[^/]+)*?))?/?$")
 _GH_FILE_LINK = re.compile(
@@ -116,19 +127,36 @@ def _same_dir(seed_url: str, cand_url: str) -> bool:
             and a.scheme.lower() == b.scheme.lower())
 
 
-def _candidate_links(seed_url: str, html: str) -> list[str]:
-    """从种子 HTML 提取同目录链接：urljoin 归一 → 去锚 → 同目录过滤 → 保序去重。"""
+def _candidate_links(seed_url: str,
+                     html: str) -> tuple[list[str], dict[str, int]]:
+    """从种子 HTML 提取同目录链接：去占位符/自链接 → urljoin 归一 → 去锚 →
+    同目录过滤 → 保序去重。
+
+    返回 `(候选链接, 剔除计数)`；剔除计数供 stats 报账（P5，2026-10-26）：
+    - `placeholder`：href 含模板占位符（`${…}` / `{{…}}` / `<%…%>`），抓了也是假链接；
+    - `self`：解析后 canonical 等于种子——不抓，但仍按「已知」报账，别让统计数字
+      因为提取层拦截而变少（原先靠下游 `already_known` 兜，多进一次候选）。
+    """
     out: list[str] = []
     seen: set[str] = set()
+    skipped = {"placeholder": 0, "self": 0}
+    canon_seed = canonical_url(seed_url)
     for raw in _HREF_RE.findall(html):
-        joined = urljoin(seed_url, raw.strip())
+        href = raw.strip()
+        if any(mark in href for mark in _PLACEHOLDER_MARKS):
+            skipped["placeholder"] += 1
+            continue
+        joined = urljoin(seed_url, href)
         canon = canonical_url(joined)
         if canon is None or canon in seen:
             continue
         seen.add(canon)
+        if canon == canon_seed:
+            skipped["self"] += 1
+            continue
         if _same_dir(seed_url, joined):
             out.append(joined)
-    return out
+    return out, skipped
 
 
 def _github_scope(seed_url: str) -> tuple[str, str, str, str] | None:
@@ -228,7 +256,8 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                              "created": 0, "fetch_failed": 0,
                              "blocked_by_guard": 0, "already_known": 0,
                              "blocked_files": 0, "empty_body": 0,
-                             "skeleton": 0}
+                             "skeleton": 0, "index_page": 0,
+                             "filtered_placeholder": 0}
     try:
         seed = dl.get_entry(seed_entry_id)
         if seed is None:
@@ -255,7 +284,7 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                 raise KnowAtlasError(
                     f"种子页面 HTTP {resp.status_code}：{seed.locator}",
                     hint="种子页可能已失效；可先跑 kcheck 体检")
-            from ..semantic.value_guard import judge_value
+            from ..semantic.value_guard import is_index_page, judge_value
 
             gh_scope = _github_scope(seed.locator)
             if gh_scope is not None:
@@ -270,8 +299,11 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                                 {"reason": reason, "run_id": run_id})
                 link_pool = [(link, True) for link in blob_pool]
             else:
-                link_pool = [(link, False)
-                             for link in _candidate_links(seed.locator, resp.text)]
+                # P5：占位符与自链接在提取层剔除（自链接仍按「已知」报账）
+                links, skipped = _candidate_links(seed.locator, resp.text)
+                stats["filtered_placeholder"] = skipped["placeholder"]
+                stats["already_known"] += skipped["self"]
+                link_pool = [(link, False) for link in links]
 
             candidates: list[str] = []
             for link, is_gh_file in link_pool:
@@ -312,6 +344,14 @@ def expand_seed(cfg: Any, dl: Any, locators: Any, semantics: Any,
                 if is_skeleton_body(text):
                     stats["skeleton"] += 1
                     dl.log_task(_now(), "expand", "skeleton_skip", link,
+                                {"run_id": run_id})
+                    continue
+                # 索引/书目页守门（P5，2026-10-26）：URL 正常、正文是一张带下载
+                # 链接的书名表——实测 ebook-treasure-chest 的 20 条全这种，URL 层
+                # 判不出来，只能在这里拦（宁缺毋脏；误拦可手动 kadd 单条补录）。
+                if is_index_page(text):
+                    stats["index_page"] += 1
+                    dl.log_task(_now(), "expand", "index_page_skip", link,
                                 {"run_id": run_id})
                     continue
                 c = canonical_url(link)

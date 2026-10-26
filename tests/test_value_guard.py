@@ -77,6 +77,74 @@ def test_judge_value_malformed_never_raises():
             "resource_file", "portal_homepage", "index_subdir")
 
 
+# ---------- 1.5 正文层：索引/书目页（P5 扩散加固，2026-10-26） ----------
+
+# 真库样本（entries 里 ebook-treasure-chest 的扩散产物，逐字取自 inline_content）
+BOOK_INDEX = (
+    "# 版权声明\n\n本站内容均从网上搜集，版权归著作人及版权方所有。\n\n"
+    "# 5G\n\n"
+    "| 书名 | 作者 | epub/mobi/azw3 |\n"
+    "| --- | --- | --- |\n"
+    "| 5G金融 | 莫开伟/陈名银/邱泉 | [下载](https://url89.ctfile.com/f/1?p=8866) |\n"
+    "| 5G时代：经济增长新引擎 | 孙松林 | [下载](https://url89.ctfile.com/f/2?p=8866) |\n"
+    "| 5G时代 | 项立刚 | [下载](https://url89.ctfile.com/f/3?p=8866) |\n"
+)
+
+
+def test_is_index_page_positive_real_sample():
+    from knowatlas.semantic.value_guard import is_index_page
+
+    assert is_index_page(BOOK_INDEX) is True
+    # 「一本书一页」的形态（真库 20 世纪.md 逐字样本，行数很少也要拦）
+    single = ("# 版权声明\n\n本站内容均从网上搜集，版权归著作人及版权方所有。\n\n# 20世纪\n\n"
+              "| 书名 | 作者 | epub/mobi/azw3 |\n| --- | --- | --- |\n"
+              "| 霍布斯鲍姆自传 | 艾瑞克·霍布斯鲍姆 | [下载](https://url89.ctfile.com/f/1?p=8866) |\n")
+    assert is_index_page(single) is True
+
+
+def test_is_index_page_negative_cases():
+    from knowatlas.semantic.value_guard import is_index_page
+
+    # ① 文章里带一张对照表：表格占比低（④），列名也不像索引表（②）
+    doc = ("# 消息队列选型\n\n"
+           + "本文比较三种消息队列的吞吐、投递语义与运维成本，并给出选型建议。\n" * 15
+           + "\n| 名称 | 吞吐 | 说明 |\n| --- | --- | --- |\n"
+             "| Kafka | 高 | 日志型 |\n| RabbitMQ | 中 | 传统 |\n")
+    assert is_index_page(doc) is False
+    # ② 代码块里的管道符不是表格
+    code = ("```\n| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n```\n"
+            + "这是示例代码，展示 Markdown 表格语法，不是书目清单。\n" * 10)
+    assert is_index_page(code) is False
+    # ③ 表格没链接（普通数据表，不是资源索引）
+    data = ("# 参数表\n\n| 书名 | 作者 | 下载 |\n| --- | --- | --- |\n"
+            "| A | B | C |\n| D | E | F |\n| G | H | I |\n")
+    assert is_index_page(data) is False
+    # ④ 长文里嵌一张带链接的书表：列名像索引表、链接也齐，但表格只占正文一小块
+    embedded = ("# 读书笔记\n\n"
+                + "这本书讲的是分布式系统的取舍，下面只是顺手摘的几本参考书。\n" * 20
+                + "\n| 书名 | 作者 | 下载 |\n| --- | --- | --- |\n"
+                  "| 数据密集型应用系统设计 | Kleppmann | [下载](https://x.test/a) |\n"
+                  "| 分布式系统原理 | 唐文 | [下载](https://x.test/b) |\n")
+    assert is_index_page(embedded) is False
+    # ⑤ 空正文
+    assert is_index_page("") is False
+
+
+def test_value_scan_flags_index_page_body(cfg, dl, registries):
+    """P5：URL 结构正常、正文是书目表格页 → value_flag_reason=index_page。"""
+    locators, semantics = registries
+    e = Entry.build(source_type="expand", source_key="expand:seed:1", title="5G",
+                    locator="https://github.com/u/r/blob/main/md/5G.md",
+                    locator_canonical="https://github.com/u/r/blob/main/md/5G.md",
+                    inline_content=BOOK_INDEX, meta={"source_type": "expand"})
+    dl.upsert_entries([e])
+    stats = run_sync(cfg, dl, locators, semantics, value_scan=True)["value_scan"]
+    assert stats["by_reason"].get("index_page") == 1
+    meta = dl.get_entry(e.id).meta
+    assert meta["value_flag"] == "not_knowledge"
+    assert meta["value_flag_reason"] == "index_page"
+
+
 # ---------- 2. classify_coarse L0 短路 ----------
 
 

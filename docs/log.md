@@ -1339,3 +1339,40 @@ zoom 1 → 32.6 px；1.6 → 60.6；2.2 → 81.8；3.0 → 111.5。另有一条�
 UI 实测必须切完全权限；profile 用 `%TEMP%\edge-qa-*`，跑完即关。
 
 不要重跑：本项实测（20:59）。下一步仍是用户 Ctrl+F5 验收 + P5 扩散加固 / P4 后置项（点级反查）。
+
+## 2026-10-26 21:15 P5 扩散抓取加固（三条全落地，634 passed / 1 skipped）
+
+用户裁决：按方案开工（3 个源文件 + 测试 + 文档；不动表结构/字段/scheme/SOURCE_TYPES/STATUSES/
+CONFIG_SCHEMA_KEYS/接口签名，故无工单，canary 四常量零漂移）。
+
+改动：
+
+- `semantic/value_guard.py`：新增正文层判据 `is_index_page(text)`（纯函数、零 IO、零费用）。
+  四条件**同时**成立才判：① 表格成型（表头 + `|---|` + ≥1 数据行）；② 某行命中列名关键词 ≥2
+  （书名/作者/下载/格式/大小/… + name/title/author/download/… 中英两套）；③ 数据行含
+  Markdown 链接 `[x](y)` ≥50%；④ 表格行占非空行 ≥40%。``` 代码块内的行不参与统计。
+- `pipeline/expand.py`：`_candidate_links` 改为返回 `(links, skipped)`——`${`/`{{`/`<%`
+  占位符在提取层剔除（`stats.filtered_placeholder`），自链接同样剔除但计入 `already_known`
+  （统计口径不变，不再多进一次候选）；入库前接 `is_index_page`（`stats.index_page` +
+  `log_task("index_page_skip")`，不建条目）；模块 docstring 增「已知限制」（扁平 ID 平台）。
+- `pipeline/sync.py::_value_scan`：URL 结构判不出时补判正文（只读条目自带 `inline_content`，
+  不读 content_store，零额外 IO），写 `value_flag_reason="index_page"`；仍只标记不删除。
+- 文档：`TODO` P5 三条打勾并写落地口径；使用手册第 10 节第 5 条改写（书目页已由守卫拦，
+  扁平 ID 平台仍不适用）。
+
+验证（2026-10-26 21:12）：
+
+- `pytest -o addopts= -q` → **634 passed / 1 skipped**（629 + 5：占位符/自链接提取层、
+  书目页拦截、`is_index_page` 正反例、`value_scan` 端到端），52.6 s；`tests/test_canary.py` → 1 passed。
+- 真库只读实测：49 条有正文条目中 20 条书目页**全部命中**、其余 0 误报
+  （`temp/probe_is_index_page.py`、`temp/probe_index_minrows.py`）。
+- `uv run python -m knowatlas ksync --value-scan --dry-run` → `value_scan_total 30 /
+  new_flagged 0 / by_reason {}`（那 20 条已 rejected，扫描面是 active），零写入。
+- 阈值过程留痕：初版 `min_rows=3` 只命中 11/20——真站存在「一本书一页」形态；
+  改为「表格成型 ≥3 行 + 数据行 ≥1」后 20/20、仍 0 误报。
+
+已知失败：`www.liaoxuefeng.com` 现网 TLS 握手超时（本机出网限制），占位符过滤只有单测覆盖，
+未做真站复核（Docker/代理恢复后可补一次 `_candidate_links` 实跑）。
+
+不要重跑：全量测试与真库 dry-run（21:12）。下一步：用户 Ctrl+F5 验收图页；之后 P4 后置项
+（点级反查 `reverse` 对 `p:`、引用/指涉边）。

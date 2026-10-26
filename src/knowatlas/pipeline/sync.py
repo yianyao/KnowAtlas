@@ -440,8 +440,12 @@ def _value_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
     - value_flag=ok（用户否决）与已 rejected 的条目跳过；
     - 已被 LLM 标记过但缺 reason 的条目只补 reason，不重复计数；
     - dry_run=True 只出报告不写库。
+
+    P5（2026-10-26）：URL 结构判不出来时补一道正文层判据 `is_index_page`
+    （表格式书目/索引页，reason="index_page"）。只读条目自带的内联正文
+    （`inline_content`，≤4000 字），不读 content_store——零额外 IO。
     """
-    from ..semantic.value_guard import judge_value
+    from ..semantic.value_guard import is_index_page, judge_value
 
     entries = dl.list_entries(status="active", limit=10000)
     by_reason: dict[str, int] = {}
@@ -450,6 +454,8 @@ def _value_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
         if e.meta.get("value_flag") == "ok":
             continue
         reason = judge_value(e.locator)
+        if reason is None and is_index_page(e.inline_content or ""):
+            reason = "index_page"
         if reason is None:
             continue
         by_reason[reason] = by_reason.get(reason, 0) + 1

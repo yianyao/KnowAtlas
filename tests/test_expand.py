@@ -1,5 +1,6 @@
 """书签扩散抓取测试（0.2.0 第四十批）：同目录系列提取、L0 拦截、canonical 去重、上限；
-第九十二批：GitHub 仓库树扩散（blob 文件页豁免 L0、tree 子目录下钻、raw 直链抓取）。"""
+第九十二批：GitHub 仓库树扩散（blob 文件页豁免 L0、tree 子目录下钻、raw 直链抓取）；
+P5（2026-10-26）：模板占位符/自链接提取层剔除、书目表格页正文层拦截。"""
 
 from __future__ import annotations
 
@@ -10,7 +11,8 @@ import pytest
 
 from knowatlas.models import Entry
 from knowatlas.pipeline import expand as expand_mod
-from knowatlas.pipeline.expand import _gh_blob_dir, _gh_in_scope, _github_scope, expand_seed
+from knowatlas.pipeline.expand import (_candidate_links, _gh_blob_dir, _gh_in_scope,
+                                       _github_scope, expand_seed)
 
 PAGES = {
     "/series/01.html": ("<h1>系列文章一：入门</h1>" + "<p>本系列讲消息队列的入门概念与实战，从零搭一个可用队列。" * 10
@@ -108,6 +110,43 @@ def test_expand_limit(cfg, dl, registries, server):
     stats = expand_seed(cfg, dl, locators, semantics, seed.id, limit=1)
     assert stats["created"] == 1
     assert len(_expand_entries(dl)) == 1
+
+
+# ---- P5（2026-10-26）：提取层剔除占位符/自链接 + 正文层拦书目索引页 ----
+
+BOOK_INDEX_BODY = ("# 书单\n\n| 书名 | 作者 | 下载 |\n| --- | --- | --- |\n"
+                   "| 深入理解计算机系统 | Randal | [下载](https://x.test/a) |\n"
+                   "| 算法导论 | CLRS | [下载](https://x.test/b) |\n"
+                   "| 代码大全 | McConnell | [下载](https://x.test/c) |\n")
+
+
+def test_candidate_links_filters_placeholder_and_self():
+    """模板占位符（`${…}`/`{{…}}`/`<%…%>`）与自链接在提取层剔除，并报账。"""
+    html = ('<a href="/series/02.html">二</a>'
+            '<a href="/series/${id}.html">模板一</a>'
+            '<a href="/series/{{n}}.html">模板二</a>'
+            '<a href="/series/<%= x %>.html">模板三</a>'
+            '<a href="/series/01.html">本文</a>')
+    links, skipped = _candidate_links("https://x.test/series/01.html", html)
+    assert links == ["https://x.test/series/02.html"]
+    assert skipped == {"placeholder": 3, "self": 1}
+
+
+def test_expand_skips_index_page(cfg, dl, registries, server, monkeypatch):
+    """书目表格页不入库（正文里没有可提炼知识），计 index_page；同批正常页照常入库。"""
+    locators, semantics = registries
+
+    def stub(locator, locators_, ctx):
+        if locator.endswith("/02.html"):
+            return BOOK_INDEX_BODY, "书单"
+        return "系列文章正文：多副本一致性协议简介，主从同步与选主实现要点。" * 12, "系列文章三"
+
+    monkeypatch.setattr(expand_mod, "fetch_with_fallback", stub)
+    seed = _seed(dl, server)
+    stats = expand_seed(cfg, dl, locators, semantics, seed.id)
+    assert stats["index_page"] == 1
+    assert stats["created"] == 1                       # 03 正常入库
+    assert not any("书单" in e.title for e in _expand_entries(dl))
 
 
 def test_expand_rejects_non_http_seed(cfg, dl, registries):

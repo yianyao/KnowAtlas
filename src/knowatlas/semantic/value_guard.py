@@ -15,6 +15,10 @@
 | portal_homepage | http(s) URL 的 path 为空或 "/"——站点门户/导航首页            |
 | index_subdir    | http(s) URL 的 path 以 "/" 结尾且非根——列表/导航子页         |
 
+另有**正文层**判据 `is_index_page`（2026-10-26 P5 扩散加固）：URL 结构完全正常、
+但正文就是一张带下载链接的书名/条目表——见下方函数说明。`judge_value` 只看 URL，
+所以这类页面要靠 `is_index_page` 在正文层拦（扩散入库前 + `--value-scan` 存量体检）。
+
 明确不判（防误杀）：
 - PDF/电子书/Office 文档直链——可解析正文的知识资源（fetchers markitdown 路线）；
 - 内容页——无尾斜杠路径、.html 后缀、GitHub 仓库页（README 即正文）等；
@@ -29,6 +33,7 @@ ksync --value-scan 价值体检复用。
 
 from __future__ import annotations
 
+import re
 from urllib.parse import unquote, urlsplit
 
 # 资源类扩展名（小写、不含点）——进去就是文件本体而非可读知识页
@@ -84,6 +89,77 @@ def judge_value(locator: str | None) -> str | None:
     if raw.endswith("/"):
         return "index_subdir"
     return None
+
+
+# ---- 正文层判据：表格式索引/书目页（2026-10-26 P5 扩散加固）----
+# 实测形态（`ebook-treasure-chest` 扩散进来的 20 条，全部同款）：
+#   # 5G
+#   | 书名 | 作者 | epub/mobi/azw3 |
+#   | --- | --- | --- |
+#   | 5G金融 | 莫开伟/陈名银/邱泉 | [下载](https://url89.ctfile.com/…) |
+# URL 是正常的 blob 文件页（不是目录页、不是资源直链），judge_value 判不出来；
+# 但「正文」就是一张带下载链接的书名表，没有可提炼的知识。
+_INDEX_COLUMN_KEYS_CN = ("书名", "标题", "作者", "下载", "格式", "大小", "出版",
+                         "年份", "语言", "简介", "链接", "文件名")
+_INDEX_COLUMN_KEYS_EN = ("name", "title", "author", "size", "download", "format",
+                         "year", "file", "link", "ext")
+_MD_LINK_RE = re.compile(r"\[[^\]]*\]\([^)]+\)")
+_TABLE_SEP_RE = re.compile(r"^\|[\s:\-|]+\|$")
+
+
+def _table_cells(line: str) -> str:
+    """`| a | b |` → "a b"（小写，供列名关键词匹配）。"""
+    return " ".join(c.strip() for c in line.strip().strip("|").split("|")).lower()
+
+
+def _header_hits(line: str) -> int:
+    """该行命中多少个「索引表列名」关键词（中英各一套）。"""
+    cells = _table_cells(line)
+    hits = sum(1 for k in _INDEX_COLUMN_KEYS_CN if k in cells)
+    hits += sum(1 for k in _INDEX_COLUMN_KEYS_EN if re.search(rf"\b{k}\b", cells))
+    return hits
+
+
+def is_index_page(text: str, *, min_rows: int = 1, scan_limit: int = 4000) -> bool:
+    """正文是不是「表格式索引/书目页」（纯文本、零 IO、零费用）。
+
+    四条同时成立才判 True——全部朝「防误杀」方向取阈值：
+    ① 表格成型：至少「表头 + `|---|` 分隔行 + `min_rows` 行数据」（默认 1 行；
+       真库实测这些站存在「一本书一页」的形态，行数下限卡太死会漏掉一半）；
+    ② 某一行命中列名关键词 ≥2（书名/作者/下载/… 或 name/author/download/…）；
+    ③ 数据行里含 Markdown 链接 `[x](y)` 的比例 ≥50%（书目页每行一个下载链接）；
+    ④ 表格行占非空行 ≥40%（正文主体就是这张表，而不是「文章里带一张对照表」）。
+
+    ``` 围栏代码块内的行不参与统计（代码里的管道符不是表格）。
+    只判「表格化清单」这一类；纯链接罗列（无表格）不判——留给 L0 的 URL 规则与
+    人工复核，宁漏不误杀。真库 49 条有正文条目实测：20 条书目页全中、其余 0 误报。
+    """
+    lines: list[str] = []
+    in_fence = False
+    for raw in (text or "")[:scan_limit].splitlines():
+        s = raw.strip()
+        if s.startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence or not s:
+            continue
+        lines.append(s)
+    if not lines:
+        return False
+    table = [ln for ln in lines
+             if ln.startswith("|") and ln.endswith("|") and len(ln) >= 2]
+    if len(table) < 3:                     # 表格成型：表头 + 分隔 + ≥1 数据行
+        return False
+    rows = [ln for ln in table if not _TABLE_SEP_RE.match(ln)]
+    if not any(_header_hits(ln) >= 2 for ln in rows):
+        return False
+    data = [ln for ln in rows if _header_hits(ln) < 2]
+    if len(data) < max(1, min_rows):
+        return False
+    linked = sum(1 for ln in data if _MD_LINK_RE.search(ln))
+    if linked / len(data) < 0.5:
+        return False
+    return len(table) / len(lines) >= 0.4
 
 
 def is_garbled(text: str, *, scan_limit: int = 5000) -> bool:
