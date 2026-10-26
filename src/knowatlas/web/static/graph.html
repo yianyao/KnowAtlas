@@ -62,6 +62,20 @@
                      background: transparent; color: var(--text-2);
                      font-size: var(--fs-11); padding: 0 6px; margin-left: 6px; }
   #nodecard .ccopy:hover { color: var(--text-1); border-color: var(--accent); }
+  /* 全屏（2026-10-26 用户反馈①）：工具栏变浮层、鼠标贴顶边唤出，离开 2.5s 自动收起；
+     退出按钮常驻右上角（header 收起时也点得到），画布因此吃满整屏。 */
+  body.fs header { position: fixed; top: 0; left: 0; right: 0; z-index: 20;
+                   transition: transform var(--dur-med) ease, opacity var(--dur-med) ease; }
+  body.fs header.is-hidden { transform: translateY(-100%); opacity: 0;
+                             pointer-events: none; }
+  body.fs #revpanel { top: 56px; }
+  #fsExit { position: fixed; top: 10px; right: 12px; z-index: 21; display: none;
+            background: var(--bg-1); color: var(--accent-text);
+            border: 1px solid var(--border-2); border-radius: var(--radius-ctrl);
+            padding: 3px 10px; font-size: var(--fs-13); cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
+  #fsExit:hover { border-color: var(--accent); color: var(--text-1); }
+  body.fs #fsExit { display: block; }
 </style>
 <link rel="stylesheet" href="/ui.css">
 </head>
@@ -69,6 +83,7 @@
 <header>
   <a href="/index.html">← 返回分类树</a>
   <strong>知识关系图</strong>
+  <button id="fsBtn" title="整屏看图（工具栏自动收起，鼠标贴顶边唤出，Esc 退出）">⛶ 全屏</button>
   <input id="q" placeholder="搜条目标题 / 分类名，回车出子图" size="28">
   <button id="home">大类总览</button>
   <button id="expand">展开更多</button>
@@ -91,6 +106,7 @@
   <span id="tip">加载中…</span>
 </header>
 <div id="chart"></div>
+<button id="fsExit" title="退出全屏（Esc）">⤢ 退出全屏</button>
 <div id="revpanel" hidden></div>
 <div id="nodecard" hidden></div>
 <script src="/ui.js"></script>
@@ -123,10 +139,17 @@ const PAL = {
   catCtx: "rgba(91, 141, 239, 0.38)",       // 祖先链上下文（accent 半透明）
   entry: tok("--accent-text", "#9CC0F7"),   // 条目节点
   point: tok("--point", "#6FCF97"),         // 知识点节点（P4 点级图）
-  labelCtx: tok("--text-3", "#7C8798"),     // 上下文节点标签
+  // 标签字色（2026-10-26 用户反馈②：字看不清——不加描边，改用与 --bg-0 对比度
+  // 够的浅色，按节点类型分级；焦点金 8.6:1 / 分类 text-1 16.4:1 / 条目 10.4:1 /
+  // 知识点绿 10.0:1 / 上下文 text-2 8.8:1，全部 ≥4.5:1）
+  labelFocus: tok("--warning", "#DFA43E"),  // 焦点标签（与焦点节点同金）
+  labelCat: tok("--text-1", "#E9EDF4"),     // 分类标签（最亮，层级最高）
+  labelEntry: tok("--accent-text", "#9CC0F7"),
+  labelPoint: tok("--point", "#6FCF97"),
+  labelCtx: tok("--text-2", "#A6B0C0"),     // 上下文节点标签
   edgeGray: "rgba(166, 176, 192, 0.35)",    // 同域名/带理由边（text-2 半透明）
   edgeAccent: "rgba(91, 141, 239, 0.45)",   // 主关联边（accent 半透明）
-  edgeLabel: tok("--text-3", "#7C8798"),    // 边上关联解释文字
+  edgeLabel: tok("--text-2", "#A6B0C0"),    // 边上关联解释文字（提亮到 text-2）
   tipBg: tok("--bg-2", "#171B24"),          // 边 tooltip 深色化
   tipBorder: tok("--border-2", "#2E3648"),
   tipText: tok("--text-1", "#E9EDF4"),
@@ -366,9 +389,12 @@ function render(data, crumbText, opts = {}) {
       label: { show: isFocus || n.kind === "category"
                     || (n.kind === "entry" && data.nodes.length <= 50)
                     || (n.kind === "point" && data.nodes.length <= 60),
-               fontSize: n.kind === "category" ? 13 : 10,
+               fontSize: n.kind === "category" ? 13 : 11,
                fontWeight: isFocus ? "bold" : "normal",
-               color: n.ctx ? PAL.labelCtx : undefined,
+               color: isFocus ? PAL.labelFocus
+                    : n.ctx ? PAL.labelCtx
+                    : n.kind === "category" ? PAL.labelCat
+                    : n.kind === "point" ? PAL.labelPoint : PAL.labelEntry,
                formatter: p => p.data._ovText
                  || (p.data.folded ? `${p.data.name} · ${p.data.folded}条` : p.data.name) },
     };
@@ -658,6 +684,69 @@ qBox.addEventListener("keydown", e => {
 });
 document.getElementById("home").onclick = () => showOverview();
 window.addEventListener("resize", () => chart.resize());
+
+// ---- 全屏（2026-10-26 用户反馈）：真全屏 + 工具栏自动收起 + 常驻退出按钮 ----
+// 用户口径：「进页面能全屏、留一个退出全屏的按钮」「切焦点后一样全屏」，因为原来
+// 顶部两行工具栏把画布挤小了。实现要点：
+//   1) 全屏状态挂在 document 上，切焦点/下钻/搜索都不退出（视图切换不碰它）；
+//   2) #fsExit 在 #chart 之外，render() 整体重渲染也不影响，任何视图都点得到；
+//   3) 全屏时 header 变浮层，鼠标贴顶边（≤64px）唤出、离开 2.5s 自动收起，
+//      画布吃满整屏；Esc 由浏览器原生处理，同样走 fullscreenchange 收尾；
+//   4) 尺寸变化后 requestAnimationFrame 里 resize，避免全屏瞬间按旧尺寸排版。
+const fsBtn = document.getElementById("fsBtn");
+const fsExit = document.getElementById("fsExit");
+const headerEl = document.querySelector("header");
+const HEADER_HIDE_MS = 2500;
+let headerHideTimer = null;
+
+function scheduleHeaderHide() {
+  clearTimeout(headerHideTimer);
+  headerHideTimer = setTimeout(() => {
+    // 鼠标还在工具栏上就不收（正在操作开关时突然消失会点空）
+    if (document.fullscreenElement && !headerEl.matches(":hover"))
+      headerEl.classList.add("is-hidden");
+  }, HEADER_HIDE_MS);
+}
+function revealHeader() {
+  headerEl.classList.remove("is-hidden");
+  scheduleHeaderHide();
+}
+function setFullscreen(on) {           // 必须在用户手势内调用，浏览器才允许
+  const p = on ? document.documentElement.requestFullscreen?.()
+               : document.exitFullscreen?.();
+  if (p && p.catch)
+    p.catch(err => {
+      tip.textContent = `浏览器拒绝全屏：${err && err.message ? err.message : err}`;
+    });
+}
+fsBtn.onclick = () => setFullscreen(!document.fullscreenElement);
+fsExit.onclick = () => setFullscreen(false);
+document.addEventListener("mousemove", e => {
+  if (document.fullscreenElement && e.clientY <= 64) revealHeader();
+});
+headerEl.addEventListener("mouseenter", () => {
+  if (!document.fullscreenElement) return;
+  clearTimeout(headerHideTimer);
+  headerEl.classList.remove("is-hidden");
+});
+headerEl.addEventListener("mouseleave", () => {
+  if (document.fullscreenElement) scheduleHeaderHide();
+});
+headerEl.addEventListener("focusin", () => {      // 键盘 Tab 进工具栏也要唤出
+  if (document.fullscreenElement) revealHeader();
+});
+document.addEventListener("fullscreenchange", () => {
+  const on = !!document.fullscreenElement;
+  document.body.classList.toggle("fs", on);
+  fsBtn.textContent = on ? "⤢ 退出全屏" : "⛶ 全屏";
+  clearTimeout(headerHideTimer);
+  if (on) revealHeader();
+  else {
+    headerEl.classList.remove("is-hidden");
+    headerEl.style.transform = "";      // 防御：动画中断时残留的位移清掉
+  }
+  requestAnimationFrame(() => chart.resize());
+});
 // 启动：?node=c:/e:/d: 直达放射视图（工作台「在图中打开」深链）；无效节点回退总览
 (async () => {
   await showOverview();               // 总览先入栈作面包屑根

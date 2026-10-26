@@ -1239,4 +1239,34 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 
 **已知失败与处理**：无。上下文 95.2%（CRITICAL），按协议停会话写交接。
 
+## 2026-10-26 20:36 图页全屏 + 节点标签字色（用户验收反馈① ②）
+
+用户验收 P4 点级图时提两条：① 进 `graph.html` 没法全屏、顶部两行工具栏把画布挤小，希望保留一个退出全屏按钮；
+② 切焦点（放射视图）后同样要全屏；节点上的字看不清——**不要加描边**，要换与背景对比够的字色。
+
+改动：只动 `src/knowatlas/web/static/graph.html`（+93/−5，无 API / 表结构 / config / 接口签名变更）：
+
+- **全屏**：header 加「⛶ 全屏」（`documentElement.requestFullscreen()`），`fullscreenchange` 切 `body.fs`；
+  全屏时 header 变浮层，鼠标贴顶边（≤64px）唤出、离开 2.5 s 自动收起，画布吃满整屏；
+  另放 `#fsExit`「⤢ 退出全屏」固定右上角（z-index 21，在 `#chart` 之外），header 收起时也点得到；
+  Esc 走浏览器原生，同样触发 `fullscreenchange` 收尾。全屏状态挂在 document 上，
+  切焦点 / 下钻 / 搜索都不退出（`render()` 不碰它），尺寸变化在 `requestAnimationFrame` 里 `chart.resize()`。
+- **标签字色**（不加描边、无白底）：原来 `label.color` 未设，吃 ECharts 默认色，深色底 + 密集边看不清。
+  按类型分级给浅色（对 `--bg-0` 的对比度）：焦点 `--warning` 8.6:1、分类 `--text-1` 16.4:1、
+  条目 `--accent-text` 10.4:1、知识点 `--point` 10.0:1、上下文 `--text-2` 8.8:1（原 `--text-3` 5.3:1）；
+  字号条目 10→11、知识点 11、分类 13；边上「关联解释」文字 `--text-3`→`--text-2`。
+
+验证（2026-10-26 20:35）：
+
+- 内联脚本 `new Function` 语法检查通过（648 行）；`git diff --check` 干净。
+- 线上 `GET /graph.html` → HTTP 200 / 42,467 B，含 `id="fsBtn"`、`id="fsExit"`、`body.fs header`、`PAL.labelEntry`
+  （静态文件 no-store，无需重启 serve）。
+- headless Edge 截图本轮不可用：本会话 shell 是低完整性令牌，Edge 给 profile 目录授 sandbox 访问时报 0x5，
+  单进程模式又撞命名管道拒绝；`_edge*` / `_shot*.png` / `_syncheck.js` 探针已清理，未留痕。
+- **未经真实浏览器实测**，待用户 Ctrl+F5 验收：① 点「⛶ 全屏」画布吃满；② 全屏下点节点切焦点仍全屏、
+  右上角有退出；③ header 收起后贴顶边能唤出；④ 节点字清楚。
+
+不要重跑：P4 后端与全量测试（629 passed / 1 skipped，20:14）；不要重启 serve（4196 已载 94b17e2，
+前端改动 Ctrl+F5 即生效）。
+
 <!-- HANDOFF {"at":"2026-10-26T20:16:40+08:00","compactions":1,"doc":"docs/log.md#2026-10-26-2020","draft":false,"goal":"P4 点级图已交付（94b17e2），待浏览器验收","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 /graph.html 点层；之后 P5 或 P4 后置项","not_rerun":"P4 实现与全量测试（629 passed）；P3 全库重点；serve 重启（PID 4196 已载 94b17e2）","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"HANDOFF","tokens":140038,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
