@@ -288,8 +288,63 @@ chart.on("mouseout", p => {
 // ---- 导航栈 + 面包屑（总览/搜索/子树/放射统一压栈，任一级回跳） ----
 const nav = [];          // {label, load(push)}
 let lastData = null;     // 当前视图原始数据（固化/反查用）
+let lastCrumb = "";      // 当前视图标题（缩放触发的重渲染沿用同一条）
 let currentRadiate = null;  // {nodeId, perChannel, name}
 let currentSubtree = null;  // 分类 id（子树视图，反查用）
+let currentPointLabels = false;   // 本次渲染点标签是否显示（缩放后比对用）
+
+// ---- 点标签随缩放显隐（2026-10-26 用户口径②的追补）：不再按「点数 >60 就全藏」一刀切，
+// 改看屏幕上排不排得开。实测 205 点 force 视图：zoom 1 时最近邻间距中位 32.6 px、
+// 1.6 时 60.6、2.2 时 81.8；标签 11px 高，留 56 px 才不会互相压。
+// 节点数越多、视口越小需要的缩放越大：spacing ≈ 0.39·sqrt(W·H/n)，故
+//   needZoom = 56 / (0.39·sqrt(W·H/n)) ≈ 143.5 / sqrt(W·H/n)
+const LABEL_MIN_GAP = 56;
+function pointLabelNeedZoom(count) {
+  const w = chart.getWidth() || 1200, h = chart.getHeight() || 800;
+  return LABEL_MIN_GAP / (0.39 * Math.sqrt(Math.max(1, (w * h) / Math.max(1, count))));
+}
+
+// 冻结当前布局：把 chart 里的实际坐标写回 lastData.nodes[].x/y。
+// 目的——缩放后重渲染只改标签显隐，不能让 force 重跑：实测直接合并 data 会把 205 个
+// 节点全挪（最大 280 px）。写完坐标后 render 走 layout:"none"，位置逐像素一致。
+function freezeLayout() {
+  if (!lastData || !lastData.nodes || !lastData.nodes.length) return false;
+  const model = chart.getModel().getSeriesByIndex(0);
+  const d = model && model.getData();
+  if (!d || !d.count()) return false;
+  const pos = {};
+  for (let i = 0; i < d.count(); i++) {
+    const l = d.getItemLayout(i);
+    if (l && Number.isFinite(l[0]) && Number.isFinite(l[1])) pos[d.getId(i)] = [l[0], l[1]];
+  }
+  for (const n of lastData.nodes) {
+    const p = pos[n.id];
+    if (!p) return false;                  // 有节点没落位就不冻，宁可保持原样
+    n.x = p[0];
+    n.y = p[1];
+  }
+  return true;
+}
+
+// 缩放结束（防抖 260 ms）：显隐真变了才重渲染，并沿用当前 zoom/center
+function refreshPointLabels() {
+  const s = (chart.getOption().series || [])[0];
+  if (!s || !lastData) return;
+  const points = (lastData.nodes || []).filter(n => n.kind === "point").length;
+  if (!points) return;
+  const zoom = Number(s.zoom) || 1;
+  const want = points <= 60 || zoom >= pointLabelNeedZoom(points);
+  if (want === currentPointLabels) return;
+  freezeLayout();
+  render(lastData, lastCrumb, { radiate: !!currentRadiate, zoom,
+                                center: Array.isArray(s.center) ? s.center : null });
+}
+
+let labelZoomTimer = null;
+chart.on("graphRoam", () => {            // 滚轮/拖拽缩放都会走这里
+  clearTimeout(labelZoomTimer);
+  labelZoomTimer = setTimeout(refreshPointLabels, 260);
+});
 
 function renderBread() {
   crumb.innerHTML = nav.map((v, i) =>
@@ -346,6 +401,15 @@ function render(data, crumbText, opts = {}) {
   showEntriesBtn.style.display = "none";   // 非层级子树视图一律收起（子树视图按需重开）
   const radiateView = !!opts.radiate;
   const reasonOn = document.getElementById("showReason").checked;
+  // 随缩放显隐（2026-10-26）：opts.zoom 来自缩放后的重渲染，首次进入恒为 1
+  const zoomNow = Number.isFinite(opts.zoom) ? opts.zoom : 1;
+  // 冻结坐标：缩放重渲染沿用当前布局（layout:"none"），force 不重跑
+  const frozen = !radiateView && data.nodes.length > 0
+    && data.nodes.every(n => Number.isFinite(n.x) && Number.isFinite(n.y));
+  const pointCount = data.nodes.filter(n => n.kind === "point").length;
+  const pointLabels = pointCount > 0
+    && (pointCount <= 60 || zoomNow >= pointLabelNeedZoom(pointCount));
+  currentPointLabels = pointLabels;
   // 放射视图布种：焦点固定 (0,0)，非焦点节点绕原点环形散布（黄金角）——
   // 否则邻域从原点随机起步，包围盒左上角即焦点，自动 fit 后焦点连同挂接
   // 条目整团挤在视口左上被裁剪（第四十八批截图实锤）；环形布种让包围盒
@@ -366,6 +430,7 @@ function render(data, crumbText, opts = {}) {
     let x, y;
     if (isFocus) { x = 0; y = 0; }
     else if (coords) { x = coords[n.id].x; y = coords[n.id].y; }
+    else if (frozen) { x = n.x; y = n.y; }
     else if (radiateView) {
       const r = (RING_R[n.kind] || 170) * (0.85 + (i % 6) * 0.06);
       const ang = i * 2.399963;               // 黄金角≈137.5°，散而不叠
@@ -388,7 +453,7 @@ function render(data, crumbText, opts = {}) {
                    borderWidth: isFocus ? 2 : 0 },
       label: { show: isFocus || n.kind === "category"
                     || (n.kind === "entry" && data.nodes.length <= 50)
-                    || (n.kind === "point" && data.nodes.length <= 60),
+                    || (n.kind === "point" && pointLabels),
                fontSize: n.kind === "category" ? 13 : 11,
                fontWeight: isFocus ? "bold" : "normal",
                color: isFocus ? PAL.labelFocus
@@ -411,6 +476,7 @@ function render(data, crumbText, opts = {}) {
   }));
   crumb.innerHTML = `<span class="crumbit" style="cursor:default;font-weight:600">${crumbText}</span>`;
   renderBread();
+  lastCrumb = crumbText;
   const truncParts = Object.entries(data.truncated || {})
     .map(([k, v]) => `${CHANNEL_LABEL[k] || k} ${v} 条未显示`);
   tip.textContent =
@@ -418,6 +484,9 @@ function render(data, crumbText, opts = {}) {
     ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}` +
     ` / 知识点 ${nodes.filter(n=>n.kind==="point").length}），边 ${links.length}` +
     (anyFolded ? "。🗜 稀疏分支已折叠（节点标 N条，点分类下钻可见）" : "") +
+    (pointCount > 60 && !pointLabels
+      ? `。点标签按缩放显隐（放大到约 ${pointLabelNeedZoom(pointCount).toFixed(1)}× 显示）`
+      : "") +
     (radiateView
       ? `。每条关联都带解释（悬停可看）${truncParts.length ? "；" + truncParts.join("，") : ""}。点邻域节点继续放射，焦点为黄。`
       : `。点分类下钻 / 点条目打开原文 / 回车搜索。`);
@@ -431,7 +500,9 @@ function render(data, crumbText, opts = {}) {
       return `${nameOf[p.data.source] || p.data.source}<br>— ${KIND_LABEL[p.data.kind] || p.data.kind || ""} →${why}<br>${nameOf[p.data.target] || p.data.target}`;
     } },
     series: [{
-      type: "graph", layout: coords ? "none" : "force", roam: true, draggable: true,
+      type: "graph", layout: coords || frozen ? "none" : "force", roam: true, draggable: true,
+      zoom: zoomNow,                    // 缩放触发的重渲染要保住当前缩放比例
+      center: opts.center || undefined, // 同上：平移位置也一并还原
       // 密度自适应（2026-10-23 用户截图批注「内容少时挤一起/加了文字啥都看不清」）：
       // 节点少 repulsion/edgeLength 放大散得开，多则收缩防漂散；
       // 标签截 18 字（全名 hover 节点卡可见）+ hideOverlap 重叠自动避让

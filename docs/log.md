@@ -1279,3 +1279,46 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 前端改动 Ctrl+F5 即生效）。
 
 <!-- HANDOFF {"at":"2026-10-26T20:16:40+08:00","compactions":1,"doc":"docs/log.md#2026-10-26-2020","draft":false,"goal":"P4 点级图已交付（94b17e2），待浏览器验收","host":"dsh","kind":"handoff","next":"用户 Ctrl+F5 验收 /graph.html 点层；之后 P5 或 P4 后置项","not_rerun":"P4 实现与全量测试（629 passed）；P3 全库重点；serve 重启（PID 4196 已载 94b17e2）","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"HANDOFF","tokens":140038,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+## 2026-10-26 20:58 点标签随缩放显隐（反馈②追补）
+
+用户口径：点层「>60 点不常驻显示点标签」改成**随缩放显隐**，阈值选**间距 56 px**。
+
+实测依据（headless Edge + CDP，205 点 force 视图 1600×900，最近邻间距中位）：
+zoom 1 → 32.6 px；1.6 → 60.6；2.2 → 81.8；3.0 → 111.5。另有一条硬结论：
+**直接合并 setOption 换 data（改 label.show）会让 force 重跑，205 节点最大位移 280 px**，所以不能直接改 data。
+
+实现（只改 `graph.html`，无 API / DB / config 契约变更）：
+
+- `render()` 新增 `opts.zoom` / `opts.center`；点标签判据改成「屏幕上排得开」：
+  `zoom >= pointLabelNeedZoom(n) = 56 / (0.39·sqrt(W·H/n))`（0.39 为实测系数），n ≤ 60 仍一直显示；
+  隐藏时 tip 提示「放大到约 N× 显示」。
+- 冻结布局：`graphRoam` 防抖 260 ms 后若显隐需翻转，先把 chart 当前坐标写回 `lastData.nodes[].x/y`，
+  再带 zoom/center 重渲染；`render` 见所有节点都有数值 x/y 时用 `layout: "none"`，force 不重跑。
+
+浏览器实测（`temp/ui_label_zoom_verify.js`，真实滚轮事件）：
+
+- 初始 zoom 1 / layout force / 标签 5（仅分类）/ tip 提示「约 1.7×」；
+- 滚轮放大到 zoom 2.59 → **layout 变 none、标签 205（分类 5 + 点 200）**；
+- 再缩到 1.77（仍 ≥1.7）→ 标签仍 205、**节点位移 0.00 px**（冻结生效）；
+- 放射视图 19 节点、条目视图 26 节点：标签与布局不受影响；控制台无异常；
+- **未测**：缩回阈值以下（与放大同一函数、分支对称，留待验收时顺手看）。
+
+环境事件：serve 在 20:3x—20:4x 间自行退出（8420 无监听、无 python 进程），已按凭据纪律重启
+（`HKCU\Environment` 三个 `KNOWATLAS_*` → env 后 `uv run python -m knowatlas serve`），现 `GET /graph.html` 200 / 42,467 B，
+令牌仍是用户级 22 字符那个。watcher 20:48 WARN / 20:50 CRITICAL 是上下文真实上涨（20:52 probe 101.9%）。
+
+**下一步（新会话按序）**：
+
+1. `session-guard check --workspace "D:\sData\git\KnowAltas"` + `probe`；`GET /graph.html` 确认 200（serve 本轮已重启，PID 会变）。
+2. 用户 Ctrl+F5 验收：点层 205 点视图滚轮放大到 ~1.8× 出点标签、缩回消失；切焦点仍全屏且右上角有退出。
+3. 如果要更细的密度控制，可把「整层翻转」升级成「逐节点按标签宽度贪心排布」（本轮未做）。
+
+**不要重跑**：P4 后端与全量测试（629 passed / 1 skipped，20:33）；点标签随缩放显隐的浏览器实测（20:57）；
+不要重复重启 serve（除非确认 8420 无监听）。
+
+**验证命令**：
+`uv run python -m pytest -o addopts= -q` → 629 passed, 1 skipped；
+`node temp/ui_label_zoom_verify.js`（先按 `AGENTS.local.md` 起 headless Edge 9333）；
+`curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8420/graph.html` → 200。
+
+<!-- HANDOFF {"at":"2026-10-26T20:58:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2058","draft":false,"goal":"点标签随缩放显隐已交付并浏览器实测，待用户 Ctrl+F5 验收","host":"dsh","kind":"handoff","next":"用户验收点层缩放显隐与全屏；之后 P5 或 P4 后置项","not_rerun":"P4 后端与全量测试（629 passed）；缩放显隐实测（20:57）；serve 已重启勿重复","schema":1,"session":"session-14998ff3-54df-4879-8410-09ac03713ee2","status":"HANDOFF","tokens":150000,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
