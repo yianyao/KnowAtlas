@@ -1535,3 +1535,73 @@ baseline 147,059，effective 77.7%，2026-10-26T21:32+08:00。
 
 <!-- HANDOFF {"at":"2026-10-26T21:32:10+08:00","compactions":0,"doc":"docs/log.md#2026-10-26-2132","draft":false,"goal":"点级反查已交付（93d6efa / 639 passed），待用户 Ctrl+F5 验收图页反查面板","host":"dsh","kind":"handoff","next":"用户验收 /graph.html 点聚焦后的反查面板；若继续做 P4 第四类边引用/指涉需先出方案+新工单（规则先行，LLM 只复核候选）","not_rerun":"全量测试（639 passed，21:30）；真库反查探针（只读副本）；UI 反查实测；serve 已重启（PID 15968）","schema":1,"session":"session-0130f5c8-6441-4fe1-badc-66aadafbf63c","status":"HANDOFF","tokens":114225,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 
+
+## 2026-10-26 21:45 P4 引用/指涉判停 + TODO 8.15 正文库回收（`2c068f8` / 643 passed / 1 skipped）
+
+### 开场判据
+
+- `session_check` = `NEW_SESSION`（exit 0），上一交接 `session-0130f5c8` @ 21:32 `status=HANDOFF`；
+- `context_probe`：`effective_pct` **10.2%**（15,014 / 147,059，compactions=0）；
+- 基线 `pytest -o addopts= -q` → **639 passed / 1 skipped**（57.5 s，与交接一致）；
+- serve PID **15968** 在听 8420：`graph.html` 200、`reverse?node_id=p:5c07508429801ddf` 200、`d:example.com` 404；
+- 未重跑交接块「不要重跑」的四项（真库反查探针 / UI 反查实测 / 全量测试已重跑但为验证目的 / serve 未重启）。
+
+### 做了什么
+
+**1. P4 第四类边「引用/指涉」实测判停（负结果）**
+
+只读探针三层（`temp/probe_cite_feasibility.py`、`temp/probe_cite_entries.py`）：
+
+| 层 | 规模 | 命中任一引用形态 | 可解析到库内目标 |
+|---|---|---|---|
+| 点正文（消费面，口径同 `_point_row`） | 4,509 点 / 26 本书 | **7 点（0.2%）** | **0** |
+| 条目正文（`content_store`/`inline_content`） | 29 条，均截断 4,023 字 | 章节号 17（全是目录页）/ URL 7 | **0** |
+| 原始语料 `D:\sData\KnowLedge` | 131 个 `.md` | 脚注 4 / 相对链接 9 / 参见 13 | — |
+
+根因：语料是成书与白皮书（自包含），kpe 抽取把正文压成要点，引用记号被抹掉；条目层还叠加 R10 的
+4,023 字 integral 降级。结论：照原计划实现产出 0 条边，**不做**；门槛（候选点 ≥200 且可解析命中 ≥50，
+或 kpe 产物开始携带脚注/相对链接）写进工单 §7 与 TODO P4。
+
+**2. TODO 8.15 正文库孤儿回收（已交付）**
+
+- `datalayer/db.py::gc_orphan_contents(max_age_days=1.0, dry_run=True)`：孤儿 = 无任何
+  `entries.content_hash` 指向的 `content_store` 行；阈值保护防同步竞态，`fetched_at` 缺失/坏串按最老处理；
+  只删 `content_store` + `content_fts`，写 `task_log(content_gc)`；SQL 全在 datalayer。
+- `cli.py`：`kcheck --gc-content [--gc-days N] [--dry-run]`，该分支不联网、不调 LLM。
+- `tests/test_content_gc.py` 4 例（dry-run 零写入 / 只删孤儿且 fts 同步清 + 审计一次 / 幂等 /
+  `--gc-days 0` 连过新孤儿一起收）。
+- 真库：`--dry-run` 孤儿 6 / 释放 2,552,280 字符 → 备份 `temp/knowledge.pre-gc.db`（120.6 MB）→ 实跑
+  删 6 → `content_store` **55→49**、`orphans 0`、`content_fts 49`、有引用的 49 行原样、
+  `entries 241` / `points 4,552` 零变化；重跑 `candidates 0`。
+- 全量 `pytest -o addopts= -q` → **643 passed / 1 skipped**（58.7 s，639 + 4）；canary 零漂移（无契约变更）。
+
+### 提交
+
+`2c068f8` feat(check)：TODO 8.15 正文库孤儿回收 + P4 引用/指涉判停（6 文件 +225/−8）。
+
+### 下一步
+
+1. 用户 `Ctrl+F5` 验收 `http://127.0.0.1:8420/graph.html`：点层 → 点节点切焦点 → 「🔍 反查」
+   （21:21 已用 headless Edge 验过面板两行，待人眼确认）。
+2. 剩余 TODO 里可直接开工的：R10（LLM 键缺失被静默降级成 4,023 字 integral 点）、
+   8.3/8.4（书签与本地文本源的端到端验收，需配置指向小目录）；三凭证源（B站/IMA/腾讯文档）等凭证。
+
+### 不要重跑
+
+- 全量测试（643 passed / 1 skipped，21:52）——除非再改业务代码；
+- `kcheck --gc-content` 实跑（已归零；重跑只出 candidates 0）；
+- 引用/指涉三层探针（结论已落工单 §7，别再花时间调研）；
+- serve 未重启，PID 15968 仍载 21:23 的代码（本轮只改 CLI/数据层维护路径，图页不受影响）。
+
+### 验证命令
+
+```powershell
+uv run python -m pytest -o addopts= -q                     # 643 passed, 1 skipped
+uv run python -m knowatlas kcheck --gc-content --dry-run   # 孤儿 0 / 已删 0
+uv run --with zstandard python tools/context_probe.py      # 本会话 66.5%（97,738 / 147,059）
+```
+
+### 会话指纹
+
+`session-7d7ad876-3a1b-4cee-8500-addb58131143`，compactions=0，tokens≈97,738，
+baseline 147,059，effective 66.5%（OK），2026-10-26T21:52+08:00。
