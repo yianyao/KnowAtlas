@@ -78,6 +78,8 @@
     <input type="checkbox" id="hier"> 层级模式</label>
   <label title="经典视图下，直挂条目 ≤2 的子分类折叠不展开（节点标 N条）；点分类下钻即可见——图大时结构更清晰">
     <input type="checkbox" id="fold"> 🗜 稀疏折叠</label>
+  <label title="第三层显示知识点卡（P4：点成为图节点，点击可切焦点）；该范围没有可显示的点时自动回退条目层">
+    <input type="checkbox" id="pointLayer"> ◆ 点层</label>
   <button id="showEntries" style="display:none"
           title="当前为纯层级视图——展开本分类子树内条目（经典视图）">📋 显示条目</button>
   <label title="在边上常驻显示关联理由（tooltip 恒显）">
@@ -105,9 +107,11 @@ function fmtReason(r) {
   const raw = r.slice(i + 1), tail = KIND_LABEL[raw];
   return tail ? `${head}·${tail}` : `${head}:${raw}`;
 }
-const KIND_NAME = { category: "分类", entry: "条目" };
+const KIND_NAME = { category: "分类", entry: "条目", point: "知识点" };
 const CHANNEL_LABEL = { child: "子分类", parent: "父分类", attach: "挂接条目",
-                        same_host: "同域名", thread: "同线索", host_member: "域内条目" };
+                        same_host: "同域名", thread: "同线索", host_member: "域内条目",
+                        same_book: "同书", same_section: "同章节", sim: "语义近邻",
+                        point: "知识点" };
 // 画布调色板（第七十六批）：canvas 取色不吃 CSS var，运行时从 tokens.css
 // 变量读真值——令牌改一处图色随动；tokens 未载时回退同名十六进制。
 const _rootStyle = getComputedStyle(document.documentElement);
@@ -118,6 +122,7 @@ const PAL = {
   cat: tok("--accent", "#5B8DEF"),          // 分类节点
   catCtx: "rgba(91, 141, 239, 0.38)",       // 祖先链上下文（accent 半透明）
   entry: tok("--accent-text", "#9CC0F7"),   // 条目节点
+  point: tok("--point", "#6FCF97"),         // 知识点节点（P4 点级图）
   labelCtx: tok("--text-3", "#7C8798"),     // 上下文节点标签
   edgeGray: "rgba(166, 176, 192, 0.35)",    // 同域名/带理由边（text-2 半透明）
   edgeAccent: "rgba(91, 141, 239, 0.45)",   // 主关联边（accent 半透明）
@@ -139,6 +144,15 @@ hierBox.checked = localStorage.getItem("knowatlas.graphHier") !== "0";
 // 稀疏折叠（批次 72）：经典子树视图默认开——直挂 ≤2 条的子分类藏条目（folded 徽标）
 const foldBox = document.getElementById("fold");
 foldBox.checked = localStorage.getItem("knowatlas.graphFold") !== "0";
+// 点层（P4，2026-10-26）：第三层条目卡换点卡，默认开（TODO P4「初始层…点」口径），
+// localStorage 记忆；切换后重放当前视图（子树/层级立即换层），其它视图无副作用。
+const pointLayerBox = document.getElementById("pointLayer");
+pointLayerBox.checked = localStorage.getItem("knowatlas.graphPointLayer") !== "0";
+pointLayerBox.onchange = () => {
+  localStorage.setItem("knowatlas.graphPointLayer", pointLayerBox.checked ? "1" : "0");
+  const last = nav[nav.length - 1];
+  if (last) last.load(false);
+};
 
 // ---- 节点弹窗卡（第三十五批）：悬浮固定弹窗显示概要；移入保持/移开即隐/点按钮进原文 ----
 const nodecard = document.getElementById("nodecard");
@@ -175,10 +189,21 @@ nodecard.addEventListener("click", e => {
 function showCard(d, cx, cy) {
   keepCard();
   cardKey = String(d.id);
-  // 知识点节点（批次 88 主题视图）：text 直显 + 溯源条目名，不 fetch 条目概要
-  if (d._point) {
+  // 知识点节点（批次 88 主题视图 / P4 点级图）：text 直显 + 书籍章节路径 + 溯源链接，
+  // 不 fetch 条目概要；点层藏了条目卡，溯源链接就是原文入口（http(s) 才出真链接）
+  if (d._point || d.kind === "point") {
+    const srcs = (d.sources || []).map(s => {
+      const title = String(s.title || s.entry_id || "");
+      const loc = s.locator || "";
+      return /^https?:/i.test(loc)
+        ? `<a class="copen" href="${loc}" target="_blank" rel="noopener">${title}</a>`
+        : title;
+    }).join("；");
     nodecard.innerHTML = `<div class="ct">◆ 知识点</div><div class="cs"></div>`
-      + (d.path ? `<div class="cp">${d.path}</div>` : "");
+      + (d.path ? `<div class="cp">${d.path}</div>` : "")
+      + (srcs ? `<div class="cp">溯源：${srcs}</div>` : "")
+      + (d.reasons && d.reasons.length
+          ? `<div class="cp">关联：${d.reasons.map(fmtReason).join("；")}</div>` : "");
     nodecard.querySelector(".cs").textContent = d.text || "（无内容）";
     nodecard.style.left = Math.min(cx + 14, window.innerWidth - 320) + "px";
     nodecard.style.top = Math.min(cy + 14, window.innerHeight - 200) + "px";
@@ -225,13 +250,15 @@ function showCard(d, cx, cy) {
   }
 }
 chart.on("mouseover", p => {
-  // 弹窗卡只对条目节点出（第三十六批用户定调：大类/域名不承载具体知识，无概要与原文）
-  if (p.dataType === "edge" || !p.data || p.data.kind !== "entry") return;
+  // 弹窗卡只对条目/知识点节点出（第三十六批：大类/域名不承载具体知识；P4 点层要点卡）
+  if (p.dataType === "edge" || !p.data
+      || (p.data.kind !== "entry" && p.data.kind !== "point")) return;
   const native = p.event && p.event.event;    // 原生鼠标事件 → 视口坐标
   showCard(p.data, native ? native.clientX : 0, native ? native.clientY : 0);
 });
 chart.on("mouseout", p => {
-  if (p.dataType === "edge" || !p.data || p.data.kind !== "entry") return;
+  if (p.dataType === "edge" || !p.data
+      || (p.data.kind !== "entry" && p.data.kind !== "point")) return;
   hideCardSoon();
 });
 
@@ -300,8 +327,11 @@ function render(data, crumbText, opts = {}) {
   // 否则邻域从原点随机起步，包围盒左上角即焦点，自动 fit 后焦点连同挂接
   // 条目整团挤在视口左上被裁剪（第四十八批截图实锤）；环形布种让包围盒
   // 以焦点为中心，fit 后焦点居中、邻域向外放射。
-  const RING_R = { category: 260, entry: 170 };
-  const coords = (!radiateView && data.root && data.nodes.length >= 25)
+  const RING_R = { category: 260, entry: 170, point: 190 };
+  // 点层（P4）：点节点少则几十、多则 200，分层铺开会把一层拉成超宽一条——
+  // 有点节点时改用 force 布局（roam/zoom 自行收敛），分类/条目层不受影响。
+  const hasPoints = data.nodes.some(n => n.kind === "point");
+  const coords = (!radiateView && !hasPoints && data.root && data.nodes.length >= 25)
     ? layeredCoords(data) : null;
   const anyFolded = data.nodes.some(n => n.folded);
   const nodes = data.nodes.map((n, i) => {
@@ -309,7 +339,7 @@ function render(data, crumbText, opts = {}) {
     const size = isFocus ? 34
       : n.kind === "category"
         ? (n.value !== undefined ? 14 + Math.sqrt(n.value) * 3.2 : 24)
-        : 7;
+        : n.kind === "point" ? 9 : 7;
     let x, y;
     if (isFocus) { x = 0; y = 0; }
     else if (coords) { x = coords[n.id].x; y = coords[n.id].y; }
@@ -321,18 +351,21 @@ function render(data, crumbText, opts = {}) {
     return {
       id: n.id, name: n.name, kind: n.kind, locator: n.locator, ctx: n.ctx || false,
       reasons: n.reasons || [], path: n.path || "", _ovText: n._ovText || null,
+      text: n.text || "", sources: n.sources || [], _point: n._point || false,
       folded: n.folded,
       symbolSize: size,
       x, y,
       fixed: isFocus,   // 焦点居中固定，邻域放射展开
       itemStyle: { color: isFocus ? PAL.focus
                      : n.kind === "category" ? (n.ctx ? PAL.catCtx : PAL.cat)
+                     : n.kind === "point" ? PAL.point
                      : PAL.entry,
                    opacity: n.ctx ? 0.55 : 1,
                    borderColor: isFocus ? PAL.focusRing : undefined,
                    borderWidth: isFocus ? 2 : 0 },
       label: { show: isFocus || n.kind === "category"
-                    || (n.kind === "entry" && data.nodes.length <= 50),
+                    || (n.kind === "entry" && data.nodes.length <= 50)
+                    || (n.kind === "point" && data.nodes.length <= 60),
                fontSize: n.kind === "category" ? 13 : 10,
                fontWeight: isFocus ? "bold" : "normal",
                color: n.ctx ? PAL.labelCtx : undefined,
@@ -356,7 +389,8 @@ function render(data, crumbText, opts = {}) {
     .map(([k, v]) => `${CHANNEL_LABEL[k] || k} ${v} 条未显示`);
   tip.textContent =
     `节点 ${nodes.length}（分类 ${nodes.filter(n=>n.kind==="category").length}` +
-    ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}），边 ${links.length}` +
+    ` / 条目 ${nodes.filter(n=>n.kind==="entry").length}` +
+    ` / 知识点 ${nodes.filter(n=>n.kind==="point").length}），边 ${links.length}` +
     (anyFolded ? "。🗜 稀疏分支已折叠（节点标 N条，点分类下钻可见）" : "") +
     (radiateView
       ? `。每条关联都带解释（悬停可看）${truncParts.length ? "；" + truncParts.join("，") : ""}。点邻域节点继续放射，焦点为黄。`
@@ -410,14 +444,18 @@ async function showSubtree(categoryId, push = true, forceClassic = false) {
   const useHier = !forceClassic && hierBox.checked;   // 层级模式（批次 63）：点分类只出下一级子分类
   // 稀疏折叠（批次 72）：仅经典视图生效（层级模式本来就不出条目）
   const fold = !useHier && foldBox.checked ? "&compact=1" : "";
-  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}${useHier ? "&hierarchy=1" : ""}${fold}`);
+  // 点层（P4）：第三层换点卡；「显示条目」（forceClassic）显式要条目层，不受开关影响
+  const layer = !forceClassic && pointLayerBox.checked ? "&layer=points" : "";
+  const r = await fetch(`/api/graph/subtree?category_id=${encodeURIComponent(categoryId)}${useHier ? "&hierarchy=1" : ""}${fold}${layer}`);
   if (r.status === 404) { tip.textContent = "分类不存在（可能已删）。"; return; }
   const data = await r.json();
   const rootName = (data.nodes.find(n => n.id === "c:" + categoryId) || {}).name || categoryId;
   currentSubtree = categoryId;
-  render(data, useHier
+  render(data, (useHier
     ? `子树：${rootName}（层级模式——点分类逐层下钻）`
-    : `子树：${rootName}（祖先链为灰底上下文）`);
+    : `子树：${rootName}（祖先链为灰底上下文）`)
+    + (data.layer === "points" ? " · 点层" : ""));
+  if (data.note) tip.textContent = data.note + "。" + tip.textContent;   // 点层回退提示
   // 纯层级非叶子层：条目未出 → 给「显示条目」显式展开（render 先收起，这里按需重开）
   showEntriesBtn.style.display =
     (useHier && !data.nodes.some(n => n.kind === "entry")) ? "" : "none";
@@ -463,7 +501,7 @@ async function showTopics(push = true) {
       const pid = "p:" + p.point_id;
       if (!seen.has(pid)) {
         seen.add(pid);
-        nodes.push({ id: pid, name: (p.text || "").slice(0, 22), kind: "entry",
+        nodes.push({ id: pid, name: (p.text || "").slice(0, 22), kind: "point",
                      _point: true, text: p.text || p.summary,
                      path: "溯源：" + p.sources.map(s => s.title).join("、") });
       }
@@ -523,11 +561,12 @@ showEntriesBtn.onclick = () => {
   showSubtree(currentSubtree, false, true);
 };
 
-// ---- 点击行为：放射模式开启 → 任意节点放射 ----
+// ---- 点击行为：放射模式开启 → 任意节点放射；点节点任何时候都切焦点（P4 下钻） ----
 chart.on("click", p => {
   const d = p.data;
   if (!d) return;
   const radial = document.getElementById("radial").checked;
+  if (d.kind === "point" && String(d.id).startsWith("p:")) { showRadiate(String(d.id)); return; }
   if (radial && (d.kind === "category" || d.kind === "entry")) { showRadiate(String(d.id)); return; }
   if (d.kind === "category" && String(d.id).startsWith("c:")) showSubtree(String(d.id).slice(2));
   else if (d.kind === "entry" && d.locator) window.open(d.locator, "_blank", "noopener");

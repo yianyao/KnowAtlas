@@ -1156,3 +1156,41 @@ Python 进程内已缓存的 `pipeline/points.py` 是旧版，`/api/entries/{id}
 
 **验收**：浏览器 Ctrl+F5 → 词云点「雪花」→ 19 张点卡标题各不相同、卡上不再出现「◆ 34 点」
 与 🆔；下方条目卡仍显示一次「◆ 34 点 ▸」。
+
+## 2026-10-26 20:10 P4 点级图落地（点成为一等节点，629 passed）
+
+**用户裁决**：按方案做（推荐）——点层默认开、可切回条目层。
+
+**改法**（工单 `docs/design/变更工单-2026-10-26-P4点级图.md`）：
+
+- `datalayer/db.py::radiate`：`_RADIATE_KINDS` 加 `"p": "point"`；点焦点四通道
+  `attach:<origin>` / `same_book:<book>` / `same_section:<book>/<section>` / `sim:<score>`。
+  纯标准库余弦（4,552 点 × 1024 维实测 0.2 s）；消费面守卫 = 非 stale + 非 dupe +
+  至少一条溯源条目 active 且过 `_consumable('e')`；每通道 `per_channel` 截断进 `truncated`。
+  `section_path == book`（整本一块）不出章节通道，避免与同书重复。
+- `datalayer/db.py::get_graph_subtree`：新增 `layer`/`point_limit`；`layer=points` 时条目集照算
+  （hierarchy 叶子 / compact 折叠口径不变），第三层换 `p:<pid>` 点卡、边 `p→c` 标 `kind="point"`，
+  超出 `point_limit` 记 `truncated.points`；无可消费点自动回退条目层 + `note`。
+  默认 `entries` 时响应**完全不变**（连 `layer` 键都不加）。
+- `web/api.py`：subtree 透传 `layer`/`point_limit`（夹紧 1–600），非法 layer → 400。
+- `web/static/graph.html`：`--point` 令牌 + PAL.point；「◆ 点层」开关（默认开、localStorage、
+  切换即重放视图）；点节点点击任何时候都切焦点（`showRadiate("p:<id>")`）；点卡显示正文 +
+  书籍/章节 + 可点溯源；主题视图点节点 `kind:"point"`；有点节点时走 force（禁用分层铺开）。
+  「📋 显示条目」显式要条目层（forceClassic 不带 layer=points）。
+
+**验证**：
+
+- 新增 `tests/test_graph_point_layer.py` 13 例；全量 `pytest -o addopts= -q` →
+  **629 passed / 1 skipped**；`tests/test_canary.py` 1 passed（六项常量零漂移）。
+- 真库只读探针（`DataLayer` 直读，不写）：`p:5c07508429801ddf` 邻域 **18 节点 / 18 边**，
+  四通道齐全、每条边有 reason（`truncated {same_book:50, sim:1205}`）；邻点再放射两次
+  （18→18 节点）仍非空；`layer=points` 在 3,304 点大类下出 200 点 + 5 分类，
+  `truncated.points=4265`；默认子树无 `layer` 键、照旧 25 条目。
+- `node --check` 内联脚本通过。
+
+**验收**：浏览器 Ctrl+F5 → 图页勾选「◆ 点层」→ 点分类下钻到叶子层看知识点；
+点任一点节点切焦点（连点两次不空）；点卡可看正文/书籍章节/溯源条目。
+<!-- HANDOFF {"at":"2026-10-26T20:04:11.915060+08:00","compactions":0,"doc":"docs/交接/2026-10-26-2004.md","draft":true,"goal":"上下文到 CRITICAL（118.3%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"CRITICAL","tokens":173942,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-26T20:08:11.679924+08:00","compactions":1,"doc":"docs/交接/2026-10-26-2008.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"OK","tokens":88550,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+<!-- HANDOFF {"at":"2026-10-26T20:14:10.737227+08:00","compactions":1,"doc":"docs/交接/2026-10-26-2014.md","draft":true,"goal":"上下文到 HANDOFF（93.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-01217ada-3f22-44e9-b9c2-306b3732d74f","status":"HANDOFF","tokens":137840,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->

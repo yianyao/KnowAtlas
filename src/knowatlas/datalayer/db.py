@@ -917,9 +917,10 @@ class DataLayer:
     _SPARSE_FOLD = 2    # 稀疏分支折叠阈值（批次 72）：直挂 ≤2 条的子分类藏条目
 
     def get_graph_subtree(self, category_id: str, limit: int = 120,
-                          hierarchy: bool = False, compact: bool = False
+                          hierarchy: bool = False, compact: bool = False,
+                          layer: str = "entries", point_limit: int = 200
                           ) -> dict[str, Any] | None:
-        """子树下钻图：该分类的子孙分类 + 挂接条目（近 limit 条）+ 祖先链上下文。
+        """子树下钻图：该分类的子孙分类 + 挂接条目/点（近 limit 条）+ 祖先链上下文。
 
         条目节点带 locator（前端点击可打开原链接）；分类不存在返回 None。
         hierarchy=True（纯层级模式，批次 63）：只出下一级子分类（child 边，
@@ -929,6 +930,11 @@ class DataLayer:
         挂接边（分类节点带 folded=N，前端点击下钻可见），图密度下降、结构
         可读——只藏边不藏类，点击下钻信息零丢失。经典视图分类节点带 depth
         （root=0，多父取最短；祖先 ctx=-1），供前端分层铺开。
+        layer="points"（P4，2026-10-26）：第三层由条目卡换成点卡——条目集照旧
+        先算（含 hierarchy 叶子/compact 口径），再把挂接条目上的可消费点接成
+        p:<point_id> 节点、边 p→c 标 kind="point"；超出 point_limit 的点记
+        truncated.points；该范围没有可消费点时自动回退条目层（layer="entries"
+        + note），新条目/未抽点范围不会空图。默认 "entries"，行为与旧版一致。
         """
         cat = self._conn.execute(
             "SELECT id, name FROM categories WHERE id=?", (category_id,)).fetchone()
@@ -1015,29 +1021,50 @@ class DataLayer:
                 node["folded"] = folded    # 被藏直挂条目数（前端徽标提示）
             nodes.append(node)
         entry_nodes: list[dict[str, Any]] = []
-        for e in entries:
-            entry_nodes.append({"id": f"e:{e['id']}", "name": (e["title"] or e["locator"])[:40],
-                                "kind": "entry", "locator": e["locator"]})
-        nodes.extend(entry_nodes)
+        point_nodes: list[dict[str, Any]] = []
+        point_links: list[dict[str, Any]] = []
+        points_truncated = 0
+        layer_used = "entries"
+        if layer == "points" and entry_ids:
+            point_nodes, point_links, points_truncated = self._subtree_points(
+                entry_ids, sub_ids, fold_cats, max(1, point_limit))
+            if point_nodes:
+                layer_used = "points"
         links: list[dict[str, Any]] = []
-        if entry_ids:
-            eph = ",".join("?" * len(entry_ids))
-            for r in self._conn.execute(
-                    f"SELECT entry_id, category_id, origin FROM entry_categories"
-                    f" WHERE entry_id IN ({eph}) AND category_id IN ({ph})",
-                    (*entry_ids, *sub_ids)):
-                if fold_cats and r["category_id"] in fold_cats:
-                    continue    # 折叠分支的挂接边不进图
-                links.append({"source": f"e:{r['entry_id']}", "target": f"c:{r['category_id']}",
-                              "kind": r["origin"]})
-        if fold_cats:
-            # 折叠后孤立的条目（挂接边全被藏）节点也隐——留着是漂空噪音
-            linked = {l["source"] for l in links}
-            nodes = [n for n in nodes
-                     if n["kind"] != "entry" or n["id"] in linked]
+        if layer_used == "points":
+            nodes.extend(point_nodes)
+            links.extend(point_links)
+        else:
+            for e in entries:
+                entry_nodes.append({"id": f"e:{e['id']}",
+                                    "name": (e["title"] or e["locator"])[:40],
+                                    "kind": "entry", "locator": e["locator"]})
+            nodes.extend(entry_nodes)
+            if entry_ids:
+                eph = ",".join("?" * len(entry_ids))
+                for r in self._conn.execute(
+                        f"SELECT entry_id, category_id, origin FROM entry_categories"
+                        f" WHERE entry_id IN ({eph}) AND category_id IN ({ph})",
+                        (*entry_ids, *sub_ids)):
+                    if fold_cats and r["category_id"] in fold_cats:
+                        continue    # 折叠分支的挂接边不进图
+                    links.append({"source": f"e:{r['entry_id']}",
+                                  "target": f"c:{r['category_id']}",
+                                  "kind": r["origin"]})
+            if fold_cats:
+                # 折叠后孤立的条目（挂接边全被藏）节点也隐——留着是漂空噪音
+                linked = {l["source"] for l in links}
+                nodes = [n for n in nodes
+                         if n["kind"] != "entry" or n["id"] in linked]
         out = {"root": category_id, "nodes": nodes, "links": links}
         if not hierarchy:
             out["compact"] = bool(fold_cats) or compact
+        if layer == "points":
+            out["layer"] = layer_used
+            if points_truncated:
+                out["truncated"] = {"points": points_truncated}
+            if layer_used == "entries":
+                out["note"] = "该范围暂无可显示的知识点，已回退条目层"
         return out
 
     def search_graph(self, q: str, limit: int = 80) -> dict[str, Any]:
@@ -1087,7 +1114,8 @@ class DataLayer:
     # 纪律：没有解释的关联不展示——每个节点带 reasons[]、每条边带 reason；
     # relation_reason 全部由规则生成（共现/同源/显式关联），语义相似边留 M4 embedding。
 
-    _RADIATE_KINDS = {"c": "category", "e": "entry", "d": "domain"}
+    _RADIATE_KINDS = {"c": "category", "e": "entry", "d": "domain",
+                      "p": "point"}   # P4（2026-10-26）：点成为一等节点
 
     def _entry_node(self, row: sqlite3.Row) -> dict[str, Any]:
         from urllib.parse import urlsplit
@@ -1103,9 +1131,11 @@ class DataLayer:
     def radiate(self, node_id: str, per_channel: int = 8) -> dict[str, Any] | None:
         """焦点一跳邻域（放射模式数据源）。
 
-        节点 id 约定 `c:<分类id>` / `e:<条目id>` / `d:<host>`。通道与 relation_reason：
+        节点 id 约定 `c:<分类id>` / `e:<条目id>` / `d:<host>` / `p:<点id>`。通道与 relation_reason：
         分类焦点 → child / attach:<origin> / parent；条目焦点 → attach:<origin> /
-        same_host:<host> / thread:<线索名>；域名焦点 → host_member:<host>。
+        same_host:<host> / thread:<线索名>；域名焦点 → host_member:<host>；
+        点焦点 → attach:<origin> / same_book:<book> / same_section:<book>/<section> /
+        sim:<score>（P4，2026-10-26：点成为一等节点）。
         每通道上限 per_channel，超出记 truncated[通道]=剩余数。焦点不存在返回 None。
         """
         from urllib.parse import urlsplit
@@ -1226,6 +1256,60 @@ class DataLayer:
             # sim:<score>：语义相似边（迁移 006 向量邻域，第五十六批——db.py:844 挂账收口）。
             # 焦点条目有向量时取库内 top 邻域；无向量/无向量库则通道整体不出现（降级纪律）。
             self._sim_channel(raw_id, add_node, add_edge, cut, per_channel)
+        elif kind == "point":
+            # P4 点级图（2026-10-26）：点焦点一跳邻域，四类边——
+            # attach（溯源条目→分类）、same_book、same_section、sim（点向量）；
+            # 「引用/指涉」最贵，按 TODO 后置。每条边都带 reason，导航天条纪律不变。
+            row = self._point_row(raw_id)
+            if row is None:
+                return None
+            book, section = self._point_book_section(row["meta"])
+            srcs = self._point_sources(raw_id, limit=6)
+            focus = {
+                "id": node_id,
+                "name": self._point_label(row["summary"], row["text"]),
+                "kind": "point",
+                "text": row["text"],
+                "path": self._point_path(row["meta"], srcs),
+                "sources": srcs,
+            }
+            # attach:<origin>：点的溯源条目所在分类（按分类去重，origin 取首次出现）
+            seen_cats: dict[str, str] = {}
+            for s in srcs:
+                for r in self._conn.execute(
+                        "SELECT category_id, origin FROM entry_categories"
+                        " WHERE entry_id=?", (s["entry_id"],)).fetchall():
+                    seen_cats.setdefault(r["category_id"], r["origin"])
+            for cid, origin in list(seen_cats.items())[:per_channel]:
+                paths = self.get_category_paths(cid)
+                crow = self._conn.execute(
+                    "SELECT name FROM categories WHERE id=?", (cid,)).fetchone()
+                add_node(f"c:{cid}", crow["name"] if crow else "?", "category",
+                         f"attach:{origin}", path=paths[0] if paths else "")
+                add_edge(f"c:{cid}", f"attach:{origin}")
+            cut("attach", len(seen_cats))
+            # same_book / same_section：kpe 产物自带 book + section_path；
+            # section_path == book（整本一块）时不出章节通道，避免与同书重复。
+            if book:
+                total, peers = self._point_peers(book, "", raw_id, per_channel)
+                for r in peers:
+                    add_node(f"p:{r['id']}", self._point_label(r["summary"], r["text"]),
+                             "point", f"same_book:{book}", text=r["text"],
+                             path=self._point_path(r["meta"], []))
+                    add_edge(f"p:{r['id']}", f"same_book:{book}")
+                cut("same_book", total)
+                if section and section != book:
+                    total2, peers2 = self._point_peers(book, section, raw_id,
+                                                       per_channel)
+                    for r in peers2:
+                        add_node(f"p:{r['id']}",
+                                 self._point_label(r["summary"], r["text"]),
+                                 "point", f"same_section:{book}/{section}",
+                                 text=r["text"], path=self._point_path(r["meta"], []))
+                        add_edge(f"p:{r['id']}", f"same_section:{book}/{section}")
+                    cut("same_section", total2)
+            # sim:<score>：点向量 top 邻域（无向量时整条通道缺席）
+            self._point_sim_channel(raw_id, add_node, add_edge, cut, per_channel)
         else:  # domain
             host = raw_id.strip().lower()
             members = self.entries_by_host(host, limit=per_channel + 1)
@@ -2441,6 +2525,199 @@ class DataLayer:
             add_edge(f"e:{eid}", f"sim:{score:.2f}")
         cut("sim", len(scored))
         return len(scored)
+
+    # ---- 点级图（P4，2026-10-26：点成为一等节点） ----
+    # 口径纪律：点节点只在「可消费」时露面——非 stale、非 dupe 副点、至少一条
+    # 溯源条目 active 且过 _consumable('e')。与 search_points/get_point_hit 同源，
+    # 不另立消费面口径（改一处必须同步另一处）。
+    _POINT_SIM_THRESHOLD = 0.5   # 与条目 sim 通道同阈值
+
+    def _point_row(self, point_id: str) -> sqlite3.Row | None:
+        """点的消费面行（id/summary/text[:300]/meta）；不满足消费面即 None。"""
+        return self._conn.execute(
+            "SELECT p.id, p.summary, substr(p.text,1,300) AS text, p.meta"
+            " FROM points p"
+            " WHERE p.id=? AND p.aging_flag != 'stale'"
+            "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"
+            "   AND EXISTS (SELECT 1 FROM point_sources ps"
+            "               JOIN entries e ON e.id=ps.entry_id"
+            "               WHERE ps.point_id=p.id AND e.status='active'"
+            + _consumable("e") + ")",
+            (point_id,)).fetchone()
+
+    def _point_sources(self, point_id: str, limit: int = 6) -> list[dict[str, Any]]:
+        """点的溯源条目（display_name 覆盖层 + 消费面守卫，get_point_hit 同口径）。"""
+        rows = self._conn.execute(
+            "SELECT e.id AS entry_id,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title,"
+            " e.locator"
+            " FROM point_sources ps JOIN entries e ON e.id=ps.entry_id"
+            " WHERE ps.point_id=? AND e.status='active'" + _consumable("e") +
+            " ORDER BY ps.created_at LIMIT ?", (point_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def _point_book_section(meta_raw: Any) -> tuple[str, str]:
+        """从点 meta 取 (book, section_path)；坏 JSON 按空处理（不抛）。"""
+        try:
+            meta = json.loads(meta_raw or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        return (str(meta.get("book") or "").strip(),
+                str(meta.get("section_path") or "").strip())
+
+    @staticmethod
+    def _point_label(summary: Any, text: Any) -> str:
+        """点节点名：摘要优先，退化正文前 40 字（与词云点卡同口径）。"""
+        return str(summary or text or "")[:40]
+
+    @classmethod
+    def _point_path(cls, meta_raw: Any, srcs: list[dict[str, Any]]) -> str:
+        """点节点路径：有 book 出《书名》/章节；否则退化为「溯源：条目名」。"""
+        book, section = cls._point_book_section(meta_raw)
+        if book:
+            return f"《{book}》 / {section}" if section and section != book else f"《{book}》"
+        if srcs:
+            return "溯源：" + "、".join(str(s.get("title") or "") for s in srcs[:3])
+        return ""
+
+    def _point_peers(self, book: str, section: str, exclude: str,
+                     limit: int) -> tuple[int, list[sqlite3.Row]]:
+        """同书/同章节的点（created_at DESC）；返回 (总数, 前 limit 行) 供截断计数。"""
+        where = (" FROM points p"
+                 " WHERE json_extract(p.meta,'$.book')=?"
+                 "   AND p.id != ?"
+                 "   AND p.aging_flag != 'stale'"
+                 "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"
+                 "   AND EXISTS (SELECT 1 FROM point_sources ps"
+                 "               JOIN entries e ON e.id=ps.entry_id"
+                 "               WHERE ps.point_id=p.id AND e.status='active'"
+                 + _consumable("e") + ")")
+        params: list[Any] = [book, exclude]
+        if section:
+            where += " AND json_extract(p.meta,'$.section_path')=?"
+            params.append(section)
+        total = self._conn.execute("SELECT COUNT(*)" + where, params).fetchone()[0]
+        rows = self._conn.execute(
+            "SELECT p.id, p.summary, substr(p.text,1,300) AS text, p.meta" + where +
+            " ORDER BY p.created_at DESC LIMIT ?", (*params, limit)).fetchall()
+        return total, rows
+
+    def _point_sim_channel(self, point_id: str, add_node, add_edge, cut,
+                           per_channel: int) -> int:
+        """radiate 点焦点的 sim 通道：点向量 top 邻域（阈值 0.5，纯标准库余弦）。
+
+        与 `_sim_channel` 同构（数学在 semantic/embed.py，此处就地轻量解码以
+        避免 db → semantic 反向依赖）；4,552 点 × 1024 维实测约 0.2 s。
+        """
+        import array as _array
+        import math as _math
+
+        focal = self._conn.execute(
+            "SELECT vector FROM point_vectors WHERE point_id=?",
+            (point_id,)).fetchone()
+        if focal is None:
+            return 0
+        fa = _array.array("f")
+        fa.frombytes(focal["vector"])
+        dim = len(fa)
+        fnorm = _math.sqrt(sum(x * x for x in fa)) or 1.0
+        scored: list[tuple[str, float]] = []
+        for pid, blob in self.all_point_vectors().items():
+            if pid == point_id:
+                continue
+            va = _array.array("f")
+            va.frombytes(blob)
+            if len(va) != dim:
+                continue  # 换型残留的异维向量跳过（不报错，--embed-force 重算）
+            vnorm = _math.sqrt(sum(x * x for x in va)) or 1.0
+            dot = sum(x * y for x, y in zip(fa, va))
+            score = dot / (fnorm * vnorm)
+            if score >= self._POINT_SIM_THRESHOLD:
+                scored.append((pid, score))
+        scored.sort(key=lambda x: -x[1])
+        emitted = 0
+        for pid, score in scored:
+            if emitted >= per_channel:
+                break
+            r = self._point_row(pid)   # 消费面内才出节点（截断计数仍按候选总数）
+            if r is None:
+                continue
+            add_node(f"p:{pid}", self._point_label(r["summary"], r["text"]), "point",
+                     f"sim:{score:.2f}", text=r["text"],
+                     path=self._point_path(r["meta"], []))
+            add_edge(f"p:{pid}", f"sim:{score:.2f}")
+            emitted += 1
+        cut("sim", len(scored))
+        return len(scored)
+
+    def _subtree_points(self, entry_ids: list[str], sub_ids: list[str],
+                        fold_cats: set[str], point_limit: int
+                        ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
+        """子树第三层的点节点 + 点→分类边（P4，2026-10-26）。
+
+        口径：只出可消费点（非 stale、非 dupe 副点、溯源条目 active+可消费），
+        并按 `point_limit` 截断（created_at DESC，返回剩余数）；折叠分类
+        （compact）下的挂接不计边——点若还挂非折叠分类仍可见。
+        返回 (nodes, links, truncated)。
+        """
+        if not entry_ids or not sub_ids:
+            return [], [], 0
+        eph = ",".join("?" * len(entry_ids))
+        cph = ",".join("?" * len(sub_ids))
+        rows = self._conn.execute(
+            "SELECT ps.point_id AS pid, ec.category_id AS cid,"
+            " p.summary AS summary, substr(p.text,1,300) AS text, p.meta AS meta,"
+            " e.id AS entry_id,"
+            " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS entry_title,"
+            " e.locator AS locator"
+            " FROM point_sources ps"
+            " JOIN points p ON p.id=ps.point_id"
+            " JOIN entries e ON e.id=ps.entry_id AND e.status='active'"
+            " JOIN entry_categories ec ON ec.entry_id=ps.entry_id"
+            f" WHERE ps.entry_id IN ({eph}) AND ec.category_id IN ({cph})"
+            "   AND p.aging_flag != 'stale'"
+            "   AND COALESCE(json_extract(p.meta,'$.dupe_of'),'')=''"
+            + _consumable("e") +
+            " ORDER BY p.created_at DESC", (*entry_ids, *sub_ids)).fetchall()
+        points: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        for r in rows:
+            if fold_cats and r["cid"] in fold_cats:
+                continue    # 折叠分支的挂接边不进图（点层同口径）
+            p = points.get(r["pid"])
+            if p is None:
+                p = points[r["pid"]] = {
+                    "id": f"p:{r['pid']}",
+                    "name": self._point_label(r["summary"], r["text"]),
+                    "kind": "point",
+                    "text": r["text"],
+                    "path": self._point_path(r["meta"], []),
+                    "sources": [],
+                    "cats": set(),
+                }
+                order.append(r["pid"])
+            p["cats"].add(r["cid"])
+            if (len(p["sources"]) < 2
+                    and r["entry_id"] not in {s["entry_id"] for s in p["sources"]}):
+                p["sources"].append({"entry_id": r["entry_id"],
+                                     "title": r["entry_title"],
+                                     "locator": r["locator"]})
+        total = len(order)
+        kept = order[:max(1, point_limit)]
+        nodes: list[dict[str, Any]] = []
+        links: list[dict[str, Any]] = []
+        for pid in kept:
+            p = points[pid]
+            cats = sorted(p.pop("cats"))
+            if not p["path"] and p["sources"]:
+                p["path"] = "溯源：" + "、".join(
+                    str(s["title"] or "") for s in p["sources"])
+            nodes.append(p)
+            for cid in cats:
+                links.append({"source": p["id"], "target": f"c:{cid}",
+                              "kind": "point"})
+        return nodes, links, max(0, total - len(kept))
 
     def delete_thread(self, thread_id: str) -> None:
         """删除线索；thread_items 经 FK ON DELETE CASCADE 级联清除。"""

@@ -4,6 +4,15 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · P4 点级图（点成为一等节点，2026-10-26）
+
+- **为什么**：关系图三种焦点（分类/条目/域名）的第三层一直是**条目卡**（文件维度），而知识早已在点层——4,552 个点全部带 `book`/`section_path`、点向量 4,552 条（bge-m3，1024 维）、点级检索与词云点 facet 均已点优先。点只能在「🧠 主题」视图里**冒充 `kind:"entry"`**：点击不切焦点、没有理由边、看不到「同一章/同主题的其他知识点」。P4 让点成为一等节点。
+- **数据层**（`datalayer/db.py::radiate`）：`_RADIATE_KINDS` 增 `"p": "point"`；点焦点四通道——`attach:<origin>`（溯源条目→分类，按分类去重）、`same_book:<book>`、`same_section:<book>/<section_path>`（`section_path == book` 的整本一块产物不出章节通道，避免与同书重复）、`sim:<score>`（点向量 top 邻域，阈值 0.5，纯标准库余弦，4,552 点实测 0.2 s）。每节点 `reasons[]`、每边 `reason`、每通道 `per_channel` 截断 + `truncated` 计数；消费面守卫沿用 `aging_flag!='stale'` + `dupe_of` 空 + 溯源条目 active 且过 `_consumable('e')`。
+- **点层**（`datalayer/db.py::get_graph_subtree` + `web/api.py`）：新增可选 `layer=entries|points`（默认 `entries`，旧行为零变化）与 `point_limit`（默认 200，夹紧 1–600）；`layer=points` 时第三层换成 `p:<point_id>` 点卡（`kind="point"`、`text` 前 300 字、`path`、前 2 条溯源），边 `p:→c:` 标 `kind="point"`，超出截断记 `truncated.points`；该范围无可消费点时自动回退条目层并带 `note`。非法 `layer` → 400。**无表结构/字段/`SOURCE_TYPES`/`STATUSES`/scheme/`CONFIG_SCHEMA_KEYS`/能力注册表变更**，canary 零漂移。
+- **前端**（`web/static/graph.html` + `tokens.css`）：新令牌 `--point`；顶栏「◆ 点层」开关（默认开、localStorage 记忆、切换即重放当前视图）；点节点 9 px 绿点、标签规则、tooltip 卡显示正文+书籍章节+可点溯源；点节点点击**任何时候都切焦点**（`showRadiate("p:<id>")`），邻域点再点即两次下钻；主题视图的点不再冒充条目（`kind:"point"`）；有点节点时禁用分层铺开（避免 200 点拉成超宽一行）。
+- **测试**：新增 `tests/test_graph_point_layer.py`（13 例：四通道 reasons/edges 完整、整本一块不出同章节、sim 阈值/无向量降级、截断计数、未知点/不可消费点、subtree 点层节点与边、`point_limit`、无点回退、默认层不变、API 参数与非法 400、前端静态探针）；全量 **629 passed / 1 skipped**。
+- **真库验收（只读）**：`p:5c07508429801ddf` → 18 节点 / 18 边、每条边有理由，`same_book`/`same_section`/`sim`/`attach` 齐全（`truncated {same_book:50, sim:1205}`）；连点两次切焦点（18→18 节点）仍非空；`/api/graph/subtree?layer=points` 在 3,304 点的大类下出 200 点卡 + 5 分类、`truncated.points=4265`。
+
 ### 变更工单 · P3 点层取全文与长文交 kpe（2026-10-26）
 
 - **为什么**：07:00 交接把「**hard 子集** 1,579」当成「**全库点数**」，据此要花 ¥11.6 重抽全库。19:05 核查推翻了它——库内 4,552 点**全部**是 kpe 全文分块产物（`extractor=kpe`、`book`/`section_path`/`quote` 全覆盖，溯源 `char_offset` 最远 2,477,908），三本试点书（820/571/420）早已抽完，front matter 名下 0 点，点级检索已生效。**真正的缺陷只剩原生管道**：新同步的长文档仍会「一篇一点，只覆盖开头 4,000 字」。

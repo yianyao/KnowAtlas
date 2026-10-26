@@ -558,13 +558,22 @@ reader: 执行者（人与 agent）
       全库 4,552 点、`judge` 全为 `split`、点级检索已生效（`/api/search` 返回点优先）。
       **因此 P3 只剩 `_entry_body` 一项**（防未来新条目退化）。
 
-### P4 · 点级图（wiki 式关联）
+### P4 · 点级图（wiki 式关联）——**已实施（2026-10-26）**
 
-- [ ] 点成为图节点：`kind=point`，边来源四类——同书/同章节（`meta.book`+`section_path`）、
+- [x] 点成为图节点：`kind=point`（id 前缀 `p:`），边来源四类——同书/同章节（`meta.book`+`section_path`）、
       同分类（溯源条目→分类）、语义近邻（点向量，已有 bge-m3）、引用/指涉（最贵，可后置）。
-- [ ] 聚焦视图：聚焦一个点 → 一跳邻域（沿用 `radiate` 的 `reasons[]`/`reason` 口径），支持「切焦点」下钻。
-- [ ] 初始层仍是分类 → 子分类 → 点（第三层由条目卡换成点卡）。
+      落地：`db.radiate("p:<id>")` 四通道 `attach:` / `same_book:` / `same_section:` / `sim:`，
+      每节点 `reasons[]`、每边 `reason`；引用/指涉按计划后置（见工单第 7 节）。
+- [x] 聚焦视图：聚焦一个点 → 一跳邻域（沿用 `radiate` 的 `reasons[]`/`reason` 口径），支持「切焦点」下钻。
+      落地：图页点节点点击即 `showRadiate("p:<id>")`，邻域点再点即下钻。
+- [x] 初始层仍是分类 → 子分类 → 点（第三层由条目卡换成点卡）。
+      落地：`/api/graph/subtree?layer=points`（默认 `entries` 保持旧行为）+ 图页「◆ 点层」开关
+      （默认开、localStorage 记忆）；无点范围自动回退条目层并提示。
 - 验收：任取一点，邻域 ≥5 且每条边有理由；点「切焦点」两次仍不空图。
+      **真库验证（2026-10-26）**：`p:5c07508429801ddf` 邻域 18 节点 / 18 边、全部带理由，
+      `same_book`/`same_section`/`sim`/`attach` 四通道齐全；连点两次切焦点均非空。
+- 工单：`docs/design/变更工单-2026-10-26-P4点级图.md`；测试 `tests/test_graph_point_layer.py`（13 例）。
+- 已知限制：点级反查（`reverse` 对 `p:`）暂不支持；引用/指涉通道待后续工单。
 
 ### P5 · 扩散抓取加固（小，随 P1 一起做也行）
 

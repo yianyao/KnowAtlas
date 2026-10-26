@@ -18,6 +18,7 @@
   --success: #3FB68B;       /* 7.9:1 */
   --warning: #DFA43E;       /* 8.7:1 */
   --danger: #E05C5C;        /* 5.4:1 */
+  --point: #6FCF97;         /* 知识点节点（P4 点级图；非语义色，勿混用 success） */
   --fs-11: 11px; --fs-12: 12px; --fs-13: 13px; --fs-14: 14px;
   --fs-16: 16px; --fs-20: 20px;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
