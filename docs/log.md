@@ -1951,3 +1951,55 @@ git -C D:\sData\git\KnowAltas status -sb                  # 期望无 pending
 
 `session-b8a0d74d-7abe-4cfc-9d3c-cae7ea1efb64`，compactions=0，tokens=184,088，
 baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00。
+
+## 2026-10-27 06:55 KPE 独立仓库落地（D:\kpe + MIT + subtree 单向传导，已实测闭环）
+
+**开场证据**：`session_check` = `NEW_SESSION`（exit 0，上一交接 `session-b8a0d74d` @06:36
+`status=CRITICAL`）；`context_probe` effective **11.0%**（16,176 tokens）。
+触发词「继续」+ 用户告知远程仓库已建好：<https://github.com/yianyao/kpe>。
+
+### 已完成
+
+| 步骤 | 结果 |
+|---|---|
+| 主仓切历史 | `git subtree split --prefix=tools/kpe -b kpe-standalone` → `3a28c35`（**180 提交**） |
+| 建独立仓 | `D:\kpe`：`init -b main` + `fetch/reset --hard` 接上历史 |
+| 补独立文件 | `.gitignore` `LICENSE`(MIT 2026 yianyao) `AGENTS.md`(Agent 操作卡) `README.md`(通用化) `使用手册.md`(去 KnowAtlas 路径) `examples/sample.md` `pyproject.toml`(readme/license/dev extra/urls/pytest testpaths) `.gitattributes`(`* text=auto eol=lf`) `CHANGELOG.md` |
+| 本地验证 | `python -m kpe --version` → `0.1.0`；`pytest` → **14 passed**；`chunks examples/sample.md` → 1 块 / 611 字（零成本链路通） |
+| 推送 | `a9ae50f`(初版) → `680bfa6`(.gitattributes) → `910c85c`(CHANGELOG)；`ls-remote` 与本地 HEAD 一致 |
+| KnowAtlas 接回 | remote `kpe` 已加（经 ghproxy 可读）；基线 merge `7c66bd5`；升级命令 `git subtree pull --prefix=tools/kpe kpe main --squash` 实测把 `910c85c` 拉成 `7bd8dd8`，**仅新增 `tools/kpe/CHANGELOG.md`**，源码零改动 |
+| 清理 | 删本地分支 `kpe-standalone`（历史已在 `D:\kpe`） |
+| 文档 | `AGENTS.md` §3 增「上游独立仓库 + 单向升级命令」；`AGENTS.local.md` 记本机坑 |
+
+### 现场数字
+
+- `D:\kpe`：tracked **23** 文件，`main...origin/main` 干净；remote `origin` = `https://github.com/yianyao/kpe.git`。
+- GitHub API：`full_name=yianyao/kpe`、`default_branch=main`、`private=false`、`license=MIT`。
+- KnowAtlas：`main...origin/main [ahead 7]`（含 2 条 kpe 合并提交 + 文档）。
+
+### 踩到的坑（已改进文档/配置）
+
+1. `git subtree pull --squash` 对「一直是普通目录」的 `tools/kpe` 报
+   `can't squash-merge: 'tools/kpe' was never added` —— 必须先
+   `git merge -s subtree --allow-unrelated-histories kpe/main`，再把
+   `git-subtree-dir` / `git-subtree-split` trailer `--amend` 进那条提交。
+2. 本机 git 默认 schannel 报 `SEC_E_NO_CREDENTIALS`（curl 同病）→ `D:\kpe` 与 KnowAtlas
+   相关命令统一加 `-c http.sslBackend=openssl`（`D:\kpe` 已写进 local config）。
+3. `git subtree` 不转发 `--allow-unrelated-histories`，也不转发 `git -c`。
+4. pwsh `$ErrorActionPreference='Stop'` + `git fetch … 2>&1 | Out-Null` 会把 stderr 当
+   `NativeCommandError` 中止（假失败）。
+
+### 不要重跑
+
+- `D:\kpe` 的 14 项 pytest、`chunks examples/sample.md`（06:52 已绿）。
+- `git subtree split`（`kpe-standalone` 已删，历史在 `D:\kpe`）。
+- `git subtree pull --squash` 的 no-op 验证与 910c85c 升级实测。
+- R11 / 全量 659 套件（本轮未动 `src/`）。
+
+### 下一步（可选，等裁决）
+
+1. GitHub 仓库描述目前是「KPE工具」，可改成英文一句（`gh`/API 改 `description`）。
+2. 是否给 KnowAtlas 加一条「`tools/kpe` 有未同步改动」的检查（pre-commit 或 `ktest`）。
+3. 用 `D:\kpe` 真跑一本书（沿用 `temp/kpe-aiagents` 的 key/参数）验证跨仓库可用性。
+
+<!-- HANDOFF {"at":"2026-10-27T06:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-27-0655","draft":false,"goal":"KPE 已独立成 D:\\kpe + MIT + 推到 yianyao/kpe，subtree 单向传导实测闭环","host":"dsh","kind":"handoff","next":"用户验收 GitHub 仓库与 D:\\kpe；之后可选：改仓库描述 / 加 tools/kpe 未同步检查 / 用 D:\\kpe 真跑一本书","not_rerun":"D:\\kpe 的 pytest 14 与 chunks 样例；subtree split；两次 subtree pull（no-op 与 910c85c 升级）；KnowAtlas 全量套件","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":80524,"verify":"uv run --with zstandard python tools/session_check.py"} -->
