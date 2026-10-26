@@ -920,3 +920,58 @@ uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.
 - `Write-Output` 列 `tools/kpe` 目录会把 `.venv` 全打出来（几千行）——列目录时加 `-Exclude`。
 
 <!-- HANDOFF {"session":"session-f4c32d7b-dd84-4592-b172-5e72f79b068f","compactions":1,"tokens":135975,"at":"2026-10-26T07:12:00+08:00","status":"HANDOFF","goal":"P1b/P2 已交付（f2ce960/200525e），P3 成本测算已完成（提交 7167e3a，只动 TODO）：全库重抽 ≈¥11.6 / ≈22 分钟 / ≈6,000 点，等用户裁决是否落地","next":"新会话先跑 session_check 与 pytest -o addopts= -q（611/1）；再由用户裁决 P3 走向：试点 3 本（kpe chunks→extract→kpeimport --match）或全库 30 本；P1 勘误不要自动跟进新点","not_rerun":"P1b reason_code 回填；P2 kaging --lifecycle；kpe chunks 两个样本（temp/kpe-helloagents、temp/kpe-ch5b 已有 chunks.jsonl）；全量 pytest","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 611 passed, 1 skipped；uv run python -m kpe stats temp/kpe-ch5b -> 9 块/50 点"} -->
+
+## 2026-10-26 12:35 session-guard 实现文档（跨会话交接模块）
+
+- 用户 12:26 指示：暂不裁决 P3，先确认 `D:\sData\git\session-guard` 是否为交接流程模块，并把实现逻辑写成文件。
+- 已确认：是。该仓库即 probe/check/watch/notify 的唯一实现，本仓库 `tools/*.py` 只是薄封装（`tools/session_guard_bridge.py`）。
+- 新增 `D:\sData\git\session-guard\docs\实现逻辑.md`（904 行）：结论与证据、问题模型、DSH 会话文件契约、7 个模块实现逻辑、命令与退出码契约、状态/配置、通知链路、部署、限制、三种移植情形（DSH / 非 DSH / 只要协议+通知）、二次开发指引、附录模板。
+- 实测：session-guard `34 passed in 0.40s`；`tools/session_check.py` → `NEW_SESSION`（12:26，effective 12.4%，window 262,144 / baseline 147,059）。
+- 12:38 提交 `3bc97c9`（docs: 实现逻辑与移植指南，905 行）；12:42 推送到 `https://github.com/yianyao/tools.git`（`main`，仓库原为空；GCM 浏览器授权，凭据已入 Windows 凭据管理器）。
+- 推送环境：本机直连 `github.com:443` 不通（DNS→20.205.243.166），走本机代理 `http://127.0.0.1:7890`；代理已写进 session-guard 的仓库级 `http.proxy`（不提交），代理不在时 `git push` 会失败。
+- 未做：P3 仍待用户裁决；KnowAtlas 本文件与 `tools/` 改动未提交。
+
+## 2026-10-26 19:05 P3 现状核查：全库点层早已是全文分块产物，重抽无必要
+
+会话 `session-ac30a055`（继续协议：`NEW_SESSION`，effective 9.9% = 14,513/147,059；
+`pytest -o addopts= -q` → **611 passed / 1 skipped**）。**只读核查，未改一行业务代码。**
+
+### 结论：P3 的主体在 10-25 15:36–18:01 就已经落地了
+
+| 证据 | 实测 |
+|---|---|
+| 点总数 / 来源 | **4,552 点，全部** `meta.extractor=kpe`，`judge` 全为 `split` |
+| 全文而非预览 | 溯源 `char_offset` 最远 **2,477,908**（agentic-ai-guide）、**672,891**（Hello-Agents）；**1,568 条 > 4,000** |
+| 溯源字段 | `book`/`section_path`/`quote`/`page_start`/`page_end`/`model` 覆盖率 100% |
+| 下游机制 | kind：hard 1,579 / opinion 2,016 / unjudgeable 914 / dupe 43；fact_check：ok 1,194 / suspect 348 / wrong 37；lifecycle：ok 39 |
+| front matter | `FRONT_SECTIONS` 名下 **0 点**（`0.关于本书` 4,665 字被丢弃，符合设计） |
+| 检索 | 点优先：`q=上下文工程` → 32 点/8 条目；`q=MCP` → 47 点/17 条目 |
+| 三本试点 | 早已抽完：Hello-Agents **820**、AI-Agents-in-Depth **571**、agentic-design-patterns **420** |
+
+密度 550–1,080 字/点属正常；两个低密度条目（agentic-ai-guide 1,885、AI-Agents-in-Depth 1,830）
+经查**覆盖全书**（188 小节 / 第 1–10 章），是代码与表格多所致，不是截断。
+
+### 纠正 07:12 交接的错误前提
+
+交接把「**hard 子集** 1,579」当成了「**全库点数** 1,579」，据此推出「≈6,000 点 / 4× / ¥11.6 / 22 分钟」。
+实际全库已 4,552 点且已分块，**全库重抽与 3 本试点都是重复劳动**，不要执行。
+
+### P3 剩余的真实缺口（唯一一项）
+
+`pipeline/points.py::_entry_body` 仍优先 `inline_content`（`adapters/dbfile.py::_INLINE_CAP=4000` 的预览），
+再被 `_BODY_CAP=6000` 截一刀 → **未来新同步的长文档仍会「一篇一点」，只覆盖开头 4,000 字**。
+改它等于改 pipeline 口径（AGENTS §1），需用户点头；改法见 TODO P3 第 1 项。
+现有 4,552 点不受影响（它们走的是 kpe + 旧一次性脚本的全文路径）。
+
+### 过程脚本（temp/，随时可删）
+
+`probe_pilot_entries.py`、`probe_coverage_detail.py`、`show_coverage.py`、`probe_meta_sql.py`、
+`probe_low_density.py`、`probe_offsets.py`、`probe_frontmatter.py`、`probe_layer_summary.py`、
+`probe_replace_risk.py`、`probe_pilot_points.py`、`coverage_detail.json`。
+
+### 坑
+
+- `dl.points_of_entries()` **不返回 `meta`**（内部 `pop("meta")` 只回填 `explain`）→ 判 meta 覆盖率必须走 SQL，
+  否则会得出「meta 全空」的错误结论（本轮踩过，已纠正）。
+- PowerShell 5.1 的 `Out-File -Encoding utf8` 写 BOM；Python 读要 `utf-8-sig`。
+- `python -c` 里带引号/中文在 PS 5.1 会被打断 → 一律落 `temp/*.py`。
