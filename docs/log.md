@@ -1022,7 +1022,32 @@ uv run python -m kpe stats temp/kpe-ch5b                 # 9 块 / 50 点 / ¥0.
 - `serve`（PID 14220）仍是旧代码：`/api/entries/{id}/form`（强制重抽）走的是进程内旧函数，
   重启后才对长文打 pending 标记。本次未重启——改的是 CLI 与管道主路径，Web 侧只有那个按钮受影响。
 
-## 交接（2026-10-26 19:11，effective 109.8% CRITICAL 立即停止）
+## 2026-10-26 19:25 用户报障：词云点卡的「34 点」是重复渲染（待修，未动代码）
+
+**现象**：词云点「雪花」→ 19 个知识点，标题全同、正文不同；每个知识点底下都有 34 个点，且 19 份完全相同。
+
+**数据侧正常**（`temp/probe_snowflake.py` 实测）：
+
+- 全库含「雪花」的点 **20 个**，全部 `point_sources.entry_id = 39e9415a86480b70`（条目「雪花写作法小说家（增强版）」），
+  该条目共 **34 点**；20 个中 1 个是 `dupe`（消费面隐藏）→ 页面显示 **19**，正文各不同 = 19 个不同知识点，**这点是对的**。
+
+**缺陷在渲染**：词云 facet 把「点卡」写成了条目卡骨架——
+`index.html:1366` `<div class="entry" data-id="${p.entry_id}">`，而通用钩子
+`attachPointChips()`（`index.html:752`，在 `bindEntryButtons()` 内 647 行统一挂）按 `data-id`
+拉 `/api/entries/points?ids=`，对**每个** `.entry[data-id]` 追加「◆ N 点 ▸」。
+19 张点卡的 `data-id` 是**同一个条目**，于是每张都渲染该条目全部 34 点 → 19×34 重复。
+同根因副作用：每张点卡还被 `index.html:636-640` 加了「🆔 复制条目 ID」按钮。
+
+**建议修法（待用户批准，纯前端）**：
+
+1. 点卡改用独立类（如 `entry pt-card`），`attachPointChips` 与 `cid-btn` 的选择器加 `:not(.pt-card)`；
+2. 点卡标题不要用条目名（这正是「19 张同名」的观感来源）——改用点摘要或点正文首句，
+   「溯源：条目名」保留在底部；
+3. 若要保留「该条目还有哪些点」，只在该条目的**第一张**点卡或条目卡上展开一次，不要逐卡重复。
+
+改完让用户 `Ctrl+F5`（`index.html` 改动不需重启 serve）。
+
+## 交接（2026-10-26 19:11，effective 109.8% CRITICAL 立即停止；19:25 追加词云点卡报障）
 
 ### 当前目标
 
@@ -1072,4 +1097,4 @@ uv run python -m knowatlas kpoints --dry-run --limit 5   # pending_kpe=0、alrea
 - 探针坑：`dl.points_of_entries()` 返回的 dict **不含 `meta`**（内部 pop 只回填 `explain`），判 meta 必须走 SQL。
 - 过程脚本（`temp/probe_*`、`temp/e2e_*`、`temp/normalize_files.py`）随时可删；e2e 临时库已删除。
 
-<!-- HANDOFF {"session":"session-ac30a055-31f6-467c-a14b-4ba483781484","compactions":0,"tokens":161452,"at":"2026-10-26T19:11:13+08:00","status":"HANDOFF","goal":"P3 全部收口：核实全库 4,552 点已是 kpe 全文分块产物（撤销 ¥11.6 重抽），修掉原生管道对新长文档的截断抽点（points_pending_kpe 交 kpe），提交 6203015/43d752c","next":"新会话先跑 session_check 与 pytest -o addopts= -q（616/1）；再由用户裁决 P4 点级图或 P5 扩散抓取加固；若要 Web 强制重抽也走新口径，重启 serve（先导入 KNOWATLAS_WEB_TOKEN，PID 14220 是旧代码）","not_rerun":"P3 核查与批 111 全部验证（616/1、canary、真库 dry-run、临时库端到端）；kpe chunks 两个样本；全库重抽/三本试点（重复劳动）；P1b 原因码回填与 P2 lifecycle","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 616 passed, 1 skipped；uv run python -m knowatlas kpoints --dry-run --limit 5 -> pending_kpe=0, already_done=26","done":"6203015 docs 核查；43d752c 批 111（points.py/_kpe_import.py/cli.py/db.py 注释 + 6 条测试）；616 passed/1 skipped；真库 4,552 点零扰动"} -->
+<!-- HANDOFF {"session":"session-ac30a055-31f6-467c-a14b-4ba483781484","compactions":0,"tokens":172000,"at":"2026-10-26T19:26:00+08:00","status":"HANDOFF","goal":"P3 全部收口（6203015/43d752c，616 passed/1 skipped）；另查明用户报障「词云雪花 19 点各挂 34 点」= 前端点卡复用条目卡骨架导致重复渲染，未动代码","next":"新会话先跑 session_check 与 pytest -o addopts= -q（616/1）；然后按 log「19:25 用户报障」修 index.html（点卡加 .pt-card，attachPointChips/cid-btn 选择器排除点卡，点卡标题改点摘要而非条目名），Ctrl+F5 验收；之后再由用户裁决 P4/P5；若要 Web 强制重抽走新口径，重启 serve（先导入 KNOWATLAS_WEB_TOKEN）","not_rerun":"P3 核查与批 111 全部验证（616/1、canary、真库 dry-run、临时库端到端）；词云数据侧核查（20 点/19 可见/34 点属同一条目，已确认无误）；kpe chunks 两个样本；全库重抽与三本试点（重复劳动）；P1b 原因码回填与 P2 lifecycle","verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 616 passed, 1 skipped；uv run python temp/probe_snowflake.py -> 20 点全属 39e9415a86480b70（34 点条目）","done":"6203015 docs 核查；43d752c 批 111；1dab949 交接块；19:25 词云点卡报障定性（前端 index.html:1366 + attachPointChips 752）"} -->
