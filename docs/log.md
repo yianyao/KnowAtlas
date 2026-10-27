@@ -2385,3 +2385,47 @@ uv run --with zstandard python tools/context_probe.py      # 本会话 effective
 effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 
 <!-- HANDOFF {"at":"2026-10-27T21:40:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-27-r17fetch-候选口径只取-active--转正优先-entry-定向补抓补抽--root-元文件清理","draft":false,"goal":"R17 落地：fetch 候选只取 active + 转正优先、ksync/kpoints --entry 定向补抓补抽、root 元文件归档 7 条（694 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收反查「打开原文」与分类页「按主题」；② kpoints --entry 10a8dc83468f8fce 真抽 glossary；③ 可选：labuladong 走 kpe / 8.1b / Phase B 凭证源 / 打包安装","not_rerun":"全量 pytest 694/1 与 canary；ksync --source folders --full；ksync --fetch-limit 3；kpoints --entry 10a8dc83468f8fce --dry-run；temp/probe_r16_state*、probe_meta_files、probe_targeted_candidates、probe_points_targets、probe_dryrun_nowrite","schema":1,"session":"session-577f2a0f-70ec-450a-9b9b-e093d7771413","status":"CRITICAL","tokens":144802,"verify":"uv run python -m pytest -o addopts= -q -> 694 passed, 1 skipped"} -->
+## 2026-10-27 21:47 用户追加需求（最高优先级）：入库即自动生成知识点，零人工
+
+> 用户原话：「所有数据源，应该是入库即能自动生成知识点，无需人工的」。
+> 本轮上下文已 CRITICAL（98.5%），**只登记需求与差距，未动代码**；实现交新会话（先工单、再动手）。
+
+### 现状差距（七条，均已现场确认过、无需重查）
+
+| # | 人工环节 | 位置 |
+|---|---|---|
+| 1 | `kpoints` 是**独立命令**，`ksync` 只入库不抽点 → 每次同步后要手动跑 | `cli.py` / `pipeline/sync.py`（无 auto_points） |
+| 2 | `[fetch] on_sync=false`：同步不抓正文，`--fetch-limit` 显式才抓 → 没正文就没点 | `pipeline/sync.py:742` 附近 |
+| 3 | `new_entries="pending"` 闸门：真库 **132 条待审**，未转正不抓不分类不抽点 | 批次 68；`web/api.py` bulk-status |
+| 4 | 正文 >60,000 字落 `meta.points_pending_kpe`，要人工跑 `tools/kpe` + `kpeimport` | `pipeline/points.py::_CHUNK_TOTAL_MAX` |
+| 5 | `meta.points_gate` 拦下的条目要 `--retry-blocked` 手动重试 | `pipeline/points.py` |
+| 6 | LLM key 缺失静默降级成「整篇照抄 integral」（R10 已加 WARN，但仍是降级） | `cli.py::_warn_if_llm_unavailable` |
+| 7 | 定向补抓补抽（R17 刚做的 `--entry`）本身也说明「补」是人工触发的 | R17 |
+
+### 计划骨架（待用户点头 + 工单，涉 `CONFIG_SCHEMA_KEYS` 属契约变更）
+
+1. **A 同步即抽点**：`[sync] auto_points=true`（新 config 键 → 工单 + canary），`run_sync` 尾部对
+   「新入库 / 内容变化 / 本轮抓到正文」的条目自动调 `run_points_extract(entry_ids=…)`；
+   沿用 `point_source_entry_ids()` 游标做幂等，不重抽。
+2. **B 同步即抓正文**：`[fetch] on_sync=true` + `auto_fetch_limit`（有上限，防一次烧爆）；
+   与 A 串成「入库 → 抓正文 → 分类 → 抽点」一条链。
+3. **C 待审闸门自动化**：`new_entries="pending"` 改成「自动转正 + 规则守门」——`value_guard`
+   已能打 `not_knowledge`（直链/首页/列表页），自动转正后可人工否决；或保留闸门但 `ksync`
+   自动对 pending 跑 L0 体检再批量转正。
+4. **D 超长文自动化**：>60k 不再交人工 kpe，改后台分块（放大 `_CHUNK_TOTAL_MAX` 或起 kpe 等价作业），
+   按条计价护栏 + 每轮上限。
+5. **E 兜底巡检**：serve 内定时任务（如 10 min）扫「active 且无正文/无点」的条目补跑，
+   保证「无需人工」不是「每次都要记得跑命令」。
+6. **F 费用与幂等护栏**：每轮条数上限、失败重试计数、`task_log` 审计、dry-run 报告。
+
+### 验证口径（新会话照此验收）
+
+空库 `kinit` → 配一个新源 → **只跑一次 `ksync`** → 等一轮巡检 → 查「该源全部 active 条目
+均有 `content_hash` 且点数 > 0」，人工零操作；`task_log` 能回答每个条目「抓了没 / 抽了没 / 为什么没」。
+
+### 下一步（按序）
+
+1. 用户确认计划骨架（尤其 C 的闸门取舍与 F 的费用上限）。
+2. 新会话开工：先写 `docs/design/变更工单-2026-10-28-入库即抽点.md`（含 `CONFIG_SCHEMA_KEYS` 变更），
+   再改 `pipeline/sync.py` + `cli.py` + `config.py`，补测试，跑 canary。
+3. 不要重跑：R17 的全量 694/1、folders 全量同步、7 条元文件归档。
