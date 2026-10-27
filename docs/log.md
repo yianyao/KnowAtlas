@@ -2588,3 +2588,33 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 - 工作区干净，`main...origin/main` 同步，HEAD = `454ff1b`（TODO 的勾选在下一个提交里）。
 
 <!-- HANDOFF {"at":"2026-10-28T00:01:30+08:00","compactions":2,"doc":"docs/log.md#2026-10-28-0000-r20路线-a-第-12-步护栏--cli-拆包","draft":false,"goal":"路线 A 进度：护栏三件 + cli.py 拆包完成（720 passed/1 skipped，454ff1b）；剩 sync/api/db 三个大文件","host":"dsh","kind":"handoff","next":"① pipeline/sync.py 拆成 pipeline/sync/（保留 run_sync 路径）；② web/api.py 拆 ctx+routers（URL 逐字，靠 test_web_routes 兜底）；③ datalayer/db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档已生成且 --check 绿；护栏三件与 cli 拆包已提交（cc0e556/454ff1b）；全量基线 720 passed/1 skipped；pg 接入评估（D4 已定）；kpe 克隆（已在 D:\\sData\\git\\kpe）","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":141956,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
+
+### 2026-10-28 00:15 追加：sync 拆包**已备好但未落地**（上下文 CRITICAL）
+
+`temp/split_sync_20261028.py` 已写好并跑通**预览模式**（输出到 `temp/sync_preview/`，不动 `src/`）：
+
+| 产物 | 行数 |
+|---|---|
+| `_common.py` | 42 |
+| `fetch.py` | 153 |
+| `store.py` | 107 |
+| `enrich.py` | 272 |
+| `flags.py` | 40 |
+| `__init__.py` | 276 |
+
+自检三项全过：**编译通过 / 无残留单点相对导入 / 每个函数体与原文 AST 逐字等价**。
+
+落地步骤（新会话直接执行，约 3 分钟）：
+
+```powershell
+uv run python temp/split_sync_20261028.py --apply      # 生成 pipeline/sync/ 包
+Remove-Item src/knowatlas/pipeline/sync.py             # 删旧单文件
+uv run python -m pytest -o addopts= -q                 # 期望 720 passed / 1 skipped
+```
+
+必须记住的两点（脚本已处理，验证时别以为是 bug）：
+
+1. `sync.py` 原本在 `pipeline/` 下，用的是 `from ..fetchers` 两级相对导入；进包后要变三级（`from ...fetchers`）。脚本按"点数 +1，兄弟模块除外"处理。
+2. `pipeline/sync/__init__.py` 必须 re-export `_categorize` `_fetch_missing` `_apply_content` `_fetch_candidates` `_freshness_scan` `_clear_stale_fetch_flags` —— `ingest.py` 与 6 个测试按名取用，漏一个就是 ImportError。
+
+<!-- HANDOFF {"at":"2026-10-28T00:16:10+08:00","compactions":2,"doc":"docs/log.md#2026-10-28-0015-追加sync-拆包已备好但未落地上下文-critical","draft":false,"goal":"路线 A 进度：护栏+cli 已落地（720/1）；sync 拆包脚本已备好并通过预览自检，只差 --apply","host":"dsh","kind":"handoff","next":"① uv run python temp/split_sync_20261028.py --apply；② 删 src/knowatlas/pipeline/sync.py；③ 全量 pytest 期望 720/1；④ 绿了提交推送；⑤ 接着 api.py 拆 routers；⑥ db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档；护栏三件；cli 拆包；sync 预览自检（已通过，别重复调试脚本）；pg 评估；kpe 克隆","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":179000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
