@@ -43,8 +43,9 @@ MAX_LIMIT = 500            # 端点夹取上限（再大就退回「慢且不可
 def topic_clusters(dl: Any, threshold: float = _THRESHOLD,
                    limit: int | None = _DEFAULT_LIMIT,
                    merge: bool = True,
-                   merge_threshold: float = _MERGE_THRESHOLD) -> dict[str, Any]:
-    """全库点聚类 → 知识主题列表（关系图聚合视图数据源）。
+                   merge_threshold: float = _MERGE_THRESHOLD,
+                   point_ids: set[str] | None = None) -> dict[str, Any]:
+    """点聚类 → 知识主题列表（关系图聚合视图 / 检索页主题 tab 共用）。
 
     返回 {"topics": [{name, size, merged, points, sources_count}],
           "singles": N, "vectors": N, "threshold": t,
@@ -55,16 +56,32 @@ def topic_clusters(dl: Any, threshold: float = _THRESHOLD,
     limit=None 或 ≤0 → 不截断（返回全部，慢：真库约 30 s 起）；
     主题名只对**截断后返回的**主题计算（命名是第二热点，29 ms/主题）。
     merge=False → 退回 R11 口径（不做二次合并）。
+    point_ids 非 None → 只在这些点里聚类（检索/分类过滤，R13），
+    命中点 <2 时返回 note 而不是空图。
     """
     vecs_raw = dl.all_point_vectors()
+    if point_ids is not None:
+        vecs_raw = {pid: b for pid, b in vecs_raw.items() if pid in point_ids}
     if len(vecs_raw) < 2:
         return {"topics": [], "singles": 0, "vectors": len(vecs_raw),
                 "threshold": threshold, "total": 0, "limit": limit,
                 "truncated": False, "merge_threshold": merge_threshold,
                 "merged_from": 0,
-                "note": "点向量不足 2 条——先 ksync --embed 构建点向量索引"}
+                "note": ("点向量不足 2 条——先 ksync --embed 构建点向量索引"
+                         if point_ids is None else
+                         f"该范围内只有 {len(vecs_raw)} 个带向量的知识点，"
+                         "聚不出主题（至少 2 个语义相近的点）")}
     vecs = {pid: blob_to_vec(b) for pid, b in vecs_raw.items()}
-    hits = {p["point_id"]: p for p in _all_point_hits(dl)}
+    if point_ids is None:
+        hits = {p["point_id"]: p for p in _all_point_hits(dl)}
+    else:                              # 子集口径：只取这些点，省掉全库 0.3 s
+        hits = {}
+        for pid in vecs:
+            h = dl.get_point_hit(pid)
+            if h is not None:
+                hits[pid] = {"point_id": h.point_id, "text": h.text,
+                             "summary": h.summary,
+                             "sources": [dict(s) for s in h.sources]}
     singles = 0
     clusters: list[dict[str, Any]] = []
     for c in _greedy_clusters(vecs, threshold):
@@ -103,13 +120,20 @@ def topic_clusters(dl: Any, threshold: float = _THRESHOLD,
             "merged_from": merged_from}
 
 
-def _merge_clusters(clusters: list[dict[str, Any]], threshold: float
-                    ) -> list[dict[str, Any]]:
-    """R12 二次合并：按规模降序的质心贪心合并（非 union-find，避免链式粘连）。
+def _merge_clusters(clusters: list[dict[str, Any]], threshold: float,
+                    max_passes: int = 5) -> list[dict[str, Any]]:
+    """R12/R13 二次合并：按规模降序的质心贪心，**迭代到不动点**。
 
-    调用方保证 clusters 已按点数降序：大主题先立，小块并过去，簇心按点数加权
-    更新（= 成员均值，与 _greedy_clusters 的簇心口径一致）。任一环节不满足
-    （numpy 缺失 / 维度不齐）就原样返回——宁可不合并，也不做跨维比较或慢循环。
+    单遍贪心只在「插入时」比一次：之后并入的成员会把簇心拉向别的簇，事后已经
+    相似的两簇因此留在原地（真库 MCP 的 17 点 / 9 点：插入时 ~0.78，终态 0.886
+    ——`temp/topic_merge_debug.py` 复现）。故每轮重排 + 重比，直到没有合并或
+    `max_passes`，修「先比后漂」。
+
+    对比走矩阵 `U[:k] @ unit`（numpy BLAS，单轮 ~0.3 s）；不用 union-find 单链，
+    避免 0.75 阈值下把 1,013 簇粘成 280 块（最大 1,910 点）那种过度聚合。
+    簇心是成员均值、模长 <1，比较前统一投影单位球（否则点积系统性低估相似度）。
+    簇心按点数加权更新 = 成员均值，与 `_greedy_clusters` 口径一致；
+    numpy 缺失 / 维度不齐（多模型混排）→ 原样返回，宁可不合并。
     """
     try:
         import numpy as np  # noqa: PLC0415 numpy 是主依赖，缺失时降级不合并
@@ -117,29 +141,42 @@ def _merge_clusters(clusters: list[dict[str, Any]], threshold: float
         return clusters
     if len({len(c["centroid"]) for c in clusters}) != 1:
         return clusters                 # 多模型混排维度不齐 → 不做跨维比较
-    merged: list[dict[str, Any]] = []
-    for c in clusters:
-        raw = np.asarray(c["centroid"], dtype=np.float64)
-        norm = float(np.linalg.norm(raw))
-        # 簇心是成员均值，模长普遍 <1：直接点积会系统性低估相似度（真库实测
-        # 0.85 阈值下零合并），故统一投影到单位球再比（= 余弦，与归簇口径一致）
-        unit = raw / norm if norm else raw
-        if merged:
-            sims = np.array([float(unit @ m["unit"]) for m in merged])
-            best = int(sims.argmax())
-            if sims[best] >= threshold:
-                m = merged[best]
-                n0, n1 = len(m["ids"]), len(c["ids"])
-                m["raw"] = (m["raw"] * n0 + raw * n1) / (n0 + n1)
-                rn = float(np.linalg.norm(m["raw"]))
-                m["unit"] = m["raw"] / rn if rn else m["unit"]
-                m["ids"] = m["ids"] + c["ids"]
-                m["merged"] = int(m.get("merged") or 1) + int(c.get("merged") or 1)
-                continue
-        merged.append({"ids": list(c["ids"]), "raw": raw, "unit": unit,
-                       "seed": list(c["ids"]),
-                       "merged": int(c.get("merged") or 1)})
-    return merged
+    dim = len(clusters[0]["centroid"])
+    items = [{"ids": list(c["ids"]),
+              "raw": np.asarray(c["centroid"], dtype=np.float64),
+              "seed": list(c.get("seed") or c["ids"]),
+              "merged": int(c.get("merged") or 1)} for c in clusters]
+    for _ in range(max(1, int(max_passes))):
+        items.sort(key=lambda it: -len(it["ids"]))
+        U = np.zeros((len(items), dim))     # 已合并簇的单位球投影
+        R = np.zeros((len(items), dim))     # 已合并簇的原始均值（加权更新用）
+        out: list[dict[str, Any]] = []
+        changed = False
+        for it in items:
+            raw = it["raw"]
+            norm = float(np.linalg.norm(raw))
+            unit = raw / norm if norm else raw
+            k = len(out)
+            if k:
+                sims = U[:k] @ unit
+                best = int(sims.argmax())
+                if float(sims[best]) >= threshold:
+                    m = out[best]
+                    n0, n1 = len(m["ids"]), len(it["ids"])
+                    R[best] = (R[best] * n0 + raw * n1) / (n0 + n1)
+                    rn = float(np.linalg.norm(R[best]))
+                    U[best] = R[best] / rn if rn else U[best]
+                    m["ids"] = m["ids"] + it["ids"]
+                    m["merged"] += it["merged"]
+                    changed = True
+                    continue
+            R[k] = raw
+            U[k] = unit
+            out.append(it)
+        items = out
+        if not changed:
+            break
+    return items
 
 
 def _all_point_hits(dl: Any) -> list[dict[str, Any]]:
@@ -160,20 +197,67 @@ def _all_point_hits(dl: Any) -> list[dict[str, Any]]:
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨"
 
 
+def _name_candidates(texts: list[str], cap: int = 8) -> list[tuple[str, int]]:
+    """一次抽词，返回 [(词, 出现成员数)]，按「覆盖率降序 + 最早位置」排序。
+
+    准入：`word_ok` → 子串出现在 ≥2 个成员里 → **2 字纯中文必须在 jieba 词典**
+    （HMM 会造 `体应` 这种跨词边界的词；3 字以上如 `智能体`、英文/代号如
+    `GRPO` 不受限）。一次抽词同时供 100%/60% 两档使用——命名是第二热点，
+    重复抽词会让 80 个主题多花 ~1.3 s（真库实测）。
+    """
+    real = [t for t in texts if t and t.strip()]
+    if len(real) < 2:
+        return []
+    try:
+        import jieba  # noqa: PLC0415 jieba 是 main 依赖
+        import jieba.analyse
+    except ImportError:
+        return []
+    from ..semantic.keywords import word_ok
+    jieba.initialize()                  # 只为拿到 dt.FREQ（词典），首次 ~0.5 s
+    lows = [t.lower() for t in real]
+    count: dict[str, int] = {}
+    best_pos: dict[str, int] = {}
+    for t in real:
+        for kw in jieba.analyse.extract_tags(t[:2000], topK=12):
+            k = kw.lower()
+            if k in count or not word_ok(k):
+                continue
+            hit = [low for low in lows if k in low]
+            if len(hit) < 2:
+                continue
+            if (len(k) == 2 and all("\u4e00" <= ch <= "\u9fff" for ch in k)
+                    and not jieba.dt.FREQ.get(k)):
+                continue                               # 2 字纯中文不在词典 → 伪词
+            count[k] = len(hit)
+            best_pos[k] = min((low.find(k) for low in hit), default=10 ** 6)
+    order = sorted(count, key=lambda k: (-count[k], best_pos[k]))
+    return [(k, count[k]) for k in order[:cap]]
+
+
 def _topic_name(texts: list[str], size: int | None = None,
                 used: set[str] | None = None) -> str:
-    """主题名 = 成员点文本共享词 top2（逐词验证，禁发明）；无共享词退化「主题N」。
+    """主题名 = 成员文本共享词（逐词验证，禁发明）；退化时带规模后缀。
 
-    R12（2026-10-27）：只命中 1 个共享词时单词名没有区分度（真库 `智能`×14），
-    补规模后缀 `（N 点）`；传入 used 时再做同响应内去重（②③…）。
+    R12：只命中 1 个词时单词名没有区分度（真库 `智能`×14），补 `（N 点）`。
+    R13：1 个词时优先再找一个 ≥60% 覆盖的第二词（`grpo·优势` 而不是两个
+    `grpo（N 点）`）；0 个 100% 词时也允许用 ≥60% 词起名；伪词被滤掉。
     """
-    from ..semantic.keywords import shared_words
-    words = shared_words(texts)[:_NAME_WORDS]
     n = len(texts) if size is None else size
-    if len(words) >= 2:
-        base = "·".join(words[:2])
-    elif words:
-        base = f"{words[0]}（{n} 点）"
+    real = [t for t in texts if t and t.strip()]
+    cand = _name_candidates(texts)
+    total = len(real)
+    full = [w for w, c in cand if total and c >= total]      # 100% 覆盖
+    loose = [w for w, c in cand if total and c >= max(2, int(total * 0.6 + 0.999))]
+    if len(full) >= 2:
+        base = "·".join(full[:_NAME_WORDS])
+    elif full:
+        rest = [w for w in loose if w != full[0]]
+        base = f"{full[0]}·{rest[0]}" if rest else f"{full[0]}（{n} 点）"
+    elif len(loose) >= 2:
+        base = "·".join(loose[:_NAME_WORDS])
+    elif loose:
+        base = f"{loose[0]}（{n} 点）"
     else:
         base = f"主题（{n} 点）"
     return _dedupe_name(base, used)

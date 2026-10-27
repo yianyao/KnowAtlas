@@ -276,3 +276,86 @@ def test_topic_clusters_merges_and_reports(monkeypatch):
     r2 = gt.topic_clusters(FakeDL(), limit=10, merge=False)
     assert r2["total"] == 2
     assert all(t["merged"] == 1 for t in r2["topics"])
+
+
+# ---- R13（2026-10-27 工单 变更工单-2026-10-27-主题命名补词与检索聚合.md） ----
+
+def test_merge_clusters_reaches_fixed_point():
+    """迭代到不动点：输出里任意两簇的质心余弦都 < 阈值（修「先比后漂」）。"""
+    import random
+
+    import numpy as np
+
+    from knowatlas.pipeline.graph_topics import _merge_clusters
+
+    rnd = random.Random(20261027)
+
+    def unit(v):
+        a = np.asarray(v, dtype=np.float64)
+        return a / np.linalg.norm(a)
+
+    base = unit([rnd.gauss(0, 1) for _ in range(16)])
+    centers = [base,
+               unit(base + 0.25 * np.asarray([rnd.gauss(0, 1) for _ in range(16)])),
+               unit(-base + 0.25 * np.asarray([rnd.gauss(0, 1) for _ in range(16)])),
+               unit([rnd.gauss(0, 1) for _ in range(16)])]
+    clusters = []
+    for i, c in enumerate(centers):
+        ids, acc = [], np.zeros(16)
+        for j in range(3 + i):
+            v = unit(np.asarray(c) + 0.20 * np.asarray(
+                [rnd.gauss(0, 1) for _ in range(16)]))
+            ids.append(f"c{i}p{j}")
+            acc += v
+        clusters.append({"ids": ids, "centroid": (acc / len(ids)).tolist()})
+
+    out = _merge_clusters(clusters, 0.85)
+    for i in range(len(out)):
+        for j in range(i + 1, len(out)):
+            a, b = out[i]["raw"], out[j]["raw"]
+            cos = float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)))
+            assert cos < 0.85, (i, j, cos)
+
+
+def test_topic_name_uses_second_word_for_single_word_clusters():
+    """只共享一个词时补 ≥60% 覆盖的第二词：`grpo·优势` 而不是两个 `grpo（N 点）`。"""
+    from knowatlas.pipeline.graph_topics import _topic_name
+
+    texts = ["GRPO 使用组内 reward 归一化计算优势，advantage 除以标准差",
+             "GRPO 的 advantage 按组内 reward 归一化，优势对尺度敏感",
+             "GRPO 训练时组内奖励归一化决定优势方向"]
+    name = _topic_name(texts, 3)
+    assert name.startswith("grpo") and "·" in name, name
+
+
+def test_topic_name_rejects_cross_boundary_pseudo_word():
+    """跨词边界的伪词（`智能体应…` → `体应`）不得进名字（jieba token 校验）。"""
+    from knowatlas.pipeline.graph_topics import _topic_name
+
+    texts = ["智能体应具备可观测性与回放能力",
+             "智能体应按步骤记录决策与工具调用"]
+    name = _topic_name(texts, 2)
+    assert "体应" not in name, name
+
+
+def test_topic_clusters_point_ids_filter(dl):
+    """point_ids 点域过滤：只在给定点里聚类（检索/分类聚合的底座）。"""
+    pids = _seed_three_topics(dl)
+    r = topic_clusters(dl, limit=10, point_ids=set(pids["git"]))
+    assert r["total"] == 1 and r["topics"][0]["size"] == 2
+    assert r["vectors"] == 2
+    r2 = topic_clusters(dl, limit=10, point_ids={pids["git"][0]})
+    assert r2["topics"] == [] and "note" in r2
+
+
+def test_api_graph_topics_q_scope(cfg, dl, registries):
+    """端点 `?q=`：只聚命中点，响应带 scope（前端「主题」tab 用）。"""
+    _seed_three_topics(dl)
+    from knowatlas.web.app import create_app as _ca
+    app = _ca(cfg, dl, *registries)
+    client = TestClient(app, headers={"Host": "127.0.0.1:8420"})
+    body = client.get("/api/graph/topics?q=git&limit=10").json()
+    assert body["scope"]["q"] == "git" and body["scope"]["mode"] == "q"
+    assert body["total"] >= 1 and body["scope"]["points"] >= 2
+    assert all("git" in t["name"].lower() or "分支" in t["name"] for t in body["topics"])
+    assert client.get("/api/graph/topics").json()["scope"]["mode"] == "all"

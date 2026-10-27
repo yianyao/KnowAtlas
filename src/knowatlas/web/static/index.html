@@ -1206,7 +1206,7 @@ document.querySelectorAll("#view-tabs .vtab").forEach(b =>
 // 去重合并，三视图共享同一份结果：聚合结果（带关联解释；命中多时按知识集
 // 分组展示，第六十批）/ 线索（命中条目所属线索聚合） / 放射（焦点邻域持续下钻）。
 const wb = { q: "", merged: [], tab: "agg", focusId: null,
-             groups: null, singles: null, gmode: "" };
+             groups: null, singles: null, gmode: "", topics: null };
 
 function chLabel(ch) {
   if (ch.startsWith("cocategory:")) return "同分类:" + ch.slice(11);
@@ -1223,6 +1223,7 @@ async function doWorkbench(q) {
   showView("search");
   wb.q = q; wb.focusId = null; wb.tab = "agg";
   wb.groups = null; wb.singles = null; wb.gmode = ""; wb.points = null;
+  wb.topics = null;                       // R13：换关键词重新聚主题
   const box = document.getElementById("hits");
   box.innerHTML = "<small>聚合中…</small>";
   const [fts, rec, hyb] = await Promise.all([
@@ -1289,7 +1290,7 @@ async function doWorkbench(q) {
 
 function renderWorkbench() {
   const box = document.getElementById("hits");
-  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["threads", "线索"], ["radiate", "放射"]];
+  const tabs = [["agg", `聚合结果 ${wb.merged.length}`], ["topics", "主题"], ["threads", "线索"], ["radiate", "放射"]];
   box.innerHTML =
     `<div id="wb-tabs">` + tabs.map(([k, label]) =>
       `<button class="wb-tab${wb.tab === k ? " on" : ""}" data-tab="${k}">${label}</button>`).join("")
@@ -1308,8 +1309,58 @@ function renderWorkbench() {
     openThread(res.id);  // 页签内打开线索库（不再整页跳转）
   };
   if (wb.tab === "agg") renderAggTab();
+  else if (wb.tab === "topics") renderTopicsTab();
   else if (wb.tab === "threads") renderThreadsTab();
   else renderRadiateTab();
+}
+
+// ---- 主题 tab（R13，2026-10-27 工单 变更工单-2026-10-27-主题命名补词与检索聚合.md）----
+// 检索词 → /api/graph/topics?q= 只在这些命中点里聚类（0.72 归簇 + 0.85 归并），
+// 主题行展开看成员点，「溯源」走既有 openPreview。数据懒加载、换词即失效。
+async function renderTopicsTab() {
+  const body = document.getElementById("wb-body");
+  if (!body) return;
+  if (!wb.topics) {
+    body.innerHTML = "<small>按主题聚合命中知识点…</small>";
+    try {
+      wb.topics = await (await fetch("/api/graph/topics?q="
+        + encodeURIComponent(wb.q) + "&limit=30")).json();
+    } catch (e) {
+      body.innerHTML = "<small>主题聚合失败（接口不可用）。</small>";
+      return;
+    }
+  }
+  const box = document.getElementById("wb-body");
+  if (!box) return;
+  const d = wb.topics || {};
+  const sc = d.scope || {};
+  const topics = d.topics || [];
+  if (!topics.length) {
+    box.innerHTML = `<small>${_escHtml(d.note || "命中点太少，聚不出主题（至少 2 个语义相近的知识点）。")}</small>`;
+    return;
+  }
+  const head = `命中 <b>${sc.points ?? 0}</b> 个知识点 → 聚合出 <b>${topics.length}</b> 个主题`
+    + (d.total > topics.length ? `（共 ${d.total} 个，按点数取前 ${topics.length}）` : "")
+    + ` <span style="opacity:.55">· 阈值 ${d.threshold}，合并 ${d.merge_threshold}`
+    + `，落单 ${d.singles} 点</span>`;
+  const pointCard = p => {
+    const src = (p.sources || [])[0];
+    return `<div class="pt-card"><div style="line-height:1.6">`
+      + `${_escHtml((p.text || p.summary || "").slice(0, 200))}</div>`
+      + (src ? `<small style="opacity:.6">溯源：<a href="#" class="pt-open" data-eid="${src.entry_id}">`
+        + `${_escHtml(src.title || src.entry_id)}</a></small>` : "")
+      + `</div>`;
+  };
+  box.innerHTML = `<div style="font-size:13px;margin:4px 0 8px">${head}</div>`
+    + topics.map(t => `<details class="topic-row"><summary>`
+      + `<b>${_escHtml(t.name)}</b> <span class="badge">${t.size} 点</span>`
+      + (t.merged > 1 ? `<span class="badge">并 ${t.merged} 簇</span>` : "")
+      + `<small style="opacity:.6"> · 溯源 ${t.sources_count} 条目</small>`
+      + `</summary><div>${(t.points || []).map(pointCard).join("")}</div></details>`).join("");
+  box.querySelectorAll(".pt-open").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    openPreview(a.dataset.eid);
+  });
 }
 
 // ---- 词云视图（第四十三批：scoped cloud 三态词元） ----

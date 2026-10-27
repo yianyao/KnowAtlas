@@ -2067,3 +2067,61 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 <!-- HANDOFF {"at":"2026-10-27T07:20:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-0720","draft":false,"goal":"知识主题二次合并（0.85）+ 命名去重 + 主题视图搜索高亮，已实现并实测","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② #1 分类页检索按主题聚合（需新工单/方案）","not_rerun":"pytest 全量 663/1 与 canary；temp/topic_check.py、temp/edge_*.mjs、两个 topic_*_probe.py","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":78834,"verify":"uv run --with zstandard python tools/session_check.py"} -->
 
 <!-- HANDOFF {"at":"2026-10-27T07:20:12.006886+08:00","compactions":1,"doc":"docs/交接/2026-10-27-0720.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"OK","tokens":82980,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+<!-- HANDOFF {"at":"2026-10-27T12:28:11.582035+08:00","compactions":1,"doc":"docs/交接/2026-10-27-1228.md","draft":true,"goal":"上下文到 CRITICAL（103.6%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"CRITICAL","tokens":152299,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-27 12:45 主题命名补第二词 + 合并迭代 + 检索「主题」tab（R13）
+
+**触发**：用户追问「为什么还有 GRPO（6 点）/ GRPO（4 点）」，并要「分类页检索的主题聚合」方案；
+裁决：命名/合并修复都做 + 检索结果先加「主题」tab（分类浏览开关下一轮）。
+
+### 诊断（真库证据）
+
+| 探针 | 结论 |
+|---|---|
+| `temp/topic_grpo_probe.py` | GRPO 3 簇（6/4/4 点）质心 0.805–0.838 < 0.85，讲的是 应用与 R1 / 定义 / advantage 计算——**不是同一主题，不该并**；MCP 4 簇（12/17/9/2 点）里 17↔9 事后 **0.886 ≥ 0.85 却没并** |
+| `temp/topic_merge_debug.py` | 复现「先比后漂」：单遍贪心只在插入时比一次，之后合并把簇心拉过去 |
+| `temp/topic_samebase_probe.py` | 118 个同主干组、669 个主题；组内 9,428 对里 9,418 对 < 0.85 —— 同词不同簇是常态 |
+
+三件事：① 命名只用 100% 覆盖词，剩 1 个词就退化成 `GRPO（N 点）`；② 合并不是不动点；③ jieba 伪词 `体应`。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `src/knowatlas/pipeline/graph_topics.py` | `_name_candidates`（一次抽词出 100%/60% 两档 + **2 字纯中文必须在 jieba 词典**）；`_topic_name` 补第二词；`_merge_clusters` 迭代到不动点（矩阵化 `U[:k] @ unit`）；`topic_clusters(point_ids=...)` 点域过滤 |
+| `src/knowatlas/web/api.py` | `/api/graph/topics` 加 `q` / `category_id` / `points_limit`，响应加 `scope` |
+| `src/knowatlas/web/static/index.html` | 检索工作台第 4 个 tab「主题」（懒加载 + 展开成员点 + 溯源 openPreview） |
+| `tests/test_graph_topics.py` | 新增 5 例（不动点性质、第二词、伪词、point_ids、`?q=` scope） |
+| `docs/design/变更工单-2026-10-27-主题命名补词与检索聚合.md`、`CHANGELOG.md` | 工单与变更记录 |
+
+### 验证（现场数字）
+
+- 真库：`total` 934 → **933**；top500 重名 **0**、伪词 **0**、泛名 **0**、单词名仅 5 个；
+  全库端点 **4.91 s**（首调 8.03 s，含 jieba 词典 ~3 s 初始化）。
+- `?q=GRPO` → 84 点 **16 主题 / 0.20 s**：`grpo·验证(10) / grpo·kl(5) / grpo·算法(4) / grpo·advantage(4) / grpo·rollout(4) / grpo·训练(3)`
+  （改前是三个 `grpo（N 点）`）；`?q=MCP` → 203 点 **50 主题 / 0.32 s**。
+- 浏览器：检索 GRPO → 4 个 tab（聚合/主题/线索/放射）→ 主题 tab 16 行、头「命中 84 个知识点 → 聚合出 16 个主题」
+  → 展开 10 点 → 点溯源出预览面板。
+- 测试：**668 passed / 1 skipped**（原 663）；canary 零漂移。
+
+### 坑（已写进注释）
+
+`jieba.lcut` 与 posseg 都把 `体应` 当名词，token 校验挡不住；改查 `jieba.dt.FREQ`。
+另：命名原先对同一批文本抽两遍词，改为一次抽词出两档。
+
+### 运行态
+
+`serve` 已重启（新 PID 22584，日志 `%TEMP%\knowatlas-serve.log`）；页面改动要 **Ctrl+F5**。
+
+### 不要重跑
+
+- `pytest` 全量（668/1）与 canary；`temp/topic_r13_check.py`、`temp/topic_r13_names.py`、
+  `temp/edge_topics_tab.mjs`；`temp/topic_grpo_probe.py`、`temp/topic_merge_debug.py`、`temp/topic_samebase_probe.py`。
+
+### 下一步
+
+1. 用户 Ctrl+F5 验收：graph 页主题名、index 页检索「GRPO」→ 主题 tab。
+2. 分类浏览页的「按主题看」开关（同一端点传 `category_id`，后端已就绪，只差 UI）。
+3. 若嫌全库 4.9 s 慢：可加进程内 TTL 缓存（R11 曾记「本轮不做」）。
+
+<!-- HANDOFF {"at":"2026-10-27T12:45:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-1245","draft":false,"goal":"主题命名补第二词 + 合并迭代到不动点 + 检索工作台「主题」tab，已实现并实测","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收 graph 主题名与检索主题 tab；② 分类浏览页「按主题看」开关（后端已就绪）","not_rerun":"pytest 全量 668/1 与 canary；temp/topic_r13_check.py、temp/topic_r13_names.py、temp/edge_topics_tab.mjs、三个 topic_* 探针","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"HANDOFF","tokens":160000,"verify":"uv run --with zstandard python tools/session_check.py"} -->

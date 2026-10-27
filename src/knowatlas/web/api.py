@@ -613,7 +613,9 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
 
     @app.get("/api/graph/topics")
     def graph_topics(limit: int = 80, merge: bool = True,
-                     merge_threshold: float = 0.85):
+                     merge_threshold: float = 0.85,
+                     q: str = "", category_id: str = "",
+                     points_limit: int = 300):
         """知识主题聚合（批次 88，方案 §9：点聚类主题节点，条目退溯源层）。
 
         全库点向量贪心归簇（阈值 0.72），簇 ≥2 点成主题；主题名=成员共享词
@@ -629,11 +631,34 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         归簇后按质心再做一遍贪心合并（`merge`，默认开；`merge_threshold`
         默认 0.85、夹到 0.5–0.99），消掉「同一主题被切成多块」造成的重名；
         响应加 `merge_threshold`/`merged_from` 与每主题 `merged`。
+
+        R13（2026-10-27，工单 变更工单-2026-10-27-主题命名补词与检索聚合.md）：
+        加检索/分类过滤——`q` 走点 FTS（`points_limit` 条召回）、`category_id`
+        走分类子树（条目 → 点），两者给定时取交集；只在点域内聚类（`point_ids`）。
+        响应加 `scope`（本次点域），前端检索工作台据此出「主题」tab。
         """
         from ..pipeline.graph_topics import MAX_LIMIT, topic_clusters
         mt = max(0.5, min(float(merge_threshold), 0.99))
-        return topic_clusters(dl, limit=max(1, min(int(limit), MAX_LIMIT)),
-                              merge=bool(merge), merge_threshold=mt)
+        cap = max(1, min(int(limit), MAX_LIMIT))
+        scope = {"q": q.strip(), "category_id": category_id.strip(),
+                 "mode": "all", "points": 0}
+        pids: set[str] | None = None
+        if scope["category_id"]:
+            eids = [e.id for e in dl.get_entries_for_categories(
+                dl.subtree_category_ids(scope["category_id"]), limit=2000)]
+            by_entry = dl.points_of_entries(eids, text_cap=1)
+            pids = {p["id"] for lst in by_entry.values() for p in lst}
+            scope["mode"] = "category"
+        if scope["q"]:
+            n = max(20, min(int(points_limit), 2000))
+            qids = {h.point_id for h in dl.search_points(scope["q"], limit=n)}
+            pids = qids if pids is None else (pids & qids)
+            scope["mode"] = "category+q" if scope["category_id"] else "q"
+        result = topic_clusters(dl, limit=cap, merge=bool(merge),
+                                merge_threshold=mt, point_ids=pids)
+        scope["points"] = int(result.get("vectors") or 0)
+        result["scope"] = scope
+        return result
 
     @app.post("/api/entries/auto-name")
     def auto_name(request: Request, body: dict = Body(default={})):
