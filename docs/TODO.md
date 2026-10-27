@@ -5,6 +5,33 @@
 > 现状与模块归属见 `docs/模块地图.md`；未来形态见
 > `docs/design/架构-2026-10-27-服务化分层与服务端职责.md`。
 
+## 自主运行口径（2026-10-27 夜，用户授权「做好 todo 后自己开工」）
+
+**执行顺序**（每步 = 一个 commit + 推送，跑完全量再进下一步）：
+
+1. 生成器转正：`tools/gen_docs.py`（含 `--check`）+ `tests/test_docs_in_sync.py`。
+2. 护栏：`test_web_routes.py`（73 端点快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
+3. `cli.py` → `cli/`（7 文件）。
+4. `pipeline/sync.py` → `pipeline/sync/`（5 文件）。
+5. `web/api.py` → `ctx.py` + `routers/`（7 域）。
+6. `datalayer/db.py` → `datalayer/`（10 文件 + mixin；**先验证 `_guard` 的 MRO 扫描**）。
+
+**每步固定验收三条**：
+
+```powershell
+uv run python -m pytest -o addopts= -q          # 期望 715 passed / 1 skipped（新增护栏后条数会增加）
+uv run python -m pytest -o addopts= -q tests/test_canary.py   # 期望零漂移
+git status -sb                                   # 期望只有本步改动
+```
+
+**停止条件（遇到即停，不硬撑）**：
+
+- 全量测试变红 → 不修第二遍：回滚该 commit（`git revert`），把现象写进 `docs/log.md` 再停。
+- `effective_pct ≥ 85%` → 写交接块，停，让用户换会话。
+- 任何一步需要改契约（表/字段/scheme/接口签名/config 键）→ 停下写工单，不自裁。
+
+**红线**：不改 SQL 逐字、不改 URL、不改公开方法名与 CLI 参数、不夹带新功能、不碰 `tools/kpe`。
+
 ## 0. 决策记录（2026-10-27 已定）
 
 ### D1 工具是否都按 kpe 模式独立成仓库？
