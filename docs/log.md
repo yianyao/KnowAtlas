@@ -2494,3 +2494,60 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 
 <!-- HANDOFF {"at":"2026-10-27T22:52:10.799167+08:00","compactions":1,"doc":"docs/交接/2026-10-27-2252.md","draft":true,"goal":"上下文到 HANDOFF（88.2%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":129712,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 
+<!-- HANDOFF {"at":"2026-10-27T23:04:11.496436+08:00","compactions":1,"doc":"docs/交接/2026-10-27-2304.md","draft":true,"goal":"上下文到 CRITICAL（107.3%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"CRITICAL","tokens":157762,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T23:36:10.991816+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2336.md","draft":true,"goal":"会话已被自动压缩 #2","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":103257,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-27 23:45 R19：规划收口（三份参考文档 + 四项决策 + 自主运行口径）
+
+本轮没有再动业务代码，全部是"把该定的定下来、该生成的生成出来"。
+
+### 落地
+
+| 产物 | 内容 |
+|---|---|
+| `docs/参考-命令.md` | 13 个子命令与全部参数（从 `argparse` 解析树生成） |
+| `docs/参考-配置.md` | 59 个键：类型/代码默认/示例值/说明/D-S-T 分类（从 schema+example 生成） |
+| `docs/参考-接口.md` | 73 个端点分 25 组（从 `app.openapi()` 生成）+ 12 个缺 docstring 的待补清单 |
+| `docs/模块地图.md` | 按能力域（A–H）清点：模块、入口、表、稳定性 |
+| `docs/design/方案-2026-10-27-四个大文件拆分.md` | 路线 A：护栏 → cli → sync → api → db，含坑（`_guard` 的 MRO） |
+| `docs/design/ADR-2026-10-27-工具分级与边界.md` | Tier A/B/C 判据、调用方式、pg 不 vendor 的理由 |
+| `docs/design/方案-2026-10-27-配置分层与单一来源.md` | 四类旋钮 + 一份生效文件 + `kconfig` |
+| `docs/TODO.md` | 决策记录 D1–D4 + P0–P4 + **自主运行口径**（顺序/验收/停止条件/红线） |
+
+生成器暂放 `temp/gen_docs_20261027.py`（过程脚本）；转正式 `tools/gen_docs.py` 列在 TODO P2 第 1 条。
+
+### 决策（用户 2026-10-27）
+
+- **D1** 工具不"都独立"，走 Tier A（kpe/session-guard）/ B（clean/eol/embed/gate/export）/ C（datalayer 等）三级。
+- **D2** 不冻结重写，走路线 A 只拆四个大文件。
+- **D3** 配置不按层拆文件，按 D/S/T/I 四类管，一份生效文件（`KNOWATLAS_CONFIG` 本来已支持）。
+- **D4** `pg` 不 vendor，留在 `D:\sData\git\pg`（已 fetch 到 `bf34cf7`，与远端一致）。
+
+### 现场
+
+- 提交：`9e89b9b`（模块地图+TODO）→ `30e239c`（三份设计文档）→ `56f5b68`（三份参考）→ `8328059`（渲染修正）→ `27cfa66`（自主运行口径）。
+- `D:\sData\git\kpe` 已克隆（HEAD `ef0e251`，含 0.2.0）；`tools/kpe` 子树仍在，升级走 `git subtree pull`。
+- 未跑全量测试：本轮零业务代码改动（只加了 `temp/` 脚本与 `docs/`）。
+
+### 下一步（按序，首步可直接执行）
+
+1. 生成器转正：`tools/gen_docs.py`（`--check` 只比对不写）+ `tests/test_docs_in_sync.py`。
+2. 护栏三件：`test_web_routes.py`（73 端点快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
+3. `cli.py` → `cli/`（7 文件）；4. `sync.py` → `sync/`；5. `api.py` → routers；6. `db.py` → mixin。
+4. 详见 `docs/TODO.md`「自主运行口径」。
+
+### 不要重跑
+
+- 三份参考文档已生成（除非源码改了才重跑 `temp/gen_docs_20261027.py`）；
+- 全量 pytest 715/1、canary、`kauto --dry-run`、`git subtree pull tools/kpe`（已在 `ef0e251`）；
+- `pg` 的接入评估（D4 已裁决，别再翻）；`kpe` 克隆（已在 `D:\sData\git\kpe`）。
+
+### 已知失败与处理
+
+- 本会话 23:04 已到 `effective_pct=107%` 并被自动压缩 #2；当前 73.1%（107,434 tokens）。
+  **不要在本会话继续大改**，开新会话说「继续」。
+- `watcher` 会写 `draft:true` 的交接块（23:36 那条），那是上下文事件，不是工作交接——读本文上面这条。
+
+<!-- HANDOFF {"at":"2026-10-27T23:45:30+08:00","compactions":2,"doc":"docs/log.md#2026-10-27-2345-r19规划收口三份参考文档--四项决策--自主运行口径","draft":false,"goal":"规划收口：三份自动生成参考（命令/配置/接口）+ D1–D4 决策 + 路线 A 拆分方案；下一步按 TODO 自主开工","host":"dsh","kind":"handoff","next":"① tools/gen_docs.py --check + test_docs_in_sync.py；② 护栏三件（routes/cli/datalayer 快照）；③ cli.py 拆包；④ sync.py 拆包；⑤ api.py 拆 routers；⑥ db.py 拆 mixin","not_rerun":"三份参考文档已生成；全量 pytest 715/1 与 canary；kauto --dry-run --limit 5；git subtree pull tools/kpe（ef0e251）；pg 接入评估（D4 已定不 vendor）","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":107434,"verify":"uv run python -m pytest -o addopts= -q -> 715 passed, 1 skipped"} -->
