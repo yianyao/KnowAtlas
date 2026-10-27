@@ -33,6 +33,14 @@ REJECT_COOLING_DAYS = 30
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 _ORIGINS = ("prior", "rule", "embedding", "llm", "manual")
 
+# IN (...) 批量读的分片大小（SQLite 变量上限 999；留余量，且单条 SQL 不宜过长）
+_IN_CHUNK = 400
+
+# 「转正」动作：pending→active 走 web 批量转正（bulk_activate），rejected→active
+# 走恢复（restore）。fetch 候选的「刚转正优先」就读这两类 task_log（见
+# activation_times）——不改表、不新增 meta 键。
+_ACTIVATION_ACTIONS = ("bulk_activate", "restore")
+
 
 def _consumable(alias: str = "e") -> str:
     """消费面守卫 SQL 片段（0.2.0 第三十六批，带前导 AND）。
@@ -446,6 +454,43 @@ class DataLayer:
                 "UPDATE entries SET status=? WHERE id=?",
                 [(status, eid) for eid in entry_ids],
             )
+
+    def status_map(self, entry_ids: Sequence[str]) -> dict[str, str]:
+        """批量读条目状态：id → status（只含库中存在的 id）。
+
+        用途：`--fetch-limit` 候选口径（变更工单-2026-10-27-fetch候选口径与定向补抓）
+        ——采集器视图没有真实 status，预算必须按库内状态分配，否则 rejected/pending
+        会白吃尝试次数。
+        """
+        ids = list(dict.fromkeys(entry_ids))
+        out: dict[str, str] = {}
+        for i in range(0, len(ids), _IN_CHUNK):
+            part = ids[i:i + _IN_CHUNK]
+            marks = ",".join("?" * len(part))
+            for r in self._conn.execute(
+                    f"SELECT id, status FROM entries WHERE id IN ({marks})", part):
+                out[r["id"]] = r["status"]
+        return out
+
+    def activation_times(self, entry_ids: Sequence[str]) -> dict[str, str]:
+        """条目最近一次「转正」时间：id → task_log.at（只含有过转正记录的 id）。
+
+        为什么读 task_log 而不是 meta：转正此前没有落 meta（只有舍弃会写
+        rejected_at），task_log 是唯一既有的审计链；MAX(at) 即最近一次转正。
+        时间戳同源（CLI/web 都写 _now_iso，+08:00），故字符串比较等价时间比较。
+        """
+        ids = list(dict.fromkeys(entry_ids))
+        out: dict[str, str] = {}
+        for i in range(0, len(ids), _IN_CHUNK):
+            part = ids[i:i + _IN_CHUNK]
+            marks = ",".join("?" * len(part))
+            actions = ",".join(f"'{a}'" for a in _ACTIVATION_ACTIONS)  # 常量，非用户输入
+            for r in self._conn.execute(
+                    "SELECT target, MAX(at) AS at FROM task_log"
+                    f" WHERE action IN ({actions}) AND target IN ({marks})"
+                    " GROUP BY target", part):
+                out[r["target"]] = r["at"]
+        return out
 
     def archive_missing(self, source_type: str, seen_ids: set[str], run_id: str) -> list[str]:
         """删除检测（§3.6）：全量遍历型源本次未见且 active 的条目 → archived，不物理删除。"""

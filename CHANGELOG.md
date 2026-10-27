@@ -4,6 +4,38 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · fetch 候选口径（只取 active + 转正优先）与 `--entry` 定向补抓补抽（2026-10-27，R17）
+
+- **为什么**：R16 排查发现 `--fetch-limit N` 的 N 是**尝试次数**预算，但候选来自采集器视图、
+  不看库内 status——老 rejected（真库 22 条仍带正文的 ebook 系列）排在前面就白吃预算；用户
+  19:33 转正 3 条链接后跑 `--fetch-limit 1`，三条的 `fetch_status` 一条都没写。另一侧
+  `run_points_extract(entry_ids=…)` 早就有（批次 70），但 CLI 没入口，定向补抓补抽只能改代码
+  调内部函数。
+- **候选口径**（`pipeline/sync.py::_fetch_candidates`）：只取库里 `status='active'`；**刚转正的排
+  最前**（读 `task_log` 的 `bulk_activate`/`restore` 取 `MAX(at)`——不动表、不新增 `meta` 键）；
+  统计新增 `fetch_mode` / `fetch_candidates` / `fetch_skipped_non_active` / `fetch_promoted_first`。
+- **datalayer**（`datalayer/db.py`）：新增只读 `status_map()` 与 `activation_times()`（批量 IN，
+  400/片，SQL 仍只在 datalayer）。
+- **定向**（`cli.py` + `run_sync(entry_ids=…)`）：`ksync --entry ID`（可重复）只处理点名条目、
+  按命令行顺序、**不看状态**、默认补抓（受 `--fetch-limit` 收紧）且**不归档**（定向 ≠ 全量遍历，
+  `--full` 在该模式不生效）；`kpoints --entry ID`（可重复）串联既有 `run_points_extract(entry_ids=…)`，
+  默认上限 = 点名条数。源里找不到的 id 落 `stats.targeted.missing_ids`，不静默当成功。
+- **契约**：表结构 / 字段集 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS`
+  零变更；接口签名新增（`run_sync(..., entry_ids=None)` + 两个 CLI 参数）；输出新增统计键（只增）。
+  canary 零漂移。
+- **测试**：新增 `tests/test_entry_targeted.py` 8 例；全量 **694 passed / 1 skipped**（原 686）。
+- **真库实测**（2026-10-27 21:4x）：`ksync --source folders --entry 515abb4f9757c923 --fetch-limit 1`
+  → `entries 1 / fetched 1 / targeted{requested:1,matched:1,missing_ids:[]}`；非定向
+  `--fetch-limit 3` → `fetch_mode=active`、`fetch_candidates 65`、`fetch_skipped_non_active 2`、
+  `fetched 3`；`kpoints --entry 10a8dc83468f8fce --dry-run` → `processed 1 / limit 1`（跑完
+  points 仍 4,965，dry-run 零写入）。
+- **配置清理**（只改 `config/knowatlas.toml`，gitignore）：`[sources.folders].exclude_globs` 清掉
+  `agentic-design-patterns-main` 的 7 个 root 元文件（AGENTS / CLAUDE / CONTRIBUTING / README /
+  OPTIMIZE_README / PROJECT_STRUCTURE + `chapters/README`，实测 **0 点 0 正文**）；
+  `ksync --source folders --full` → `skipped_excluded 7`、`archived 7`、folders **74 → 67**、
+  active **83 → 76**、archived **75 → 82**、points 仍 4,965（无知识损失）。
+- **工单**：`docs/design/变更工单-2026-10-27-fetch候选口径与定向补抓.md`。
+
 ### 变更工单 · 长网页分块抽取（管道内切块取代「6k 以上一律交 kpe」，2026-10-27，R16）
 
 - **为什么**：用户裁决「长网页肯定要分块的」。真库 55 条正文里 **16 条落在 6,001–60,000 字**，旧口径一律

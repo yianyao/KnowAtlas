@@ -39,7 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     ksync.add_argument("--dry-run", action="store_true", help="只探测源可达性，不写库")
     ksync.add_argument("--limit", type=int, default=None)
     ksync.add_argument("--fetch-limit", type=int, default=None,
-                       help="显式开启本次抓取，最多 N 条（默认 on_sync=false 不抓）")
+                       help="显式开启本次抓取，最多 N 条（默认 on_sync=false 不抓；"
+                            "候选只取 active，刚转正的排最前）")
+    ksync.add_argument("--entry", action="append", metavar="ENTRY_ID", default=None,
+                       help="定向补抓：只处理指定条目（可重复）——不看状态、默认抓正文，"
+                            "且不归档（定向≠全量遍历，--full 在此模式下不生效）")
     ksync.add_argument("--reclassify", action="store_true",
                        help="对库中全部条目重跑分类（跳过人工校正过的；[llm] 启用且 key 已设时走 LLM 语义分类）")
     ksync.add_argument("--value-scan", action="store_true",
@@ -110,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
                               "--limit 0 仅 purge）")
     kpoints.add_argument("--dry-run", action="store_true",
                          help="只判定与报告，不写库（split 切点的 LLM 费用照常发生）")
+    kpoints.add_argument("--entry", action="append", metavar="ENTRY_ID", default=None,
+                         help="定向补抽：只抽指定条目（可重复）。注意沿用批次 70 语义——"
+                              "跳过游标、会重新调用 LLM（点 hash 相同只归并溯源，不重复建点）；"
+                              "想先看费用用 --dry-run")
     kpoints.add_argument("--purge-points", action="store_true",
                          help="先清空点层（points/point_sources）再抽取——形态判定口径"
                               "变更后的推倒重来；条目与原文零影响")
@@ -282,6 +290,7 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
         stats = run_sync(cfg, dl, locators, semantics, full=args.full,
                          source=args.source, dry_run=args.dry_run,
                          limit=args.limit, fetch_limit=args.fetch_limit,
+                         entry_ids=args.entry,
                          reclassify=args.reclassify, value_scan=args.value_scan,
                          dedupe_scan=args.dedupe_scan,
                          freshness_scan=args.freshness_scan,
@@ -554,10 +563,15 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     setup_logging(cfg.log_level)
-    limit = 10 if args.limit is None else args.limit
+    # 定向补抽（--entry）的默认上限 = 点名条数：用户点名几条就抽几条，
+    # 不被「抽取默认 10」这个池子口径悄悄截断。
+    if args.limit is None:
+        limit = len(args.entry) if args.entry else 10
+    else:
+        limit = args.limit
     if args.triage:
-        if args.purge_points or args.retry_blocked:
-            print("ERROR --triage 不能与 --purge-points / --retry-blocked 同用"
+        if args.purge_points or args.retry_blocked or args.entry:
+            print("ERROR --triage 不能与 --purge-points / --retry-blocked / --entry 同用"
                   "（清点/重抽请单独跑）")
             return _EXIT_USAGE
         return _cmd_kpoints_triage(cfg, args)
@@ -572,6 +586,7 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
                 return _EXIT_OK
         stats = run_points_extract(cfg, dl, limit=max(1, limit),
                                    dry_run=args.dry_run,
+                                   entry_ids=args.entry,
                                    retry_blocked=args.retry_blocked)
     finally:
         dl.close()

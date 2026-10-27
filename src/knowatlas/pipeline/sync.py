@@ -572,9 +572,39 @@ def _freshness_scan(dl: Any, dry_run: bool) -> dict[str, Any]:
     return stats
 
 
+def _fetch_candidates(dl: Any, entries: list[Entry], *,
+                      entry_ids: list[str] | None = None,
+                      ) -> tuple[list[Entry], dict[str, Any]]:
+    """补抓候选（变更工单-2026-10-27-fetch候选口径与定向补抓 §2.1）。
+
+    默认（非定向）：只留库里 status='active' 的条目，且**刚转正的排最前**。
+    为什么：`--fetch-limit N` 的 N 是**尝试次数**预算，而采集器视图按采集顺序给出
+    全部条目（含 pending/rejected/archived）；老的 rejected 排在前面就会白吃预算
+    （R16 排查：22 条 rejected 仍有正文，用户 19:33 转正的 3 条一条没抓到）。
+    定向（entry_ids）：不看 status（用户点名即抓，可补 rejected/待审），按点名顺序。
+
+    返回 (候选列表, 统计键)；统计键只增，供 ksync 报告展示。
+    """
+    if entry_ids:
+        order = {eid: i for i, eid in enumerate(entry_ids)}
+        picked = sorted((e for e in entries if e.id in order),
+                        key=lambda e: order[e.id])
+        return picked, {"fetch_mode": "entry", "fetch_candidates": len(picked)}
+    statuses = dl.status_map([e.id for e in entries])
+    active = [e for e in entries if statuses.get(e.id) == "active"]
+    promoted = dl.activation_times([e.id for e in active])
+    first = [e for e in active if promoted.get(e.id)]
+    first.sort(key=lambda e: promoted[e.id], reverse=True)  # 稳定排序：同刻保持源顺序
+    rest = [e for e in active if not promoted.get(e.id)]
+    return first + rest, {"fetch_mode": "active", "fetch_candidates": len(active),
+                          "fetch_skipped_non_active": len(entries) - len(active),
+                          "fetch_promoted_first": len(first)}
+
+
 def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              full: bool = False, source: str | None = None, dry_run: bool = False,
              limit: int | None = None, fetch_limit: int | None = None,
+             entry_ids: list[str] | None = None,
              reclassify: bool = False, value_scan: bool = False,
              dedupe_scan: bool = False,
              freshness_scan: bool = False, errata_scan: bool = False,
@@ -589,6 +619,9 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
     purge_source 非空时先物理删除该源全部条目再同步（emmx 全删重灌，方案 §7.8）——
     顺序保证：前快照后清除（backup_on_sync 快照失败即中止，没快照不动手）；
     dry_run 只探测不删除。
+    entry_ids（变更工单-2026-10-27-fetch候选口径与定向补抓 §2.2）：定向模式，只处理
+    点名条目（顺序按命令行，不看 status，用户点名即抓）；**不归档**（定向 ≠ 全量遍历，
+    即使带 full 也跳过 archive_missing），默认触发补抓（受 fetch_limit 上限约束）。
     """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
@@ -641,6 +674,7 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             stats["purge"] = dl.purge_source(stype, reason=purge_reason,
                                              task_name="ksync")
 
+    targeted_missing: set[str] = set()  # 定向模式下源扫描里找不到的点名 id（跨源合并）
     for name, collector in _BATCH_COLLECTORS.items():
         if source is not None and source != name:
             continue
@@ -654,6 +688,18 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             continue
 
         entries: list[Entry] = list(out.entries)
+        # 定向模式（变更工单-2026-10-27-fetch候选口径与定向补抓 §2.2）：只留点名 id，
+        # 顺序按命令行；先过滤再套 limit（否则 limit 可能把点名条目截掉）。
+        if entry_ids:
+            order = {eid: i for i, eid in enumerate(entry_ids)}
+            seen = {e.id for e in entries}
+            targeted_missing.update(eid for eid in entry_ids if eid not in seen)
+            entries = sorted((e for e in entries if e.id in order),
+                             key=lambda e: order[e.id])
+            if not entries:
+                # 本源的扫描结果里一个都没有：不写 upsert/分类（定向只补点名的那些），
+                # 缺失 id 统一在循环后按全局口径报（跨源去重，不按源重复刷存在感）。
+                continue
         if limit is not None:
             entries = entries[:limit]
         if dry_run:
@@ -734,32 +780,44 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             "unchanged": result.unchanged, "deduped": deduped, **mail_stats,
             **cat, **out.stats,
         }
-        if full:
+        if full and not entry_ids:
+            # 定向模式不归档（定向 ≠ 全量遍历）：只处理点名条目时「没出现」不代表
+            # 源里删了东西——照 full 口径会把整源其余条目错误归档。
             archived = dl.archive_missing(
                 source_type=_SOURCE_TYPE_BY_NAME.get(name, name),
                 seen_ids={e.id for e in entries}, run_id=run_id)
             src_stats["archived"] = len(archived)
-        if fetch_limit:
-            fstats = _fetch_missing(cfg, dl, locators,
-                                    [e for e in entries if e.id not in pending_ids],
-                                    fetch_limit, run_id)  # pending 不抓正文（省钱+省时）
-            fetched_ids = fstats.pop("fetched_ids")
-            src_stats.update(fstats)
-            if fetched_ids:
-                # 抓到正文的条目**当场重分类**（update 语义=先摘机器旧挂接再重挂，
-                # 人工校正不动）——否则正文晚于分类一步，要再跑一次全量 reclassify
-                with_content = [dl.get_entry(eid) for eid in fetched_ids]
-                src_stats["post_fetch"] = _categorize(
-                    dl, semantics, cfg, [e for e in with_content if e is not None],
-                    set(), set(fetched_ids), run_id)
-                # 补抓拿到正文后 content_hash 才可用——当场判重（hash 命中即合并）
-                fetched_live = [e for e in with_content if e is not None]
-                src_stats["post_fetch_deduped"] = dedupe_entries(dl, fetched_live)
+        if fetch_limit or entry_ids:
+            # 候选口径（工单 §2.1）：默认只取 active 且刚转正的排最前；定向模式按点名
+            # 顺序不看 status。pending 由此天然排除（status 过滤），不再单列 pending_ids。
+            cand, finfo = _fetch_candidates(dl, entries, entry_ids=entry_ids)
+            src_stats.update(finfo)
+            # 定向模式默认补抓（点名即补完），预算 = 命中条数；fetch_limit 仍可收紧。
+            budget = fetch_limit if fetch_limit else len(cand)
+            if budget > 0:
+                fstats = _fetch_missing(cfg, dl, locators, cand, budget, run_id)
+                fetched_ids = fstats.pop("fetched_ids")
+                src_stats.update(fstats)
+                if fetched_ids:
+                    # 抓到正文的条目**当场重分类**（update 语义=先摘机器旧挂接再重挂，
+                    # 人工校正不动）——否则正文晚于分类一步，要再跑一次全量 reclassify
+                    with_content = [dl.get_entry(eid) for eid in fetched_ids]
+                    src_stats["post_fetch"] = _categorize(
+                        dl, semantics, cfg, [e for e in with_content if e is not None],
+                        set(), set(fetched_ids), run_id)
+                    # 补抓拿到正文后 content_hash 才可用——当场判重（hash 命中即合并）
+                    fetched_live = [e for e in with_content if e is not None]
+                    src_stats["post_fetch_deduped"] = dedupe_entries(dl, fetched_live)
         stats["sources"][name] = src_stats
 
     if not stats["sources"]:
         stats["note"] = ("无可同步的已启用批量源：在 config/knowatlas.toml 启用"
                          " [sources.bookmarks] 等源，或用 kadd 手动收录")
+    if entry_ids:
+        # 定向模式报告（工单 §2.2）：点名几个、命中几个、哪些源里根本没有。
+        stats["targeted"] = {"requested": len(entry_ids),
+                             "matched": len(entry_ids) - len(targeted_missing),
+                             "missing_ids": sorted(targeted_missing)}
 
     # 老化删除出口（第六十三批，方案 §7.5）：ksync 顺手执行——冷却期满（30 天）
     # 的 rejected 条目物理删除（人裁过的才进冷却；引用计数回收 + 审计留痕）。
