@@ -4,6 +4,36 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 长网页分块抽取（管道内切块取代「6k 以上一律交 kpe」，2026-10-27，R16）
+
+- **为什么**：用户裁决「长网页肯定要分块的」。真库 55 条正文里 **16 条落在 6,001–60,000 字**，旧口径一律
+  落 `points_pending_kpe` 等人工跑 `tools/kpe`（要先落本地文件），实际结局是 **0 点**：
+  `4.架构与构建多智能体系统` 52,442 字、`Obsidian-AI-v1.0.0` 47,821 字、`6.为智能体处理记忆与知识RAG` 43,548 字……
+  1–6 万字恰是「长博文/技术报告/一章文档」的常态，为它们备文件跑 kpe 代价太高。
+- **管道**（`pipeline/points.py`）：新增 `_chunk_body()`（切点优先级 空行 → 换行 → 句末标点 → 硬切，
+  只在窗口后 40% 找切点避免尾块过短）与常量 `_CHUNK_TOTAL_MAX = 60000`；分流改三段——
+  `≤6,000` 单次抽取不变 / `6,001–60,000` **逐块**跑同一套形态判定并把点合并回同一条目 /
+  `>60,000` 仍落 `points_pending_kpe` 交 kpe（几十块 × LLM 又贵又慢，书走离线分块）。
+  **LLM 未启用时不切块**（照抄 6,000 字/块无提炼价值），维持等 kpe。
+- **溯源**：块的 `char_offset` 加块起点偏移 → 仍是**全文坐标**（点级反查按它高亮原文）；`anchor` 不变。
+  跨块重复点由现有 `point_hash` + `put_point` 归并（重复只增 `points_linked`）。
+- **`_candidates`**：`points_pending_kpe` 标记只在 `chars > _CHUNK_TOTAL_MAX` 时才跳过候选——
+  旧标记（6k–60k）这一轮会被消化掉，成功后写 `meta.points_chunked={chunks,chars,at}` 并清 `points_pending_kpe`。
+- **CLI**（`cli.py`）：`kpoints` 报告新增 `CHUNK n 条长文在管道内分块抽取（m 块…）` 一行；PENDING 文案改成
+  「超过分块上限 60,000 字」。
+- **契约**：表结构 / 字段集 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` /
+  能力注册表 / 接口签名**零变更**；`meta` 新增 `points_chunked`（只增），`kpoints` 输出新增
+  `chunked` / `chunks_total`（只增）。canary 零漂移。
+- **测试**：新增 `tests/test_points_chunk.py` 7 例（切块偏移逐字可还原、不丢字、段落优先、超长段硬切、
+  6k–60k 分块产点且偏移落全文、>60k 仍 pending、LLM 未启用不切块）；`tests/test_points.py` 4 例旧阈值
+  （6,000）就地改成 70,000 以对齐新口径。全量 **686 passed / 1 skipped**（原 679）。
+- **真库实测**（备份 `temp/knowledge-before-chunk-20261027.db`，131 MB）：16 条长文一次性跑完 ——
+  `chunked 16 / chunks_total 108 / points_created 383 / points_linked 0 / points_rejected 2 / pending_kpe 0`，
+  总点数 **4,582 → 4,965**；单条最多 `4.架构与构建多智能体系统` **101 点**（52,442 字 / 9 块），
+  掘金那篇 30,534 字的排序算法长文 **14 点**；溯源偏移抽检 475 条命中、**0 条错位**（另 580 条无偏移：
+  点文本是 LLM 提炼、非逐字摘引，与旧口径同因）。
+- **工单**：`docs/design/变更工单-2026-10-27-长网页分块抽取.md`。
+
 ### 变更工单 · EMMX v14 二进制页解析（A1：页级扁平抽取，零 LLM）（2026-10-27，R15）
 
 - **为什么**：MindMaster 14.x 把节点树写进 `mmpage/page*.bin` 私有二进制，`page/` 只剩空目录，适配器只认 9.x `page/page.xml` → 真库 emmx 长期 **1 条降级条目 / 0 点**（TODO 8.7 卡了三天）。用户裁决「批准 A1」：先做**确定性页级抽取**，不赌层级。

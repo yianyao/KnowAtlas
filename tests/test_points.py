@@ -368,26 +368,27 @@ def test_pipeline_dry_run_writes_nothing(cfg, dl):
 
 
 def test_pipeline_long_body_goes_pending_kpe(cfg, dl):
-    """P3（2026-10-26）：正文 > _BODY_CAP 不再截断抽点，落 meta.points_pending_kpe 交 kpe。
+    """P3（2026-10-26）+ R16（2026-10-27）：正文 > _CHUNK_TOTAL_MAX 不再截断抽点，
+    落 meta.points_pending_kpe 交 kpe；6k–60k 已改在管道内分块（见 test_points_chunk）。
 
     旧口径（截断 6,000 字照抽）产出的点会「假装覆盖全文」——下游分诊/勘误据此判错源头。
     """
-    e = _long_body_entry(dl, 9000, "pt-long-0001")
+    e = _long_body_entry(dl, 70000, "pt-long-0001")
     _attach_lit(dl, [e])  # split 路径：旧口径会截断后送 LLM
     llm = FakeLlm([_SPLIT_ONLY_REPLY])
     stats = run_points_extract(cfg, dl, limit=5, llm=llm)
     assert stats["pending_kpe"] == 1
-    assert stats["pending_kpe_detail"][0]["chars"] == 9000
+    assert stats["pending_kpe_detail"][0]["chars"] == 70000
     assert stats["processed"] == 0 and stats["points_created"] == 0
     assert llm.calls == []                            # 零 LLM 调用：不截断硬抽
     assert dl.count_points() == 0
     flag = dl.get_entry(e.id).meta["points_pending_kpe"]
-    assert flag["chars"] == 9000 and flag["at"]
+    assert flag["chars"] == 70000 and flag["at"]
 
 
 def test_pending_kpe_is_idempotent(cfg, dl):
     """标记在 → 下一轮直接跳过（不重复读全文、不重复写、零 LLM）。"""
-    _long_body_entry(dl, 9000, "pt-long-0002")
+    _long_body_entry(dl, 70000, "pt-long-0002")
     run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_SPLIT_ONLY_REPLY]))
     llm2 = FakeLlm([_SPLIT_ONLY_REPLY])
     stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2)
@@ -399,7 +400,7 @@ def test_pending_kpe_is_idempotent(cfg, dl):
 
 def test_retry_blocked_does_not_bypass_pending_kpe(cfg, dl):
     """--retry-blocked 只绕过候选过滤，长文仍转 kpe（不退回截断抽点）。"""
-    _long_body_entry(dl, 9000, "pt-long-0003")
+    _long_body_entry(dl, 70000, "pt-long-0003")
     run_points_extract(cfg, dl, limit=5, llm=FakeLlm([_SPLIT_ONLY_REPLY]))
     llm2 = FakeLlm([_SPLIT_ONLY_REPLY])
     stats2 = run_points_extract(cfg, dl, limit=5, llm=llm2, retry_blocked=True)
@@ -409,7 +410,7 @@ def test_retry_blocked_does_not_bypass_pending_kpe(cfg, dl):
 
 def test_long_body_dry_run_writes_no_flag(cfg, dl):
     """dry-run 只报账不写标记（改口径后仍可重跑观察）。"""
-    e = _long_body_entry(dl, 9000, "pt-long-0004")
+    e = _long_body_entry(dl, 70000, "pt-long-0004")
     stats = run_points_extract(cfg, dl, limit=5, llm=FakeLlm([]), dry_run=True)
     assert stats["pending_kpe"] == 1
     assert "points_pending_kpe" not in dl.get_entry(e.id).meta

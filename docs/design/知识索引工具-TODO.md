@@ -594,6 +594,10 @@ reader: 执行者（人与 agent）
       `5.智能体推理与规划` **49 点**、AI-Agents-in-Depth **571 点**、agentic-design-patterns **420 点**；
       全库 4,552 点、`judge` 全为 `split`、点级检索已生效（`/api/search` 返回点优先）。
       **因此 P3 只剩 `_entry_body` 一项**（防未来新条目退化）。
+- [x] **R16（2026-10-27）长网页分块**：6k–60k 改为**管道内切块**（`_chunk_body`，段落优先，块 ≤6,000），
+      逐块抽取后点合并回同一条目；`>60,000` 仍交 `tools/kpe`。成功写 `meta.points_chunked` 并清旧 `points_pending_kpe`，
+      溯源 `char_offset` 折算回全文。工单 `变更工单-2026-10-27-长网页分块抽取.md`；
+      全量 686 passed / 1 skipped；真库 16 条 → **383 新点**（4,582 → 4,965），`pending_kpe 0`。
 
 ### P4 · 点级图（wiki 式关联）——**已实施（2026-10-26）**
 

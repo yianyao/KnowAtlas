@@ -4,8 +4,10 @@
 
 链路：候选条目（active、有正文、未抽过）→ **骨架守门**（批次 92：页面骨架
 正文 merge_meta body_flag=skeleton 跳过切片——degraded 不切片，宁缺毋脏）
-→ **长文分流**（P3，2026-10-26：正文 > `_BODY_CAP` 不截断抽点，落
-meta.points_pending_kpe 交 `tools/kpe` 分块 + `kpeimport` 入库——截断的点会
+→ **长文分流**（P3 2026-10-26 + R16 2026-10-27，变更工单-2026-10-27-长网页
+分块抽取）：正文 > `_CHUNK_TOTAL_MAX`（60,000）落 meta.points_pending_kpe 交
+`tools/kpe` 分块 + `kpeimport` 入库；`_BODY_CAP`（6,000）– 60,000 之间在管道内
+按段落切块逐块抽取、点合并回同一条目（`meta.points_chunked`）——截断的点会
 「假装覆盖全文」，下游分诊/勘误据此判错源头）
 → **形态判定=三路确定性规则**：
 - 文学创作类（分类祖先链含锚词）→ forced split：LLM 只提炼切点不判定；
@@ -53,9 +55,10 @@ from .point_gate import gate_point
 
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _WS = re.compile(r"\s+")
-_BODY_CAP = 6000      # 管道单次上限：正文超过即交 kpe 分块（P3，2026-10-26）
+_BODY_CAP = 6000      # 管道单次上限：正文超过即分块（P3 2026-10-26；R16 起改为管道内切块）
+_CHUNK_TOTAL_MAX = 60000  # 分块上限：≤ 此值在管道内切块抽取；超过（书/长报告）仍交 kpe
 # 为什么不再截断：截断后的点会「假装覆盖全文」，下游 P0 分诊/ P1 勘误据此判错源头。
-# 长文一律落 meta.points_pending_kpe，由 tools/kpe 分块抽取后 kpeimport 入库。
+# 6k–60k 管道内分块；> _CHUNK_TOTAL_MAX 才落 meta.points_pending_kpe 交 tools/kpe。
 _MIN_BODY_CHARS = 50  # 短于此的正文跳过（无点可抽）
 _POINT_BODY_CAP = 20000  # integral 点 text 上限（零 LLM 不心疼 token，保真优先）
 _SPLIT_CATEGORY_HINT = "文学创作"  # 用户口径：此分类子树 = 知识点（切），其余 = 方案
@@ -112,6 +115,41 @@ def _entry_body(dl: Any, entry: Any) -> str:
     return body
 
 
+def _chunk_body(body: str, limit: int = _BODY_CAP) -> list[tuple[int, str]]:
+    """把正文切成 ≤limit 的块，返回 [(块起点在全文的偏移, 块文本)]。
+
+    切点优先级：空行（段落）→ 换行 → 句末标点 → 硬切。只在窗口后 40% 之后找切点，
+    避免切出极短的尾块。偏移必须是**全文坐标**：点溯源 char_offset 要靠它回到原文。
+    短正文原样返回一块（偏移 0），调用方据此判断是否真的分块了。
+    """
+    if len(body) <= limit:
+        return [(0, body)]
+    chunks: list[tuple[int, str]] = []
+    start = 0
+    n = len(body)
+    while start < n:
+        end = min(start + limit, n)
+        if end < n:
+            floor = start + int(limit * 0.6)
+            window = body[floor:end]
+            pos = window.rfind("\n\n")
+            end = floor + pos + 2 if pos >= 0 else end
+            if pos < 0:
+                pos = window.rfind("\n")
+                end = floor + pos + 1 if pos >= 0 else end
+            if pos < 0:
+                pos = max(window.rfind("。"), window.rfind("！"), window.rfind("？"),
+                          window.rfind(". "), window.rfind("；"))
+                end = floor + pos + 1 if pos >= 0 else end
+        chunk = body[start:end]
+        lead = len(chunk) - len(chunk.lstrip())
+        text = chunk.strip()
+        if text:
+            chunks.append((start + lead, text))
+        start = end
+    return chunks
+
+
 def _candidates(dl: Any, limit: int,
                 only_ids: list[str] | None = None,
                 retry_blocked: bool = False) -> tuple[list[Any], dict[str, int]]:
@@ -138,11 +176,14 @@ def _candidates(dl: Any, limit: int,
                 and e.meta.get("points_gate")):
             skipped["gate_blocked"] += 1
             continue
-        # 长文已交 kpe（P3）：标记在则不再重复读全文，等 kpeimport 清标记
+        # 长文已交 kpe（P3）：只有**分块也吃不下**（> _CHUNK_TOTAL_MAX）才不再进候选；
+        # 6k–60k 的条目留给管道内分块（R16），旧标记会被这一轮消化掉。
         if (only_ids is None and not retry_blocked
                 and e.meta.get("points_pending_kpe")):
-            skipped["pending_kpe"] += 1
-            continue
+            pend = e.meta.get("points_pending_kpe") or {}
+            if int(pend.get("chars") or 0) > _CHUNK_TOTAL_MAX:
+                skipped["pending_kpe"] += 1
+                continue
         if str(e.meta.get("value_flag", "")) == "not_knowledge":
             skipped["not_knowledge"] += 1
             continue
@@ -256,6 +297,9 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                              "points_rejected": 0, "gate_blocked": 0,
                              "reject_reasons": {}, "rejected": [],
                              "pending_kpe": 0, "pending_kpe_detail": [],
+                             # R16 长网页分块：chunked=走了分块的条目数，
+                             # chunks_total=块数合计（费用近似=块数 × 1 次调用）
+                             "chunked": 0, "chunks_total": 0,
                              "errors": []}
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
     try:
@@ -280,11 +324,10 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
             if (not dry_run and (entry_ids or retry_blocked)
                     and e.meta.get("points_gate")):
                 dl.merge_meta(e.id, {"points_gate": None})
-            # points_pending_kpe 不在此清：长文只有 kpe 分块 + kpeimport 才能真正解决，
-            # 清掉只会让下一轮重复读全文再打回标记（--retry-blocked 对它等同空转）。
-            # 长文分流（P3）：一次调用吃不下，截断=假装覆盖全文 → 不抽点，交 kpe。
-            # 宁缺勿脏（与骨架守门同哲学）；kpeimport 落地时清此标记。
-            if len(body) > _BODY_CAP:
+            # 长文分块（R16，变更工单 2026-10-27）：6k–60k 在管道内按段落切块、逐块抽取，
+            # 点合并回同一条目；> 60,000 仍交 kpe（几十块 × LLM 又贵又慢，书走离线分块）。
+            # LLM 未启用时长文也不分块：照抄 6,000 字/块的点没有提炼价值，仍等 kpe。
+            if len(body) > _CHUNK_TOTAL_MAX or (len(body) > _BODY_CAP and llm is None):
                 stats["pending_kpe"] += 1
                 if len(stats["pending_kpe_detail"]) < _REJECTED_DETAIL_CAP:
                     stats["pending_kpe_detail"].append(
@@ -293,7 +336,8 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                 if not dry_run:
                     dl.merge_meta(e.id, {"points_pending_kpe": {
                         "chars": len(body), "at": _now_iso(),
-                        "why": "正文超过管道单次上限，请用 tools/kpe 分块抽取后 kpeimport"}})
+                        "why": "正文超过管道分块上限（或 LLM 未启用），"
+                               "请用 tools/kpe 分块抽取后 kpeimport"}})
                 continue
             # 条目级形态覆盖（批次 70）：meta.force_form 优先于目录/分类规则——
             # "integral" 强制合（文学创作/杂烩也整条即点）；"split" 强制拆
@@ -301,84 +345,88 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
             force = str(e.meta.get("force_form", "")).strip().lower()
             is_split = force == "split" or (not force and e.id in split_ids)
             is_mixed = not force and e.id in mixed_ids
-            if is_split:
-                stats["force_overrides"] += 1 if force == "split" else 0
-                if llm is None:
-                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
-                                            "error": "split 需 LLM 切点但 llm 未启用"})
-                    continue
-                res = point_extract.run(
-                    {"entry_id": e.id, "title": e.title,
-                     "source_type": e.source_type, "body": body,
-                     "forced_judge": "split"},
-                    TaskContext(run_id=run_id, llm=llm))
-                if not res.get("llm_used"):
-                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
-                                            "error": res.get("error", "llm 未产出")})
-                    continue
-            elif is_mixed:
-                # 杂烩目录（批次 67 目录信号）：走 LLM 形态判定（宁整勿碎偏置，
-                # judge 可 integral 可 split）——只取消 forced 豁免，不 forced split
+            if force:
+                stats["force_overrides"] += 1
+            if is_split and llm is None:
+                stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
+                                        "error": "split 需 LLM 切点但 llm 未启用"})
+                continue
+            if is_mixed:
                 stats["mixed_dir"] += 1
                 if llm is None:
                     stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
                                             "error": "杂烩目录需 LLM 判定但 llm 未启用"})
                     continue
-                res = point_extract.run(
-                    {"entry_id": e.id, "title": e.title,
-                     "source_type": e.source_type, "body": body},
-                    TaskContext(run_id=run_id, llm=llm))
-                if not res.get("llm_used"):
-                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
-                                            "error": res.get("error", "llm 未产出")})
-                    continue
-            elif llm is not None:
-                # integral 提炼（批次 92 裁决 12：概要/全文照抄 → LLM 整理后的
-                # 知识陈述；正文已保证 ≤ _BODY_CAP，长文在上方就转 kpe 了）
-                stats["force_overrides"] += 1 if force == "integral" else 0
-                res = point_extract.run(
-                    {"entry_id": e.id, "title": e.title,
-                     "source_type": e.source_type, "body": body,
-                     "forced_judge": "integral"},
-                    TaskContext(run_id=run_id, llm=llm))
-                if not res.get("llm_used"):
-                    stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
-                                            "error": res.get("error", "llm 未产出")})
-                    continue
-            else:
-                # 降级：LLM 未启用 → 照抄保真（原文零风险；理由注明未经提炼）
-                res = _integral_result(e, body)
-            # 自洽性闸门（TODO 8.5，用户裁决 1）：LLM 产出的每个点独立复核——
-            # 裸名词/步骤残缺/截断/未闭合代码块不落库（不污染检索·词云·关系图），
-            # 只留统计与审计。降级照抄（llm_used=False）不过闸：那不是"抽出来的
-            # 点"，且 LLM 恢复后必须允许重抽（否则长文 [截断] 会被永久阻断）。
+
+            chunks = _chunk_body(body)
+            chunked = len(chunks) > 1
+            judge: str = ""
+            accepted: list[dict[str, Any]] = []
             entry_reasons: dict[str, int] = {}
-            if res.get("llm_used"):
-                accepted: list[dict[str, Any]] = []
-                for p in res["points"]:
-                    gate = gate_point(p["text"])
-                    if gate.ok:
-                        accepted.append(p)
-                        continue
-                    stats["points_rejected"] += 1
-                    entry_reasons[gate.reason] = entry_reasons.get(gate.reason, 0) + 1
-                    stats["reject_reasons"][gate.reason] = (
-                        stats["reject_reasons"].get(gate.reason, 0) + 1)
-                    if len(stats["rejected"]) < _REJECTED_DETAIL_CAP:
-                        stats["rejected"].append({
-                            "entry_id": e.id, "title": str(e.title)[:40],
-                            "reason": gate.reason, "text": str(p["text"])[:40]})
-                if not accepted:
-                    # 全拒 / LLM 明确返回空点：记 points_gate 防下一轮重复烧钱；
-                    # dry-run 不写库（改口径后可重跑观察，不锁死条目）。
-                    if not dry_run:
-                        dl.merge_meta(e.id, {"points_gate": {
-                            "status": "blocked",
-                            "reasons": entry_reasons or {"no_point": 1},
-                            "at": _now_iso()}})
-                    stats["gate_blocked"] += 1
-                    continue
-                res = {**res, "points": accepted}
+            res: dict[str, Any] = {}
+            aborted = False
+            for base, piece in chunks:
+                if llm is None:
+                    # 降级：LLM 未启用 → 照抄保真（原文零风险；理由注明未经提炼）
+                    res = _integral_result(e, piece)
+                else:
+                    payload: dict[str, Any] = {"entry_id": e.id, "title": e.title,
+                                               "source_type": e.source_type, "body": piece}
+                    if is_split:
+                        payload["forced_judge"] = "split"
+                    elif not is_mixed:
+                        payload["forced_judge"] = "integral"
+                    res = point_extract.run(payload, TaskContext(run_id=run_id, llm=llm))
+                    if not res.get("llm_used"):
+                        stats["errors"].append({"entry_id": e.id, "title": e.title[:40],
+                                                "error": res.get("error", "llm 未产出")})
+                        aborted = True
+                        break
+                judge = "split" if (judge == "split" or res["judge"] == "split") else res["judge"]
+                # 自洽性闸门（TODO 8.5，用户裁决 1）：LLM 产出的每个点独立复核——
+                # 裸名词/步骤残缺/截断/未闭合代码块不落库（不污染检索·词云·关系图），
+                # 只留统计与审计。降级照抄（llm_used=False）不过闸：那不是"抽出来的
+                # 点"，且 LLM 恢复后必须允许重抽（否则长文 [截断] 会被永久阻断）。
+                if res.get("llm_used"):
+                    for p in res["points"]:
+                        gate = gate_point(p["text"])
+                        if gate.ok:
+                            accepted.append({**p, "_base": base, "_piece": piece})
+                            continue
+                        stats["points_rejected"] += 1
+                        entry_reasons[gate.reason] = entry_reasons.get(gate.reason, 0) + 1
+                        stats["reject_reasons"][gate.reason] = (
+                            stats["reject_reasons"].get(gate.reason, 0) + 1)
+                        if len(stats["rejected"]) < _REJECTED_DETAIL_CAP:
+                            stats["rejected"].append({
+                                "entry_id": e.id, "title": str(e.title)[:40],
+                                "reason": gate.reason, "text": str(p["text"])[:40]})
+                else:
+                    accepted.extend({**p, "_base": base, "_piece": piece}
+                                    for p in res["points"])
+            if aborted:
+                continue
+            if not accepted:
+                # 全拒 / LLM 明确返回空点：记 points_gate 防下一轮重复烧钱；
+                # dry-run 不写库（改口径后可重跑观察，不锁死条目）。
+                if not dry_run:
+                    dl.merge_meta(e.id, {"points_gate": {
+                        "status": "blocked",
+                        "reasons": entry_reasons or {"no_point": 1},
+                        "at": _now_iso()}})
+                stats["gate_blocked"] += 1
+                continue
+            if chunked:
+                stats["chunked"] += 1
+                stats["chunks_total"] += len(chunks)
+            had_pend = bool(e.meta.get("points_pending_kpe"))
+            if (chunked or had_pend) and not dry_run:
+                patch: dict[str, Any] = {"points_pending_kpe": None}
+                if chunked:
+                    patch["points_chunked"] = {"chunks": len(chunks),
+                                               "chars": len(body), "at": _now_iso()}
+                dl.merge_meta(e.id, patch)
+            res = {**res, "judge": judge or "integral", "points": accepted}
             stats["processed"] += 1
             stats[res["judge"]] = stats.get(res["judge"], 0) + 1
             for p in res["points"]:
@@ -393,8 +441,13 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                          "summary": p.get("summary", ""),
                          "source_type": e.source_type, "judge": res["judge"],
                          "meta": {"judge_reason": res.get("reason", "")}}
+                # 分块条目的偏移要加块起点：char_offset 永远是**全文**坐标
+                # （原文侧点链接按它高亮，分块不得让锚点退回块内相对位置）。
+                piece = p.get("_piece") or body
+                off = _offset_of(anchor_src[:50], piece)
+                char_offset = (int(p.get("_base") or 0) + off) if off is not None else None
                 source = {"entry_id": e.id,
-                          "char_offset": _offset_of(anchor_src[:50], body),
+                          "char_offset": char_offset,
                           "anchor": anchor_src[:120]}
                 if dry_run:
                     if ph in dry_seen:

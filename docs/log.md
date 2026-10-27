@@ -2277,3 +2277,40 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 
 <!-- HANDOFF {"at":"2026-10-27T19:58:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-r15-续emmx-v14-二进制页解析落地a1用户裁决批准-a1","draft":false,"goal":"EMMX v14 二进制页解析 A1 落地：8 条目 / 1,786 块 / 27 点，树形浏览可开合，679 passed / 1 skipped","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 打开「原型/作用域/闭包/箭头函数」条目验收扁平树与正文；② 若要层级→按工单 §4-A2 开时间盒逆向；③ 文心V1 两页长文按需走 tools/kpe","not_rerun":"全量 pytest 679/1 与 canary；ksync --source emmx --full；kpoints --limit 8；temp/probe_emmx_* 探针","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"WARN","tokens":117491,"verify":"uv run python -m pytest -o addopts= -q -> 679 passed, 1 skipped"} -->
 
+<!-- HANDOFF {"at":"2026-10-27T19:50:11.584155+08:00","compactions":1,"doc":"docs/交接/2026-10-27-1950.md","draft":true,"goal":"上下文到 HANDOFF（86.4%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"HANDOFF","tokens":127011,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T19:52:11.605692+08:00","compactions":1,"doc":"docs/交接/2026-10-27-1952.md","draft":true,"goal":"上下文到 CRITICAL（98.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"CRITICAL","tokens":144254,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T20:40:10.842077+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2040.md","draft":true,"goal":"会话已被自动压缩 #2","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"OK","tokens":93814,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T20:54:10.899493+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2054.md","draft":true,"goal":"上下文到 HANDOFF（86.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"HANDOFF","tokens":126548,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-27 R16：长网页分块抽取 + 重复版本清理（HANDOFF）
+
+**目标**：用户裁决「长网页肯定要分块的」，把 6k–60k 字正文从「交 kpe」改成管道内分块；顺带清掉同一本书的重复版本目录。
+
+**已完成**
+1. 长网页分块（工单 `docs/design/变更工单-2026-10-27-长网页分块抽取.md`）
+   - `pipeline/points.py`：新增 `_chunk_body()` + `_CHUNK_TOTAL_MAX=60000`；三段分流（≤6k 单次 / 6k–60k 逐块 / >60k 仍 pending_kpe）；LLM 未启用不切块；`char_offset` 加块起点偏移 → 全文坐标；`_candidates` 只在 chars>60000 时跳过 pending_kpe；成功写 `meta.points_chunked` 并清旧标记。
+   - `cli.py`：kpoints 报告新增 `CHUNK …` 行，PENDING 文案改「超过分块上限 60,000 字」。
+   - 测试：新增 `tests/test_points_chunk.py` 7 例；`test_points.py` 4 例旧阈值 6,000 → 70,000。全量 **686 passed / 1 skipped**（原 679）。
+   - 真库实测（备份 `temp/knowledge-before-chunk-20261027.db`）：16 条 6k–60k → `chunked 16 / chunks_total 108 / points_created 383 / linked 0 / rejected 2 / pending_kpe 0`，总点数 **4,582 → 4,965**；`4.架构与构建多智能体系统` 101 点（52,442 字）、掘金排序算法长文 14 点；溯源偏移抽检 475 命中 / 0 错位（580 条无偏移=提炼文本非逐字引句，旧有成因）。
+2. 重复版本清理（只改 `config/knowatlas.toml`，gitignore，不涉及代码）
+   - `[sources.folders].exclude_dirs` 加 `agentic-design-patterns-main/{bilingual,original,_includes,_layouts,images}`（留 `chapters` 中文版）。
+   - `ksync --source folders --full` → folders entries **148 → 74**，`archived 74`、`skipped_dir 5`；全库 active **83 / archived 75 / pending 132 / rejected 78**，points 仍 **4,965**（被归档的 74 条本来 0 点，无知识损失）；`人工智能` 挂接 **104 → 46**。
+3. 顺带修掉的真问题（本轮排查结论，未改代码）
+   - 用户 19:33 转正 3 条链接后三条命令没生效的真因：① 那个 shell 没导入用户级 `KNOWATLAS_LLM_API_KEY`，掘金这类需 DeepSeek 兜底抓取的页面直接失败；② `--fetch-limit N` 的候选**包含 rejected 老条目**（不只看转正的），`N=1` 很容易被排在前面、早被舍弃的链接用掉——用户三条当时连 `fetch_status` 都没写，说明尝试没落在它们身上。
+   - 已用生产函数定向补齐那 3 条（`_fetch_missing` + `_categorize` + `run_points_extract(entry_ids=…)`）：掘金 30,534 字/技术开发、两条 Git 各 1 点/后端；`runs` 表留 `targeted-*`。
+
+**下一步（按序）**
+1. 用户验收：`serve` 已运行（`http://127.0.0.1:8420`），刷新后看那 16 条长文的点数（如 `4.架构与构建多智能体系统` 101 点）与点级反查高亮是否落在正确段落。
+2. 若接受分块粒度 → 考虑把 `_CHUNK_TOTAL_MAX` 从 60,000 放大（>60k 现有 10 条仍 pending，最大 2.5 MB 的书不建议放进来）。
+3. 建议新增两项能力（**要开单，未做**）：① `--fetch-limit` 候选只取 active 且「刚转正优先」（现含 56 条 rejected 无正文条目，会白烧额度）；② `ksync/kpoints --entry ID`（可重复）做定向补抓补抽。
+4. `人工智能` 里还剩 46 条，其中 root 元文件（AGENTS/CLAUDE/CONTRIBUTING/README/PROJECT_STRUCTURE/OPTIMIZE_README）可考虑 `exclude_globs` 清掉。
+
+**不要重跑**：全量 pytest（686/1 已跑）；16 条长文的分块抽取（383 点已入库，重跑会重复烧 LLM）；`ksync --source folders --full`（74 条已归档）；emmx v14 探针。
+
+**验证命令**：`uv run python -m pytest -o addopts= -q` → `686 passed, 1 skipped`；`uv run python -m pytest tests/test_canary.py -o addopts= -q` → 5 passed。
+
+<!-- HANDOFF {"at":"2026-10-27T21:05:00+08:00","compactions":2,"doc":"docs/log.md#2026-10-27-r16长网页分块抽取--重复版本清理handoff","draft":false,"goal":"R16 长网页分块落地（16 条长文 → 383 新点，4,582→4,965）并清掉同一本书的 74 条重复版本（folders 148→74）","host":"dsh","kind":"handoff","next":"① 刷新 8420 验收 16 条长文的点数与点级反查高亮；② 决定是否放大 _CHUNK_TOTAL_MAX=60000；③ 开单做「--fetch-limit 只取 active 且转正优先」与「--entry 定向补抓/补抽」","not_rerun":"全量 pytest 686/1 与 canary；16 条长文分块抽取（383 点已入库）；ksync --source folders --full；emmx v14 探针","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"HANDOFF","tokens":129252,"verify":"uv run python -m pytest -o addopts= -q -> 686 passed, 1 skipped"} -->
