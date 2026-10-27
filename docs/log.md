@@ -2315,3 +2315,73 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 
 <!-- HANDOFF {"at":"2026-10-27T21:05:00+08:00","compactions":2,"doc":"docs/log.md#2026-10-27-r16长网页分块抽取--重复版本清理handoff","draft":false,"goal":"R16 长网页分块落地（16 条长文 → 383 新点，4,582→4,965）并清掉同一本书的 74 条重复版本（folders 148→74）","host":"dsh","kind":"handoff","next":"① 刷新 8420 验收 16 条长文的点数与点级反查高亮；② 决定是否放大 _CHUNK_TOTAL_MAX=60000；③ 开单做「--fetch-limit 只取 active 且转正优先」与「--entry 定向补抓/补抽」","not_rerun":"全量 pytest 686/1 与 canary；16 条长文分块抽取（383 点已入库）；ksync --source folders --full；emmx v14 探针","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"HANDOFF","tokens":129252,"verify":"uv run python -m pytest -o addopts= -q -> 686 passed, 1 skipped"} --><!-- HANDOFF {"at":"2026-10-27T21:00:10.966252+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2100.md","draft":true,"goal":"上下文到 CRITICAL（98.0%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"CRITICAL","tokens":144153,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 
+<!-- HANDOFF {"at":"2026-10-27T21:36:11.523130+08:00","compactions":0,"doc":"docs/交接/2026-10-27-2136.md","draft":true,"goal":"上下文到 HANDOFF（88.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-577f2a0f-70ec-450a-9b9b-e093d7771413","status":"HANDOFF","tokens":129499,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T21:38:11.051787+08:00","compactions":0,"doc":"docs/交接/2026-10-27-2138.md","draft":true,"goal":"上下文到 CRITICAL（95.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-577f2a0f-70ec-450a-9b9b-e093d7771413","status":"CRITICAL","tokens":140695,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-27 R17：fetch 候选口径（只取 active + 转正优先）+ `--entry` 定向补抓补抽 + root 元文件清理
+
+**开场**：`session_check` → NEW_SESSION（上一交接 `session-588aa31e` @21:00:10 CRITICAL）；
+`context_probe` → effective 11.4%（16,754 / 147,059）。用户「继续」→ 我按交接块把三条待决项量清后，
+用户裁决「③a+③b+④ 一起做」。
+
+### ① 待决项裁决前的只读结论（②已关掉）
+
+- **② 放大 `_CHUNK_TOTAL_MAX`：不做**。10 条 >60k 里 9 条早就有 kpe 产物（1373/820/571/420/315/93/81/78 点），
+  只剩 `labuladong的算法秘籍V2.7`（469,435 字 / 0 点 / `points_pending_kpe`）——书该走 `tools/kpe`，
+  不该把管道上限抬到 47 万字（≈78 块 × LLM）。
+- **③ 确诊**：`_fetch_missing` 按采集顺序遍历、不看库内 status；真库 22 条 rejected 仍带正文（ebook 系列），
+  用户 19:33 转正的 3 条跑 `--fetch-limit 1` 一条没抓到。
+- **④ 量清**：`agentic-design-patterns-main` 的 7 个 root 元文件 **0 点 0 正文**，清掉零损失。
+
+### ② 落地（工单 `docs/design/变更工单-2026-10-27-fetch候选口径与定向补抓.md`）
+
+| 文件 | 内容 |
+|---|---|
+| `pipeline/sync.py` | 新增 `_fetch_candidates`（只取 active；转正时间降序排前；定向按点名顺序不看 status）；`run_sync(..., entry_ids=None)`；定向模式**不归档**、默认补抓、`stats.targeted{requested,matched,missing_ids}` |
+| `datalayer/db.py` | 新增只读 `status_map()` / `activation_times()`（批量 IN 400/片；转正时间读 `task_log` 的 `bulk_activate`/`restore`，不动表不新增 meta） |
+| `cli.py` | `ksync --entry` / `kpoints --entry`（可重复）；kpoints 定向时默认上限=点名条数；`--triage` 与 `--entry` 互斥 |
+| `tests/test_entry_targeted.py` | 8 例：候选只取 active / 转正优先 / 定向不看状态 / 端到端 `--fetch-limit 1` 不吃 rejected / 定向不归档 / missing_ids / kpoints 定向 / CLI 可重复 |
+
+### ③ 验证（现场数字）
+
+- 全量 `pytest -o addopts= -q` → **694 passed / 1 skipped**（原 686 + 8）；canary 零漂移。
+- 真库 `ksync --source folders --entry 515abb4f9757c923 --fetch-limit 1` → `entries 1 / fetched 1 /
+  post_fetch.classified 1 / targeted{requested:1,matched:1,missing_ids:[]}`。
+- 真库非定向 `ksync --source folders --fetch-limit 3` → `fetch_mode=active`、`fetch_candidates 65`、
+  `fetch_skipped_non_active 2`、`fetched 3`。
+- 真库 `kpoints --entry 10a8dc83468f8fce --dry-run` → `processed 1 / limit 1`；跑完 points 仍 **4,965**（零写入）。
+- ④ `[sources.folders].exclude_globs`（config 侧，gitignore）7 条 → `ksync --source folders --full`：
+  `skipped_excluded 7`、`archived 7`、folders **74 → 67**、active **83 → 76**、archived **75 → 82**、points 仍 4,965。
+- 提交：`d9a92b5`（代码+测试+CHANGELOG+工单）、本块随后的 docs 提交。
+
+### 下一步（按序，首步可直接执行）
+
+1. **用户 Ctrl+F5 验收**（仍未做过的两项）：`graph.html` ◆点层 → 点节点 → 🔍 反查 → 溯源条目「打开原文」开 PDF；
+   分类页模式条「🧠 按主题」→ 展开主题 → 溯源。serve 在跑（8420），本轮只改 CLI/管道，页面无需重启。
+2. `kpoints --entry 10a8dc83468f8fce`（去掉 `--dry-run`）把 glossary 真抽一次（1 次 LLM 调用）。
+3. 剩余可选方向：`labuladong`（469k 字）走 `tools/kpe`；8.1b trafilatura 换装 A/B；Phase B 三凭证源（B站/IMA/腾讯文档，等凭证）；
+   打包安装（Phase 5 仍 `[ ]`）。
+
+### 不要重跑
+
+- 全量 pytest（694/1）与 canary；`ksync --source folders --full`（7 条已归档）；`ksync --fetch-limit 3`（3 条已抓）；
+  `kpoints --entry 10a8dc83468f8fce --dry-run`（已验证）；`temp/probe_r16_state*.py`、`probe_meta_files.py`、
+  `probe_targeted_candidates.py`、`probe_points_targets.py`、`probe_dryrun_nowrite.py`。
+- 交接块里「② 放大 `_CHUNK_TOTAL_MAX`」已裁决**不做**，别再量。
+
+### 验证命令
+
+```powershell
+uv run python -m pytest -o addopts= -q                     # 694 passed, 1 skipped
+uv run python -m knowatlas ksync --source folders --dry-run # folders 67 条、skipped_excluded 7
+uv run --with zstandard python tools/context_probe.py      # 本会话 effective 98.5%（CRITICAL）
+```
+
+### 会话指纹
+
+`session-577f2a0f-70ec-450a-9b9b-e093d7771413`，compactions=0，tokens=144,802，baseline 147,059，
+effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
+
+<!-- HANDOFF {"at":"2026-10-27T21:40:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-27-r17fetch-候选口径只取-active--转正优先-entry-定向补抓补抽--root-元文件清理","draft":false,"goal":"R17 落地：fetch 候选只取 active + 转正优先、ksync/kpoints --entry 定向补抓补抽、root 元文件归档 7 条（694 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收反查「打开原文」与分类页「按主题」；② kpoints --entry 10a8dc83468f8fce 真抽 glossary；③ 可选：labuladong 走 kpe / 8.1b / Phase B 凭证源 / 打包安装","not_rerun":"全量 pytest 694/1 与 canary；ksync --source folders --full；ksync --fetch-limit 3；kpoints --entry 10a8dc83468f8fce --dry-run；temp/probe_r16_state*、probe_meta_files、probe_targeted_candidates、probe_points_targets、probe_dryrun_nowrite","schema":1,"session":"session-577f2a0f-70ec-450a-9b9b-e093d7771413","status":"CRITICAL","tokens":144802,"verify":"uv run python -m pytest -o addopts= -q -> 694 passed, 1 skipped"} -->
