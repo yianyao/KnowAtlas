@@ -503,13 +503,15 @@ def test_mcp_handlers_ast_readonly():
     import ast
     from pathlib import Path
 
-    src = Path("src/knowatlas/web/api.py").read_text(encoding="utf-8")
-    tree = ast.parse(src)
+    # 2026-10-28：api.py 拆成 web/ctx.py + web/routers/ 后，扫整个 web 包
+    # （断言不变：仍必须恰好找到三个 handler，且无任何写操作）
     handlers = {}
-    for node in ast.walk(tree):
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name in ("mcp_search", "mcp_tree", "mcp_entry")):
-            handlers[node.name] = node
+    for path in sorted(Path("src/knowatlas/web").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name in ("mcp_search", "mcp_tree", "mcp_entry")):
+                handlers[node.name] = node
     assert set(handlers) == {"mcp_search", "mcp_tree", "mcp_entry"}
 
     write_methods = {

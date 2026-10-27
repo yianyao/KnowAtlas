@@ -2653,3 +2653,48 @@ canary 零漂移，三份参考 `gen_docs --check` 仍 OK。
 2. `datalayer/db.py` 3,194 行 → 10 文件 + mixin；**先改 `_guard` 的扫描为 `mro`**，否则锁静默失效。
 
 <!-- HANDOFF {"at":"2026-10-28T01:36:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0135-r21路线-a-第-3-步sync-拆包","draft":false,"goal":"路线 A 进度：护栏+cli+sync 已落地（720/1）；剩 api.py 拆 routers 与 db.py 拆 mixin","host":"dsh","kind":"handoff","next":"① web/api.py 拆 ctx.py+routers/（URL 逐字，test_web_routes 兜底）；② datalayer/db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档；护栏三件；cli 拆包；sync 拆包（已提交，含第四道跨模块自检）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"OK","tokens":26000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
+
+## 2026-10-28 01:42 R22：路线 A 第 4 步（api.py 拆 routers）
+
+### 落地
+
+`web/api.py` 1,952 行 → `web/ctx.py` 25 行 + `web/routers/` 7 域（`entries` 665 / `threads` 363 /
+`knowledge` 361 / `discovery` 226 / `graph` 190 / `admin` 168 / `categories` 124）+ `api.py` 103 行。
+
+- `ctx.py`：`AppCtx(cfg, dl, locators, semantics)` + `_now_iso`（原来 4 个闭包变量 + 时间助手）。
+- `routers/<域>.py`：`def register(ctx) -> APIRouter`，函数体逐字搬迁，只改装饰器
+  （`@app.get('/api/x')` → `@router.get('/x')`，前缀由 `include_router(prefix='/api')` 补回）。
+- `api.py` 只剩 façade + 安全层（`token_fingerprint` / `check_write_access` / `_port_of` /
+  `install_security_middleware` 原样保留，`cmd_ops` 的 `from ..web.api import token_fingerprint` 不受影响）。
+- 安全助手用**函数内 import**（`from ..api import check_write_access`），避免 api↔routers 循环。
+
+### 与方案文档的两处事实性偏离
+
+1. **没有 `serializers.py`**：方案设想有跨域 `*_payload` 助手；实际只有 4 个域内助手
+   （`_file_*` 属 entries、`_synth_items` 属 knowledge、`_topics_cached` 属 graph、`_thread_payload` 属 threads）
+   与 1 个函数内 import，均无跨域复用 → 各留本域，不建空文件。
+2. `AppCtx` **没有 `token_fp` 字段**：没有 handler 需要它（令牌校验只在 `check_write_access` 里），
+   加了就是假契约。
+
+### 拆分器与自检（`temp/split_api_20261028.py`）
+
+五道自检：编译 / **路由清单 (method,path,handler) 73→73 逐条一致** / 每域内部顺序=原顺序子序列 /
+自由名全部可解析 / 搬走的函数与赋值语句**去装饰器后 AST 逐字等价**（相对 import 点数归一化后比较）。
+
+规则化处理：注释随其后语句迁移、跨模块依赖按 owner 自动补 import、模块级常量 `_TOPICS_TTL/_MAX`
+连注释搬进 `graph.py`、域内顺序原样保留（`/api/entries/linkage` 仍在 `/{entry_id}` 之前）。
+
+### 顺带修的护栏
+
+`tests/test_web_api.py::test_mcp_handlers_ast_readonly` 原先把 `src/knowatlas/web/api.py` 写死，
+拆完会找不到 handler。改为扫 `src/knowatlas/web/**/*.py`，断言强度不变（仍须恰好 3 个且无写操作）。
+
+### 验收
+
+全量 **720 passed / 1 skipped**；canary 零漂移；三份参考 `gen_docs --check` 全 OK。
+
+### 下一步
+
+`datalayer/db.py` 3,194 行 → 10 文件 + mixin；**先改 `_guard` 的扫描为 `mro`**，否则锁静默失效。
+
+<!-- HANDOFF {"at":"2026-10-28T01:43:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0142-r22路线-a-第-4-步api-拆-routers","draft":false,"goal":"路线 A 进度：护栏+cli+sync+api 已落地（720/1）；只剩 db.py 拆 mixin","host":"dsh","kind":"handoff","next":"① datalayer/db.py：先把 _guard 扫描改成 mro（否则 mixin 拆分后锁失效）；② 按方案拆 10 文件+mixin；③ 全量 pytest 期望 720/1；④ 提交推送","not_rerun":"三份参考文档；护栏三件；cli/sync/api 拆包（均已提交）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"OK","tokens":52000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->

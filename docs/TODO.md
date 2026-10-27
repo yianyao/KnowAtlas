@@ -18,7 +18,9 @@
 4. ✅ `pipeline/sync.py` → `pipeline/sync/`（2026-10-28 01:3x）：6 文件（`__init__` 276 / `enrich` 273 /
    `fetch` 155 / `store` 108 / `_common` 42 / `flags` 40）；函数体逐字搬迁，`run_sync` 与 5 个私有入口路径不变；
    坑：兄弟模块符号要显式 import，否则运行期 `NameError`（已在脚本里加第四道自检）。全量仍 **720 passed / 1 skipped**。
-5. `web/api.py` → `ctx.py` + `routers/`（7 域）。
+5. ✅ `web/api.py` → `web/ctx.py` + `web/routers/`（2026-10-28 01:4x）：7 域（`entries` 665 / `threads` 363 /
+   `knowledge` 361 / `discovery` 226 / `graph` 190 / `admin` 168 / `categories` 124），`api.py` 只剩 103 行
+   façade + 安全层。URL/响应逐字不变（路由清单 73→73 逐条比对），函数体 AST 逐字等价。全量仍 **720 passed / 1 skipped**。
 6. `datalayer/db.py` → `datalayer/`（10 文件 + mixin；**先验证 `_guard` 的 MRO 扫描**）。
 
 **每步固定验收三条**：
@@ -117,7 +119,7 @@ git status -sb                                   # 期望只有本步改动
 - [x] 护栏：`test_web_routes.py`（73 条路由快照）、`test_cli_surface.py`、`test_datalayer_surface.py`（`cc0e556`）。
 - [x] `cli.py` 775 → `cli/`（8 文件，`454ff1b`）。
 - [x] `pipeline/sync.py` 861 → `pipeline/sync/`（6 文件，2026-10-28 01:3x）。
-- [ ] `web/api.py` 1,799 → `web/ctx.py` + `web/routers/`（7 域）。
+- [x] `web/api.py` 1,952 → `web/ctx.py` + `web/routers/`（7 域，2026-10-28 01:4x；`api.py` 103 行）。
 - [ ] `datalayer/db.py` 3,194 → `datalayer/`（10 文件 + mixin；**注意 `_guard` 的 MRO 扫描坑**）。
 
 次要重构：
