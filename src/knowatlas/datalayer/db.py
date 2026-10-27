@@ -121,11 +121,18 @@ class DataLayer:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.execute("PRAGMA busy_timeout=5000")
-        # 实例级串行化：公开方法统一加锁（RLock 可重入，事务方法自行持锁）
-        for name, fn in vars(type(self)).items():
-            if name.startswith("_") or name == "transaction" or not callable(fn):
-                continue
-            setattr(self, name, functools.partial(self._guard, fn))
+        # 实例级串行化：公开方法统一加锁（RLock 可重入，事务方法自行持锁）。
+        # 必须扫整个 MRO：拆分后 DataLayer 只做组合，方法都在各 mixin 里；
+        # 只扫 vars(type(self)) 会让父类方法漏包 → 锁静默失效。按 name 去重，派生类优先。
+        seen: set[str] = set()
+        for klass in type(self).__mro__[:-1]:
+            for name, fn in vars(klass).items():
+                if name.startswith("_") or name == "transaction" or not callable(fn):
+                    continue
+                if name in seen:
+                    continue
+                seen.add(name)
+                setattr(self, name, functools.partial(self._guard, fn))
 
     def _guard(self, fn, *args, **kwargs):
         with self._lock:

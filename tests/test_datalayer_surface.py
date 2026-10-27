@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+import functools
+import inspect
+import random
 import tempfile
 import tomllib
 from pathlib import Path
@@ -49,7 +52,7 @@ EXPECTED = frozenset({
 })
 
 
-def _public_methods() -> frozenset[str]:
+def _make_dl() -> DataLayer:
     example = ROOT / "config" / "knowatlas.example.toml"
     data = tomllib.loads(example.read_text(encoding="utf-8"))
     tmp = Path(tempfile.mkdtemp(prefix="ka-dl-"))
@@ -61,6 +64,11 @@ def _public_methods() -> frozenset[str]:
     })
     dl = DataLayer(cfg.db_path)
     dl.init_schema()
+    return dl
+
+
+def _public_methods() -> frozenset[str]:
+    dl = _make_dl()
     try:
         return frozenset(
             n for n in dir(dl) if not n.startswith("_") and callable(getattr(dl, n))
@@ -78,3 +86,81 @@ def test_datalayer_surface_is_unchanged() -> None:
         f"  少了：{sorted(missing)}\n"
         f"  多了：{sorted(extra)}"
     )
+
+
+class _LockSpy:
+    """记录 RLock 的获取次数与最大重入深度；其余属性透传真实锁。"""
+
+    def __init__(self, inner) -> None:
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "depth", 0)
+        object.__setattr__(self, "acquires", 0)
+
+    def __enter__(self):
+        object.__setattr__(self, "depth", self.depth + 1)
+        object.__setattr__(self, "acquires", self.acquires + 1)
+        return self._inner.__enter__()
+
+    def __exit__(self, *exc):
+        object.__setattr__(self, "depth", self.depth - 1)
+        return self._inner.__exit__(*exc)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+def _zero_arg_methods(dl: DataLayer) -> set[str]:
+    """类层面看签名（实例上的属性是 functools.partial(self._guard, fn)，签名已被 *args 吞掉）。"""
+    out: set[str] = set()
+    for name in dir(type(dl)):
+        if name.startswith("_"):
+            continue
+        member = getattr(type(dl), name)
+        if not callable(member):
+            continue
+        try:
+            params = [
+                p for p in inspect.signature(member).parameters.values()
+                if p.name not in ("self", "cls")
+            ]
+        except (TypeError, ValueError):
+            continue
+        if all(p.default is not inspect.Parameter.empty or p.kind in (
+            inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD
+        ) for p in params):
+            out.add(name)
+    return out
+
+
+def test_public_methods_are_lock_guarded() -> None:
+    """`_guard` 必须按 MRO 扫到每个公开方法。
+
+    拆分 `db.py` 成 mixin 后，若 `__init__` 只扫 `vars(type(self))`，父类方法收不到
+    `_guard`，锁静默失效——并发测试不一定抓得住，所以这里静态断言「每个公开方法都是
+    包装后的 partial」，再随机抽 3 个零参方法实测调用期间确实持锁（_guard 用 RLock）。
+    """
+    dl = _make_dl()
+    try:
+        wrapped = {n for n, v in vars(dl).items() if isinstance(v, functools.partial)}
+        public = {
+            n for n in dir(type(dl))
+            if not n.startswith("_") and callable(getattr(type(dl), n))
+        }
+        unwrapped = public - {"transaction"} - wrapped
+        assert not unwrapped, f"未加锁的公开方法（MRO 扫描漏了）：{sorted(unwrapped)}"
+
+        candidates = sorted(_zero_arg_methods(dl) - {"close", "transaction"})
+        assert len(candidates) >= 3
+        picks = random.Random(20261028).sample(candidates, 3)
+        spy = _LockSpy(dl._lock)
+        dl._lock = spy
+        try:
+            for name in picks:
+                before = spy.acquires
+                getattr(dl, name)()
+                assert spy.acquires > before, f"{name}() 调用期间未持有 self._lock"
+                assert spy.depth == 0, f"{name}() 退出后锁未释放（depth={spy.depth}）"
+        finally:
+            dl._lock = spy._inner
+    finally:
+        dl.close()
