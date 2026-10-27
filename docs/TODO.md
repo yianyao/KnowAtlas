@@ -5,52 +5,45 @@
 > 现状与模块归属见 `docs/模块地图.md`；未来形态见
 > `docs/design/架构-2026-10-27-服务化分层与服务端职责.md`。
 
-## 0. 待你决策（阻塞后续规划，先别动代码）
+## 0. 决策记录（2026-10-27 已定）
 
 ### D1 工具是否都按 kpe 模式独立成仓库？
 
-**建议：不要"都独立"，按三条判据分级。**
+**已定：不"都独立"，按三级策略（Tier A/B/C）执行。**
+落地文件：`docs/design/ADR-2026-10-27-工具分级与边界.md`（判据 C1–C5、各层职责、
+调用方式、新增/升级流程、复查触发条件）。
 
-| 判据（同时满足 ≥3 条才独立） | 命中的候选 |
-|---|---|
-| ① 有独立消费者（脱离主库也能用） | kpe ✅、session-guard ✅、清洗器（可能） |
-| ② 依赖重/可选/平台相关（不该拖累主装） | kpe（pdfplumber）✅、embedding 后端（可能） |
-| ③ 输入输出是文件/HTTP，不是 Python 对象 | kpe ✅、导出器（可能） |
-| ④ 有独立发布节奏与版本语义 | kpe ✅、session-guard ✅ |
-| ⑤ 可离线单测（零 DB、零主配置） | kpe ✅、clean ✅、eol 表 ✅ |
-
-结论（**Tier 策略**，写进后续规范）：
-
-- **Tier A 独立仓库**（现在就两个）：`kpe`、`session-guard`。以后只增「文件进文件出 + 重依赖」的。
-- **Tier B 内部包但禁反向依赖**（保留在主仓库，用 `__init__` 暴露稳定 API、测试隔离）：
-  `clean`、`semantic/eol`、`semantic/embed`、`point_gate`、`domain_gate`、`export`。
-- **Tier C 核心不动**：`datalayer`、`models`、`ids`、`errors`、`config`、`pipeline` 编排。
-
-「脚本调脚本很乱」的真实原因不是目录，而是**三种调用方式混用**：Python import、子进程、
-薄封装桥接。规范化为：核心走 import；外部工具走**子进程 + 显式版本契约**（`kpe --version` 探测、
-不支持的能力自动降级）；桥接层只允许出现在 `tools/`。
+- Tier A（独立仓库）：`kpe`、`session-guard`。以后只增"文件进文件出 + 重依赖"的。
+- Tier B（内部包、禁反向依赖）：`clean`、`eol`、`embed`、`point_gate`、`domain_gate`、`export`、`kpe_import`。
+- Tier C（核心不动）：`datalayer`、`models`、`ids`、`errors`、`config`、`registry`、`pipeline` 编排。
 
 ### D2 冻结当前项目、参照它重做一个新的？
 
-**建议：不冻结、不重写；用「绞杀者模式」逐域抽薄。**
+**已定：不冻结、不重写；走路线 A——只拆四个大文件。**
+落地文件：`docs/design/方案-2026-10-27-四个大文件拆分.md`
+（四道护栏测试、四个文件的逐文件拆分结构、顺序与工时、回滚、明确不做）。
 
-- 重写会丢掉**只能从真实语料里长出来**的东西：清洗阈值（5.9 M 字符量出来的）、
-  闸门口径（裸名词/截断的边界）、EOL 表判据、4,965 个真实点背后的分类树与勘误结论。
-- 现有资产是可继承的：16.5k 行、687 个测试函数（715 例）、10 个迁移、canary 契约。
-- 真正"乱"的只有 4 个巨型文件（`db.py` 3,194 / `api.py` 1,799 / `sync.py` 782 / `cli.py` 775），
-  占全库 36%。**只拆这四个**，不动领域逻辑，收益最大风险最低。
+顺序：护栏 → `cli.py` → `sync.py` → `api.py` → `db.py`，合计 4–4.5 个工作日，每步一 commit。
 
-若你仍想"新项目"，建议形态是**同一仓库内的 v2 垂直切片**：新目录 `src/knowatlas2/`
-只复用 `datalayer`（通过复用同一 DB）+ 测试，先实现「读路径」，跑通后再迁移写路径。
-这比"新建仓库复制粘贴"安全，也比"原地重构"激进——但它需要 2–3 周，且期间功能冻结。
+### D3 配置要不要按层拆成多个文件？
 
-**需要你选一个**：A 只拆四个大文件（推荐，1–2 天/个）｜B 原地分层重构（按域抽包，1–2 周）｜
-C v2 垂直切片（2–3 周，功能冻结）｜D 冻结重建（不推荐）。
+**已定：不按层拆文件；按"四类旋钮"分层，一份生效文件 + 自动生成的配置参考。**
+落地文件：`docs/design/方案-2026-10-27-配置分层与单一来源.md`
+（D 部署 / S 秘密 / T 领域阈值 / I 实现常量；`kconfig show|check|docs`；
+`KNOWATLAS_CONFIG` 多环境；客户端零配置）。
 
-### D3 是否把「工具边界规范」写成 ADR？
+### D4 `pg`（项目规范母版）要不要像 kpe 一样装进本仓库？
 
-建议：在 `docs/design/` 加一篇《ADR-工具边界与独立判据》，把 D1 的三条判据与 Tier 策略
-固定下来，以后新工具照此裁决，避免又长出一个"脚本调脚本"。
+**已定：不 vendor，保持在 `D:\sData\git\pg` 独立维护**（已同步到 `bf34cf7`）。
+理由写在 ADR §6：pg 是"被复制的规范"（`bootstrap` + `SPEC_VERSION` + `upgrade_spec`），
+不是"被调用的工具"；subtree 会造成两套 `AGENTS.md` + `tools/` 撞车，并废掉
+"规则评审后才升级"的设计前提。
+
+可选接入（按收益排序，均未开工）：
+
+- [ ] 借 `gen_docs.py` 思路做 `kconfig docs`（已在配置方案 §5，推荐）；
+- [ ] 借 `guard.py` 统一 `tools/session_*.py` 与计划任务接线（可选）；
+- [ ] 若要"所有项目统一规范"，再对 KnowAtlas 跑 `bootstrap.py` + 评审合并 core 区（1–2 天）。
 
 ## P0 · 正确性与风险（本周内）
 
@@ -85,22 +78,20 @@ C v2 垂直切片（2–3 周，功能冻结）｜D 冻结重建（不推荐）�
 - [ ] **PWA 壳**：manifest + 图标 + 离线只读缓存。判据：手机主屏启动，断网能看上次的内容。
 - [ ] **桌面壳跨平台**：目前仅 Windows 实测；macOS/Linux 打包另开条目。
 
-## P3 · 重构（选 D2 的路线后再排期）
+## P3 · 重构（已定路线 A，详见拆分方案）
 
-不论选哪条，这四件事优先级最高（都是"拆大文件"，行为不变、测试兜底）：
+按 `docs/design/方案-2026-10-27-四个大文件拆分.md` 执行，先后顺序即下方顺序：
 
-- [ ] `web/api.py` 1,799 → `web/routers/{entries,categories,points,graph,threads,search,write}.py`
-      + `web/deps.py`。判据：每个 router < 400 行；`test_web_api.py` 不改断言全绿。
-- [ ] `datalayer/db.py` 3,194 → 按表分 `datalayer/{entries,categories,points,vectors,threads,content,runs}.py`，
-      `DataLayer` 组合 mixin，公开方法签名与 SQL 逐字不变。判据：canary 零漂移、全量测试全绿。
-- [ ] `pipeline/sync.py` 782 → `sync/{walk,fetch,categorize,archive}.py`，`run_sync` 留编排壳。
-- [ ] `cli.py` 775 → `cli/{entries,points,aging,ops}.py` + 一个注册表。
-- [ ] （配套）`tests/` 同步拆；大文件测试是重构时最容易变成瓶颈的地方。
+- [ ] 护栏：`test_web_routes.py`（71 条路由快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
+- [ ] `cli.py` 775 → `cli/`（7 文件）。
+- [ ] `pipeline/sync.py` 782 → `pipeline/sync/`（5 文件）。
+- [ ] `web/api.py` 1,799 → `web/ctx.py` + `web/routers/`（7 域）。
+- [ ] `datalayer/db.py` 3,194 → `datalayer/`（10 文件 + mixin；**注意 `_guard` 的 MRO 扫描坑**）。
 
 次要重构：
 
-- [ ] 常量收口：`points.py`/`aging.py`/`clean.py` 里的阈值逐步进配置（已有 `[points]/[aging]` 先例）。
-- [ ] `kpe_runner` 子进程契约化：`--version` 探测 + 可选 extra 依赖 + 失败码表（现在是"探测失败就省略参数"）。
+- [ ] 配置层：四类标注 + `kconfig check|show|docs`（见配置方案 §6 步骤 1–5）。
+- [ ] `kpe_runner` 子进程契约化：`--version` 探测 + 可选 extra 依赖 + 失败码表。
 - [ ] `kpe_import` 与 `kpe_runner` 产物解析去重（两处都在读 manifest/points.jsonl）。
 - [ ] `docs/design/` 建索引页；已交付的工单移入 `archive/`（40+ 篇已影响检索）。
 
