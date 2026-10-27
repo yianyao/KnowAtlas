@@ -2698,3 +2698,60 @@ canary 零漂移，三份参考 `gen_docs --check` 仍 OK。
 `datalayer/db.py` 3,194 行 → 10 文件 + mixin；**先改 `_guard` 的扫描为 `mro`**，否则锁静默失效。
 
 <!-- HANDOFF {"at":"2026-10-28T01:43:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0142-r22路线-a-第-4-步api-拆-routers","draft":false,"goal":"路线 A 进度：护栏+cli+sync+api 已落地（720/1）；只剩 db.py 拆 mixin","host":"dsh","kind":"handoff","next":"① datalayer/db.py：先把 _guard 扫描改成 mro（否则 mixin 拆分后锁失效）；② 按方案拆 10 文件+mixin；③ 全量 pytest 期望 720/1；④ 提交推送","not_rerun":"三份参考文档；护栏三件；cli/sync/api 拆包（均已提交）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"OK","tokens":52000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
+<!-- HANDOFF {"at":"2026-10-28T01:44:11.972454+08:00","compactions":0,"doc":"docs/交接/2026-10-28-0144.md","draft":true,"goal":"上下文到 HANDOFF（85.8%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"HANDOFF","tokens":126220,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-28 01:45 R23：交接（路线 A 只剩 db.py；上下文 86%）
+
+### 现场
+
+- HEAD `1bc9f8d`，`main...origin/main` 同步，工作区只剩本条日志与 watcher 的 `draft:true` 标记。
+- 本会话 `effective_pct` 从 11.3% → **86.1%（126,624 tokens）**，已达 HANDOFF 阈值 → 停手，不开 db.py。
+- 会话指纹：`session-999552a1-9fd8-4ca6-9db1-fba411c01fc9`，compactions=0。
+
+### 本会话完成（两个提交，均已推送）
+
+| 提交 | 内容 | 验收 |
+|---|---|---|
+| `8dc998e` | `pipeline/sync.py` 861 → `pipeline/sync/` 6 文件（`__init__` 276 / `enrich` 273 / `fetch` 155 / `store` 108 / `_common` 42 / `flags` 40） | 720 passed / 1 skipped |
+| `1bc9f8d` | `web/api.py` 1,952 → `web/ctx.py` 25 + `web/routers/` 7 域（`entries` 665 / `threads` 363 / `knowledge` 361 / `discovery` 226 / `graph` 190 / `admin` 168 / `categories` 124）+ `api.py` 103 | 720 passed / 1 skipped；路由 73→73 |
+
+两者都：canary 零漂移、`gen_docs --check` 全 OK、函数体 AST 逐字等价。
+
+### 下一步（按序，首步可直接执行）
+
+1. 读 `docs/design/方案-2026-10-27-四个大文件拆分.md` §4（101–137 行，10 文件 + mixin 的既定分工）。
+2. **先修锁**：`datalayer/db.py` 的 `__init__` 里 `for name, fn in vars(type(self)).items():` 只扫本类，
+   改 mixin 后子类方法收不到 `_guard` → **锁静默失效**。改成遍历 `type(self).__mro__[:-1]` 的 `vars()`
+   并按 name 去重；同时补 `tests/` 里 `_datalayer_methods_are_guarded`（随机 3 个公开方法，断言
+   `self._lock._is_owned()`）。**这一步单独先做、先跑全量**，再做搬文件。
+3. 按表拆 10 文件 + mixin（SQL 逐字、方法名/参数/返回结构/事务边界不变）；
+   `grep -rn "sqlite3.connect" src/` 届时只命中 `datalayer/core.py` —— AGENTS.md 里那句
+   「只允许命中 `datalayer/db.py`」要同步改（它属文档，可直接改）。
+4. 验收三条：全量 `720 passed / 1 skipped`、canary 零漂移、
+   `tests/test_datalayer_surface.py`（127 个公开方法快照）不飘。
+
+### 可复用的拆分器（`temp/` 未入库，但文件还在）
+
+- `temp/split_api_20261028.py`：**五道自检模板**（编译 / 路由清单逐条比对 / 域内顺序 / 自由名可解析 /
+  AST 逐字等价）。db.py 是 class 方法，需把「按语句切块」换成「按方法切块 + mixin 归属」，
+  其余检查逻辑可原样借用。
+- `temp/split_sync_20261028.py`：跨模块符号自动补 import + 「跨模块符号可解析」自检。
+- `temp/analyze_api_20261028.py`：AST 盘点（顶层语句序列 + 每个函数的自由名归属），迁移到 db.py 只需改路径。
+
+### 不要重跑
+
+- 全量 pytest（已验 720/1）；canary；`gen_docs --check`；三份参考文档。
+- 护栏三件 + `cli`/`sync`/`api` 三个拆包（`cc0e556`/`454ff1b`/`8dc998e`/`1bc9f8d`，均已推送）。
+- pg 接入评估（D4 已定不 vendor）；`kpe` 克隆（已在 `D:\sData\git\kpe`）。
+- 别重复调试拆分器语法：sync 脚本现已带跨模块 import 自检，api 脚本五道自检全绿。
+
+### 已知失败与处理（本会话踩到的，db.py 会再遇到同类）
+
+1. **拆包后兄弟模块符号未导入 → 运行期 `NameError`**（sync 首次 apply 炸 37 个测试，`_now_iso`）。
+   编译与 AST 等价都抓不到，必须加「自由名/跨模块符号可解析」自检。
+2. **测试里的源码路径硬编码**（`test_mcp_handlers_ast_readonly` 写死 `web/api.py`）→ 拆完会找不到；
+   改成扫整个包，断言强度不变。
+3. **相对 import 点数**：每下沉一层 +1；函数体内的局部 import 也要改（sync 的 `_cmd_kbackup` 坑同源）。
+4. **watcher 的 `draft:true` 交接块不是工作交接**，读本文这一段。
+
+<!-- HANDOFF {"at":"2026-10-28T01:46:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0145-r23交接路线-a-只剩-dbpy上下文-86","draft":false,"goal":"路线 A 只剩 datalayer/db.py 拆 mixin（护栏+cli+sync+api 已落地，720/1）","host":"dsh","kind":"handoff","next":"① 读方案 §4；② 先改 _guard 扫 mro + 补 _datalayer_methods_are_guarded 测试，单独跑全量；③ 按表拆 10 文件 + mixin（SQL 逐字），同步改 AGENTS.md 的 sqlite3.connect 只允许 core.py；④ 全量 720/1 + canary 零漂移 + test_datalayer_surface 127 方法不飘；⑤ 提交推送","not_rerun":"全量 pytest 720/1；canary；gen_docs --check；三份参考；护栏三件；cli/sync/api 三个拆包（454ff1b/8dc998e/1bc9f8d 已推送）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"HANDOFF","tokens":126624,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
