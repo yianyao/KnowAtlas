@@ -2533,7 +2533,7 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 
 ### 下一步（按序，首步可直接执行）
 
-1. 生成器转正：`tools/gen_docs.py`（`--check` 只比对不写）+ `tests/test_docs_in_sync.py`。
+1. ✅ 已做（23:52，`74d565f`）：`tools/gen_docs.py --check` + `tests/test_docs_in_sync.py`，全量 716 passed / 1 skipped。
 2. 护栏三件：`test_web_routes.py`（73 端点快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
 3. `cli.py` → `cli/`（7 文件）；4. `sync.py` → `sync/`；5. `api.py` → routers；6. `db.py` → mixin。
 4. 详见 `docs/TODO.md`「自主运行口径」。
