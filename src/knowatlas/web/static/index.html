@@ -609,8 +609,9 @@ async function openPreview(id) {
   open.hidden = !openHref;
   // 脑图大纲树（批次 91）：emmx 整图条目站内树形浏览——读 .emmx 重建树，
   // 不再依赖外部 MindMaster；拉取失败（文件缺失/降级条目）静默回落正文预览。
+  // 9.x 整图 `#map`；14.x 二进制页条目一页一条 `#page`/`#page-1`（后端只回该页）。
   const mtree = document.getElementById("pv-mtree");
-  if (d.source_type === "emmx" && (d.locator || "").includes("#map")) {
+  if (d.source_type === "emmx" && /#(map|page)/.test(d.locator || "")) {
     const r2 = await fetch(`/api/entries/${id}/emmx_tree`);
     if (r2.ok) {
       const t = await r2.json();

@@ -41,6 +41,31 @@ def _write_emmx(path: Path, page: bytes) -> None:
         zf.writestr("page/page.xml", page)
 
 
+# 14.x 二进制页（见 test_emmx_v14.py 与工单）：节点头尾固定标记串，BRK 前导=换行
+_V14_END = bytes.fromhex("0000000A7F0000000B7F00000000")
+_V14_BRK = bytes.fromhex("000000017C027B0401027B04")
+
+
+def _v14_bin(blocks: list[bytes]) -> bytes:
+    return b"".join(b + _V14_END for b in blocks)
+
+
+def _v14_block(title: str, lines: list[str] | None = None) -> bytes:
+    out = b"\x7b\x04" + title.encode("utf-8") + b"\x00"
+    for line in lines or []:
+        out += _V14_BRK + line.encode("utf-8") + b"\x00"
+    return out
+
+
+def _write_v14(path: Path, pages: dict[str, bytes]) -> None:
+    doc = ('<?xml version="1.0" encoding="UTF-8"?><Document Version="14.0.3">'
+           f'<Properties><Pages V="{";".join(pages)}"/></Properties></Document>')
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("document.xml", doc.encode("utf-8"))
+        for name, data in pages.items():
+            zf.writestr(f"mmpage/{name}.bin", data)
+
+
 # ---- parse_tree 纯函数 ----
 
 def test_parse_tree_nested(tmp_path: Path):
@@ -155,3 +180,27 @@ def test_api_emmx_tree_file_missing(cfg, dl, registries, monkeypatch, emmx_home)
     r = c.get(f"/api/entries/{e}/emmx_tree")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "FILE_MISSING"
+
+
+def test_api_emmx_tree_v14_page_entry(cfg, dl, registries, monkeypatch, emmx_home):
+    """14.x 页条目（#page-1）→ 200 + 扁平树，且只回本页（不串到 page）。"""
+    _write_v14(emmx_home / "开发" / "新图.emmx", {
+        "page": _v14_bin([_v14_block("原型", ["原型链"])]),
+        "page-1": _v14_bin([_v14_block("作用域", ["执行上下文"]),
+                            _v14_block("变量提升")]),
+    })
+    cfg._data.setdefault("sources", {})["emmx"] = {
+        "enabled": True, "roots": [str(emmx_home)]}
+    e = dl.upsert_entries([Entry.build(
+        source_type="emmx", source_key="开发/新图.emmx#page-1", title="作用域",
+        locator="emmx://开发/新图.emmx#page-1", locator_canonical=None,
+        native_path="脑图库", inline_content="作用域",
+        meta={"source_type": "emmx", "emmx_format": "v14"}, created_at=None)]).ids[0]
+    c = _client(cfg, dl, registries, monkeypatch)
+    r = c.get(f"/api/entries/{e}/emmx_tree")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["pages"]) == 1 and data["pages"][0]["name"] == "page-1"
+    assert data["pages"][0]["hierarchy"] == "flat"
+    assert data["node_count"] == 2
+    assert [c0["title"] for c0 in data["pages"][0]["tree"]["children"]] == ["变量提升"]

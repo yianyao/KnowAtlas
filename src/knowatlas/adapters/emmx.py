@@ -11,6 +11,13 @@
 - page.xml 缺失（如仅 mmpage/page.bin 旧版二进制）/ 坏 ZIP / 无主题节点 →
   降级标题级单条目，meta.degraded=true。
 
+MindMaster 14.x（2026-10-27 立项，工单 `变更工单-2026-10-27-EMMX-v14二进制页解析.md`）：
+- 14.x 仍写 `page/` 目录但**不含 page.xml**，节点树在 `mmpage/page*.bin` 私有二进制；
+- bin 内文本是明文 UTF-8 + NUL 结尾，节点以固定标记串分隔、节点内行以另一标记串分隔；
+- 本适配器只解出「页 → 节点块 → 行」，**层级未知**，故每页一条目、meta 标
+  `emmx_format=v14` / `hierarchy=flat`，不假装有树（宁缺勿错，与「宁整勿碎」同源）；
+- 层级还原属第二期 A2（时间盒逆向），失败就停在扁平页级。
+
 形态判定（方案 §7.8 用户二轮裁决：方案型脑图此前被切散，推倒重来）：
 - 结构化解析成功且 [llm] 可用时，每 .emmx 文件先 LLM 判定 integral/split
   （判定依据=脑图主题+一级分支大纲，理由落 meta.judge_reason 可抽检）；
@@ -33,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -51,6 +59,14 @@ _JUDGE_OUTLINE_DEPTH = 2  # 判定依据只看主题+一级分支（方案 §7.8
 _JUDGE_OUTLINE_CHARS = 1800  # 判定输入大纲截断（判定不需要全文）
 _BODY_CHARS = 20000  # integral 整图大纲入正文上限（超长截断留痕）
 _OUTLINE_INDENT = "  "  # 大纲缩进单位
+
+# MindMaster 14.x 二进制页（mmpage/*.bin）的结构标记（2026-10-27 以两个真实样本取证）。
+# 节点结束：`00 00 00 0A 7F 00 00 00 0B 7F 00 00 00 00`；页尾四页完全一致。
+_V14_END = bytes.fromhex("0000000A7F0000000B7F00000000")
+# 文本段起始：样式段 `7B 04` / `01 04`，根节点 `14 ? 3F`（? 随样式变）。
+_V14_TEXT_START = re.compile(rb"\x7b\x04|\x01\x04|\x14.\x3f", re.S)
+# 段间前导含此串 = 作者换行；否则是排版折行（拼回同一行）。
+_V14_BREAK_PREFIX = b"\x00\x00\x00\x01\x7c\x02"
 
 _JUDGE_SYSTEM_PROMPT = (
     "你是个人知识库的脑图形态判定助手。给定一张脑图的大纲（主题+分支），判定"
@@ -237,7 +253,8 @@ def _page_xml_names(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
     pages: list[tuple[str, str]] = []
     try:
         doc = ElementTree.fromstring(zf.read("document.xml"))
-        v = (doc.findtext("Properties/Pages") or "").strip()
+        el = doc.find("Properties/Pages")  # 页名在属性 V，不在元素文本
+        v = ((el.get("V") if el is not None else "") or "").strip()
     except (KeyError, ElementTree.ParseError):
         v = ""
     for p in [s.strip() for s in v.split(";") if s.strip()]:
@@ -248,6 +265,157 @@ def _page_xml_names(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
         pages = [(n.rsplit("/", 1)[0], n) for n in sorted(names)
                  if n.lower().endswith("page.xml")]
     return pages
+
+
+def _bin_page_names(zf: zipfile.ZipFile) -> list[tuple[str, str]]:
+    """MindMaster 14.x：发现 mmpage/*.bin 页；优先 document.xml 的 Pages 顺序。"""
+    names = set(zf.namelist())
+    pages: list[tuple[str, str]] = []
+    try:
+        doc = ElementTree.fromstring(zf.read("document.xml"))
+        el = doc.find("Properties/Pages")  # 页名在属性 V，不在元素文本
+        v = ((el.get("V") if el is not None else "") or "").strip()
+    except (KeyError, ElementTree.ParseError):
+        v = ""
+    for p in [s.strip() for s in v.split(";") if s.strip()]:
+        cand = f"mmpage/{p}.bin"
+        if cand in names:
+            pages.append((p, cand))
+    if not pages:
+        pages = [(Path(n).stem, n) for n in sorted(names)
+                 if n.startswith("mmpage/") and n.endswith(".bin")]
+    return pages
+
+
+def _split_blocks(data: bytes) -> list[bytes]:
+    """按节点结束标记切块；末尾没结束标记的残块也收（防格式小改丢正文）。"""
+    blocks: list[bytes] = []
+    pos = 0
+    while True:
+        j = data.find(_V14_END, pos)
+        if j < 0:
+            break
+        blocks.append(data[pos:j])
+        pos = j + len(_V14_END)
+    if pos < len(data):
+        blocks.append(data[pos:])
+    return blocks
+
+
+def _read_utf8(data: bytes, i: int) -> tuple[str, int]:
+    """从 i 起读可读 UTF-8（遇控制字符/非法字节即停），返回 (文本, 结束位置)。"""
+    out: list[str] = []
+    n = len(data)
+    while i < n:
+        b = data[i]
+        if b < 0x20 or b == 0x7F:
+            break
+        if b < 0x80:
+            out.append(chr(b))
+            i += 1
+            continue
+        for ln in (4, 3, 2):
+            try:
+                ch = data[i:i + ln].decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            if len(ch) == 1:  # 恰好一个完整码位，不是被截断的多字节
+                out.append(ch)
+                i += ln
+                break
+        else:
+            break
+    return "".join(out), i
+
+
+def _text_runs(block: bytes) -> list[tuple[str, bool]]:
+    """块内文本段 → [(文本, 是否新行)]。
+
+    文本段以 `7B 04` / `01 04`（样式段）或 `14 ? 3F`（根节点）开头；
+    段间前导含 `00 00 00 01 7C 02`（BRK）表示作者换行，否则是同一行的排版折行。
+    """
+    runs: list[tuple[str, bool]] = []
+    prev_end = -1
+    for m in _V14_TEXT_START.finditer(block):
+        s, end = _read_utf8(block, m.end())
+        if not s.strip():
+            continue
+        gap = block[prev_end:end - len(s.encode())] if prev_end >= 0 else b""
+        # BRK 前导=作者换行；间隔异常大（>128，p99 实测 66）= 跨节点（根节点无 END 标记），
+        # 也按新行处理，避免「中心主题」和一级分支粘成一行。
+        new_line = prev_end < 0 or _V14_BREAK_PREFIX in gap or len(gap) > 128
+        runs.append((s, new_line))
+        prev_end = end
+    return runs
+
+
+def _block_lines(block: bytes) -> list[str]:
+    """块 → 行。作者换行（BRK 前导）保留；排版折行拼接回同一行。"""
+    lines: list[str] = []
+    for run, new_line in _text_runs(block):
+        s = run.replace("\r", "").rstrip()
+        if not s.strip():
+            continue
+        if not lines or new_line:
+            lines.append(s)
+        else:
+            lines[-1] = lines[-1] + s
+    return lines
+
+
+def _parse_emmx_v14(zf: zipfile.ZipFile, page_list: list[tuple[str, str]],
+                    path: Path, rel: str, native_dir: str,
+                    entries: list[Entry], stats: dict[str, Any]) -> bool:
+    """14.x 二进制页 → 每页一条目（块序正文，层级未知故 hierarchy=flat）。
+
+    返回 True=至少一页有正文；False=无可用页（调用方按标题级降级）。
+    """
+    pages = 0
+    blocks_total = 0
+    for page_name, bin_path in page_list:
+        try:
+            data = zf.read(bin_path)
+        except KeyError:
+            continue
+        blocks = [lines for lines in (_block_lines(ch)
+                                      for ch in _split_blocks(data)) if lines]
+        if not blocks:
+            continue
+        body = "\n\n".join("\n".join(b) for b in blocks)
+        if not body.strip():
+            continue
+        pages += 1
+        blocks_total += len(blocks)
+        title = (blocks[0][0] or page_name).strip()[:80] or page_name
+        meta: dict[str, Any] = {"source_type": "emmx", "emmx_format": "v14",
+                                "page": page_name, "blocks": len(blocks),
+                                "hierarchy": "flat", "mind_path": title}
+        inline = body
+        fhash = None
+        if len(body) > 4096:  # 与 9.x integral 同构：截断摘要 + 全文进 content_store
+            inline = body[:4000] + "…[截断，全文在 content_store]"
+            fhash = content_hash(body)
+            meta["outline_truncated"] = True
+        entry = Entry.build(
+            source_type="emmx",
+            source_key=f"{rel}#{page_name}",
+            title=title,
+            locator=f"emmx://{rel}#{page_name}",
+            locator_canonical=None,
+            native_path=native_dir,
+            inline_content=inline,
+            content_hash=fhash,
+            meta=meta,
+            created_at=datetime.fromtimestamp(path.stat().st_mtime)
+            .astimezone().isoformat(timespec="seconds"),
+        )
+        if fhash is not None:
+            stats["_full_bodies"][entry.id] = body
+        entries.append(entry)
+        stats["nodes"] += 1
+    stats["v14_pages"] = stats.get("v14_pages", 0) + pages
+    stats["v14_blocks"] = stats.get("v14_blocks", 0) + blocks_total
+    return pages > 0
 
 
 def _parse_emmx(path: Path, rel: str, native_dir: str,
@@ -264,6 +432,11 @@ def _parse_emmx(path: Path, rel: str, native_dir: str,
         with zipfile.ZipFile(path) as zf:
             page_list = _page_xml_names(zf)
             if not page_list:
+                # 14.x：没有 page.xml，节点树在 mmpage/*.bin（扁平页级，见模块 docstring）
+                bin_pages = _bin_page_names(zf)
+                if bin_pages:
+                    return _parse_emmx_v14(zf, bin_pages, path, rel, native_dir,
+                                           entries, stats)
                 return False
             pages: list[tuple[str, dict[str, tuple[str, str]], list[str]]] = []
             for page_name, xml_path in page_list:
@@ -400,7 +573,30 @@ def parse_tree(path: Path) -> dict[str, Any]:
                     continue
                 topics, order, _trunc = parsed
                 node_count += len(order)
-                pages_out.append({"name": page_name, "tree": _tree_json(topics, order)})
+                pages_out.append({"name": page_name, "node_count": len(order),
+                                  "tree": _tree_json(topics, order)})
+            if not pages_out:
+                # 14.x：无 tree 可建，返回「一页一层」的扁平树（不渲染假层级）
+                for page_name, bin_path in _bin_page_names(zf):
+                    try:
+                        data = zf.read(bin_path)
+                    except KeyError:
+                        continue
+                    blocks = [lines for lines in (_block_lines(ch)
+                                                  for ch in _split_blocks(data))
+                              if lines]
+                    if not blocks:
+                        continue
+                    node_count += len(blocks)
+                    # 首块就是中心主题（根），子节点从第二块起，避免根重复出现
+                    pages_out.append({
+                        "name": page_name,
+                        "hierarchy": "flat",
+                        "node_count": len(blocks),
+                        "tree": {"title": blocks[0][0][:80] or page_name,
+                                 "children": [{"title": b[0][:80], "children": []}
+                                              for b in blocks[1:]]},
+                    })
             if not pages_out:
                 raise AdapterError(
                     "page.xml 缺失或无主题节点（与入库降级同口径）",

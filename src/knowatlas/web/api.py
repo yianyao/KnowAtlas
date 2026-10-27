@@ -353,12 +353,13 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
                 {"error": {"code": "NOT_FOUND", "message": "条目不存在或非脑图"}},
                 status_code=404)
         loc = entry.locator or ""
-        if not loc.startswith("emmx://") or "#map" not in loc:
+        # 9.x 整图条目 `#map`；14.x 二进制页条目 `#page` / `#page-1`（一页一条目）
+        rel, _sep, anchor = loc[len("emmx://"):].partition("#") if loc.startswith("emmx://") else ("", "", "")
+        if not rel or not (anchor == "map" or anchor.startswith("page")):
             return JSONResponse(
                 {"error": {"code": "NOT_MINDMAP",
                            "message": "该条目无整图大纲（降级或节点条目）"}},
                 status_code=404)
-        rel = loc[len("emmx://"):].split("#", 1)[0]
         path = None
         for root in (cfg.get("sources.emmx.roots") or []):
             cand = Path(str(root)) / rel
@@ -377,6 +378,11 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             return JSONResponse(
                 {"error": {"code": "PARSE_FAILED", "message": str(e)}},
                 status_code=422)
+        if anchor != "map":  # 14.x：只回本条目那一页，节点头数按页重算
+            only = [p for p in tree["pages"] if p.get("name") == anchor]
+            if only:
+                tree = {"pages": only,
+                        "node_count": sum(p.get("node_count", 0) for p in only)}
         return {"id": entry_id, "title": entry.title, **tree}
 
     # ---- 条目原文站内代理（2026-10-26 P4 后置项 B：修「反查可溯源，但打不开」） ----

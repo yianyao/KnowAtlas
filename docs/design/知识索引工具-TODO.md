@@ -400,11 +400,18 @@ reader: 执行者（人与 agent）
 > 范围筛选与待审预览信息（参与人数/消息数/字符数）。依据：`需求澄清与裁决-2026-10-24.md` §2
 > 「只留知识」+ 用户 2026-10-24 会话口径。
 
-- [ ] 8.7 万兴脑图接入验证（配置已指 `roots=["D:/sData/KnowLedge"]`，现存 1 个 `.emmx`；先 `enabled=true` 跑通「节点→点→检索→树浏览」全链，再决定是否扩到批量脑图库）
+- [~] 8.7 万兴脑图接入验证（配置已指 `roots=["D:/sData/KnowLedge"]`，现存 2 个 `.emmx`；先 `enabled=true` 跑通「节点→点→检索→树浏览」全链，再决定是否扩到批量脑图库）
       - 探针：该文件 integral 判定 + 整图点入库；`/api/entries/{id}/emmx_tree` 树形浏览可开合
       - **格式缺口（样本验证 2026-10-24）**：样本是 `Document Version="14.0.3"`，`document.xml` 只有 `<Properties>`，节点树在 `mmpage/page*.bin` 二进制页里；适配器只认旧版 `page.xml` → `nodes=0, degraded=1`。已探明 bin 内节点文本为 **UTF-8 明文**（原型/原型链/作用域/闭包/箭头函数 4 页），可实现流式抽取；层级需从二进制记录解出 → 需单独立项（不属 97a）
       - **2026-10-27 复核**：真库唯一 emmx 条目 `43a1b524bc586b88`（重要概念）仍 `degraded=true`、正文空、**0 点**；
         `page/` 为空目录、树在 `mmpage/page.bin`，与上述缺口一致。路线待裁决：源端另存 PDF（零代码）/ 立项解析二进制 / 维持降级
+      - **2026-10-27 A1 落地（页级扁平解析，零 LLM）**：`adapters/emmx.py` 新增 v14 分支——
+        节点以 `00 00 00 0A 7F 00 00 00 0B 7F 00 00 00 00` 分块，文本段以 `7B 04`/`01 04`/`14 ? 3F` 定位，
+        `00 00 00 01 7C 02` 前导 = 作者换行、否则按排版折行拼回；**一页一条目**（`meta.emmx_format="v14"`、
+        `hierarchy="flat"`），不猜层级。真库验收：`ksync --source emmx --full` → emmx **1 → 8 条**
+        （旧降级条目归档），1,786 块 / 重要概念 5,897 字、文心V1 53,477 字；`kpoints` 出 **27 点**、
+        2 条超 6,000 字落 `points_pending_kpe`；站内树形浏览 `#page` 锚点可开合（扁平一层）。
+        **剩余**：层级还原（A2 时间盒）仍未做，故本项保持 `[~]`。
 - [ ] 8.8 AI 会话（97d：`sources.session.harvester_dirs` + 分支主干 + 平台思考块剔除 + redact）
       - 探针：真实导出会话清洗前后对比；条目含 title/session_id/turns 摘要
 - [ ] 8.9 邮件（97c：furniture 补丁 + redact + 线程还原）

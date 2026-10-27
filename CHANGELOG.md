@@ -4,6 +4,18 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · EMMX v14 二进制页解析（A1：页级扁平抽取，零 LLM）（2026-10-27，R15）
+
+- **为什么**：MindMaster 14.x 把节点树写进 `mmpage/page*.bin` 私有二进制，`page/` 只剩空目录，适配器只认 9.x `page/page.xml` → 真库 emmx 长期 **1 条降级条目 / 0 点**（TODO 8.7 卡了三天）。用户裁决「批准 A1」：先做**确定性页级抽取**，不赌层级。
+- **格式取证**（两个真实样本，71+2,137 块）：节点以 `00 00 00 0A 7F 00 00 00 0B 7F 00 00 00 00` 分块；正文段以 `7B 04`（样式段）/`01 04`（续段）/`14 ? 3F`（根节点）开头；段间前导含 `00 00 00 01 7C 02` = 作者换行，否则是排版折行（要拼回同一行，否则「…才被设置。换 / 言之，变量」会被切断）。**证伪**：`08 <varint>` 不是唯一节点 id（71 块只有 32 个不同值）、字节对齐 TLV 三套 framing 均 1–5/71 解析。
+- **适配器**（`adapters/emmx.py`）：新增 `_bin_page_names`/`_split_blocks`/`_read_utf8`/`_text_runs`/`_block_lines`/`_parse_emmx_v14`；`_parse_emmx` 分派「有 `page.xml` 走 9.x 原路 → 否则试 v14 → 都不行才降级」。**一页一条目**：`locator=emmx://<rel>#<page>`、`meta={emmx_format:"v14", page, blocks, hierarchy:"flat"}`、正文=块序原文（超 4,096 字截断 + 全文进 `content_store`），不调 LLM、不猜层级。
+- **树形浏览**（`web/api.py` + `static/index.html`）：`/api/entries/{id}/emmx_tree` 锚点从「只认 `#map`」放宽到 `#page*`，v14 只回本条目那一页并重算 `node_count`；`parse_tree` 给出一页一层扁平树（首块为根、子节点从第二块起，避免根重复）。前端门控同步放宽为 `/#(map|page)/`。
+- **顺带修 bug**：`document.xml` 页名在 `<Pages V="…">` 的**属性**里，原代码 `findtext("Properties/Pages")` 永远取到空串、一直靠扫文件名兜底——改读属性后 9.x/14.x 共用同一页序口径。
+- **契约**：表结构 / 字段集 / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 能力注册表**零变更**；`emmx://` scheme 内新增 `#<页名>` 锚点（9.x 条目仍是 `#map`，降级仍是 `#file`），`meta` 新增 `emmx_format`/`page`/`blocks`/`hierarchy` 四个键（浅合并，不覆盖他人字段）。
+- **测试**：新增 `tests/test_emmx_v14.py` 6 例（END 分块、BRK 换行 vs 折行拼接、二进制空块丢弃、页序按 `document.xml`、每页一条目 meta 齐全、无正文仍降级）+ `test_emmx_tree.py` 增 1 例（v14 `#page` 只回本页）；全量 **679 passed / 1 skipped**（原 672），canary 零漂移。
+- **实测**：真库 `ksync --source emmx --full` → emmx **1 → 8 条**（created 2 / updated 6 / **archived 1** 旧降级），1,786 块，重要概念 5,897 字、文心V1 53,477 字；`kpoints` **27 点**（JS 原型链/作用域/闭包/箭头函数实知识点），2 条超 6,000 字落 `points_pending_kpe`；headless Edge 打开「原型」条目 → 102 节点扁平树渲染、正文面板让位。
+- **工单**：`docs/design/变更工单-2026-10-27-EMMX-v14二进制页解析.md`（§7 实施记录含与预案的三处差异）。
+
 ### 变更工单 · 分类浏览「按主题看」+ 主题聚合进程内缓存（2026-10-27，R14）
 
 - **为什么**：R13 交接块下一步②——后端 `/api/graph/topics?category_id=` 已就绪，分类页缺入口。真库探针（`temp/prof_topics_r14.py`）先算代价：「人工智能」子树 **25 条目 / 4507 点**（全库 4552 点），一次归簇+合并+命名 **6.7–6.9 s**（`_greedy_np` 主导，995 簇→926 主题、落单 1752）——比现有「按集分组」（条目级 `/api/sets/group`，0.27 s）慢 20 倍以上，直接做成开关会像卡死。

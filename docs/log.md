@@ -2218,3 +2218,62 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 1. emmx 路线三选一（见上）。
 2. 若继续做代码：打包安装（Phase 5「任意目录可用」仍 `[ ]`）或用户指定方向。
 
+<!-- HANDOFF {"at":"2026-10-27T19:28:11.365090+08:00","compactions":0,"doc":"docs/交接/2026-10-27-1928.md","draft":true,"goal":"上下文到 HANDOFF（93.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"HANDOFF","tokens":136920,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T19:30:11.332189+08:00","compactions":0,"doc":"docs/交接/2026-10-27-1930.md","draft":true,"goal":"上下文到 CRITICAL（98.6%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"CRITICAL","tokens":144952,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T19:42:11.642173+08:00","compactions":1,"doc":"docs/交接/2026-10-27-1942.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"OK","tokens":83350,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-27 R15 续：EMMX v14 二进制页解析落地（A1，用户裁决「批准 A1」）
+
+**背景**：R15 前段复核 8.7 仍是标题级降级（`degraded=true` / 0 点），给出三条路线，用户选「立项解析二进制」，随后批准 **A1**（确定性页级扁平抽取、零 LLM），不赌层级。
+
+### 格式取证（两样本，`temp/probe_emmx_*.py`）
+
+- 节点结束标记 `00 00 00 0A 7F 00 00 00 0B 7F 00 00 00 00`（四页一致，末页尾巴相同）→ 直接切块。
+- 正文段**以标记开头**：`7B 04`（样式段）/ `01 04`（续段）/ `14 ? 3F`（根节点，`?` 随样式变）；
+  「读到非法字节为止」取文本。**证伪**：先前「按 NUL 切段」会把正文连同前面的二进制一起丢掉，
+  只剩 `5priority` 这类样式名（page-1 得 72 字 vs 实际 1,500 字）。
+- 换行：段间前导含 `00 00 00 01 7C 02` = 作者换行；否则是**排版折行**，拼回同一行
+  （否则「…才被设置。换 / 言之，变量」被切断）。另加「间隔 > 128 字节 = 跨节点」兜底，
+  否则没有 END 标记的根节点会和一级分支粘成一行（实测间隔 p99=66、最大 2,429）。
+- 页序：`document.xml` 的 `<Pages V="page;page-1;page-2;page-3">`。**顺带修 bug**：原代码
+  `findtext("Properties/Pages")` 取元素文本（永远空串），9.x 一直靠扫文件名兜底；改读属性后两版共用口径。
+
+### 实现
+
+- `adapters/emmx.py`：`_bin_page_names` / `_split_blocks` / `_read_utf8` / `_text_runs` / `_block_lines` /
+  `_parse_emmx_v14`；`_parse_emmx` 分派（有 `page.xml` → 9.x 原路；否则 v14；都不行才降级）。
+  **一页一条目**：`locator=emmx://<rel>#<page>`、`meta={emmx_format:"v14", page, blocks, hierarchy:"flat"}`，
+  正文按块序拼接（>4,096 字截断 + 全文进 `content_store`），不调 LLM。
+  `parse_tree()` 返回一页一层扁平树（首块为根、子节点从第二块起，避免根重复）。
+- `web/api.py`：`/api/entries/{id}/emmx_tree` 锚点从只认 `#map` 放宽到 `#page*`，v14 只回本条目那一页并重算 `node_count`。
+- `web/static/index.html`：预览面板门控放宽为 `/#(map|page)/`。
+
+### 验收数字（真库 + 真样本 + 真浏览器）
+
+| 项 | 结果 |
+|---|---|
+| 适配器（不写库） | 8 条目、1,786 块、`degraded_files=0`；重要概念 5,897 字 / 文心V1 53,477 字 |
+| `ksync --source emmx --full` | created 2 / updated 6 / **archived 1**（旧降级 `43a1b524bc586b88`），contents_stored 2 |
+| `/api/stats` | `by_source.emmx = 8`（活跃），未分类 0 |
+| `kpoints --limit 8` | **27 点**（原型链/constructor/new 三步/__extends…），`pending_kpe` 2（人物原型 14,979 字、作文手段 37,547 字） |
+| 树形浏览（headless Edge + CDP） | 打开「原型」条目 → `#pv-mtree` 可见、102 个 `li`、摘要「📄 page（102 节点）」与 API `node_count=102` 一致 |
+| 测试 | 新增 `tests/test_emmx_v14.py` 6 例 + `test_emmx_tree.py` 1 例；全量 **679 passed / 1 skipped**（原 672），canary 零漂移 |
+
+### 已知限制 / 下一步
+
+1. **层级未知**：`hierarchy="flat"`，条目正文是块序原文；A2（时间盒逆向父子字段）未开工，开工单 §4-A2 有下一道路线。
+2. **折行拼接是启发式**：BRK 判据 + 128 字节间隔；若格式小改，标记找不到时该页会退回标题级降级（不产半截正文）。
+3. 文心V1 两页（3.6 万字 / 1.4 万字）走 `points_pending_kpe`，需要时按提示用 `tools/kpe` 分块导入。
+4. 9.x 路径行为不变（测试全绿），但页序现在真的按 `document.xml` 了——若某天遇到页序异常的 9.x 样本，先怀疑这里。
+
+### 不要重跑
+
+- 全量 pytest（679/1）与 canary；
+- `ksync --source emmx --full`（已入真库，再跑只会 updated）；
+- `kpoints --limit 8`（27 点已建，重复跑只会命中 already_done）；
+- `temp/probe_emmx_*.py` 系列探针与 `temp/edge_emmx_v14_check.mjs`。
+
+<!-- HANDOFF {"at":"2026-10-27T19:58:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-r15-续emmx-v14-二进制页解析落地a1用户裁决批准-a1","draft":false,"goal":"EMMX v14 二进制页解析 A1 落地：8 条目 / 1,786 块 / 27 点，树形浏览可开合，679 passed / 1 skipped","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 打开「原型/作用域/闭包/箭头函数」条目验收扁平树与正文；② 若要层级→按工单 §4-A2 开时间盒逆向；③ 文心V1 两页长文按需走 tools/kpe","not_rerun":"全量 pytest 679/1 与 canary；ksync --source emmx --full；kpoints --limit 8；temp/probe_emmx_* 探针","schema":1,"session":"session-588aa31e-6ec3-48d6-bc70-cd94e0d8b315","status":"WARN","tokens":117491,"verify":"uv run python -m pytest -o addopts= -q -> 679 passed, 1 skipped"} -->
+
