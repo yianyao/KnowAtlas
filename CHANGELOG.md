@@ -4,6 +4,41 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 入库即抽点与自动老化：`kauto` / serve 巡检 / KPE 自动通道（2026-10-27，R18）
+
+- **为什么**：R17 之后"入库 → 有知识点"仍要人记得敲 `ksync` → `kpoints` →（长文）`kpe` → `kpeimport`
+  →（到点）`kaging`；真库 132 条待审、0 正文、0 点就是没人管的结果。目标：**入库即自动生成知识点，
+  无需人工**——但每一分钱都可解释、可关、可查。
+- **待审自动转正**（`pipeline/sync.py` + `pipeline/ingest.py::l0_guard`）：`new_entries = "auto"`
+  第三取值——新条目先过 L0 守门（资源直链 / 站点首页 / 列表页 / 乱码 → 直接 `rejected` 并写
+  `value_flag_reason`），其余自动 `active`。真库 132 条：激活 97 / 拒绝 35（首页 19、列表页 16）。
+- **按类型分流**（`pipeline/ingest_router.py`，零 LLM 纯结构信号）：`pipeline`（≤6k 或 6k–60k 分块）/
+  `kpe`（PDF 书、>60k 长文）/ `skip`（仓库首页 `repo_page`、视频站 `needs_capability`、过短、其他
+  scheme）/ `fetch`（无正文先抓）。**跳过也写理由**进 `meta.ingest`，管理页/审计能回答"为什么没动它"。
+- **KPE 自动通道**（`pipeline/kpe_runner.py`）：服务端直接 `python -m kpe chunks|extract` 再
+  `import_kpe_dir`，产物目录 `data/kpe/<entry>/`；单本字数上限 `[ingest] kpe_max_chars` 防误入巨书。
+- **老化域闸门 + 隔离**（`pipeline/domain_gate.py` + `lifecycle.py`/`aging.py`）：只判
+  `kind=hard` 且一级分类不在 `[aging] exclude_categories` 的点（文学创作/哲学/历史…）；
+  黑名单语义——无分类的点不因此被挡。`set_point_aging` 单行更新，同源其他点与条目状态零影响
+  （回归测试钉死）。被动复核改为多取窗口再过滤，避免被挡点占住队头。
+- **无人值守**（`web/worker.py` + `pipeline/ingest.py::run_ingest_pass`）：`serve` 启动即按
+  `[ingest] interval_seconds` 跑巡检（`enabled` 控制，默认关）；`kauto` 是无界面等价物
+  （`--dry-run` **零费用**：不抓、不抽、不连 LLM；`--limit/--activate-only/--no-aging` 可切）。
+  失败条目 `meta.ingest.failures` 计数，超过 `max_retries` 进 `dead` 不再烧钱。
+- **阈值参数化**：`[points] max_per_chunk / chunk_chars / chunk_total_max` 管道与 KPE 同源；
+  `point_extract` 2.1.0 → 2.2.0（`max_points` 入参，prompt 与截断同源）。
+- **KPE 上游**（`kpe 0.2.0`）：`extract --max-points N`（默认 6，夹 1–20），已推 upstream 并
+  `git subtree pull` 进 `tools/kpe`；旧版本不支持该参数时 `kpe_runner` 自动省略，不报错。
+- **契约**：表结构 / 字段集 / scheme / `SOURCE_TYPES` / `STATUSES` 零变更；`CONFIG_SCHEMA_KEYS`
+  新增 `[ingest]`/`[points]`/`[aging]` 12 键（canary 已升版）；接口签名新增
+  `run_points_extract(..., )` 内部阈值读取 + `DataLayer.point_source_map()`。
+- **测试**：新增 21 项（路由 6 / 入库 7 / 域闸门 4 / 阈值 4）；全量 **715 passed / 1 skipped**
+  （原 694）；canary 零漂移；KPE 上游 18 项全绿。
+- **真库试跑**（2026-10-27 22:4x，dry-run）：`kauto --dry-run --limit 5` → 待审 132 → 激活 97 /
+  拒绝 35；路由 `pipeline 4 / kpe 1 / skip 8`；`fetch_planned 5`；零写库、零 LLM。
+- **文档**：`docs/design/变更工单-2026-10-27-入库即抽点与自动老化.md`（§6 实施记录）、
+  `docs/design/架构-2026-10-27-服务化分层与服务端职责.md`（服务/数据/应用三层与多端路线）。
+
 ### 变更工单 · fetch 候选口径（只取 active + 转正优先）与 `--entry` 定向补抓补抽（2026-10-27，R17）
 
 - **为什么**：R16 排查发现 `--fetch-limit N` 的 N 是**尝试次数**预算，但候选来自采集器视图、

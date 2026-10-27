@@ -2432,3 +2432,65 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 
 <!-- HANDOFF {"at":"2026-10-27T22:42:10.747998+08:00","compactions":1,"doc":"docs/交接/2026-10-27-2242.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":79165,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 
+## 2026-10-27 22:55 R18：入库即抽点与自动老化落地（含 KPE 上游 0.2.0）
+
+> 承接 21:47 的需求与七条差距。用户对四个岔路做了裁决（全部采纳建议）：
+> ① 待审按类型自动分流；② KPE 点数上限做成上游参数（默认 6）；③ 老化=分类黑名单 + `kind=hard`；
+> ④ serve 内置巡检 + `kauto` 无界面等价物。另追加 ⑤：未来是服务，三层要能分开（已写架构文档）。
+
+### 落地内容
+
+| 环节 | 产物 |
+|---|---|
+| 待审自动转正 | `pipeline/sync.py` 第三取值 `new_entries="auto"` + `pipeline/ingest.py::l0_guard` |
+| 按类型分流 | `pipeline/ingest_router.py`（零 LLM，纯结构信号；跳过也写理由） |
+| 管道抽点 | `pipeline/points.py` 阈值改读 `[points]`（缺省不变） |
+| KPE 自动通道 | `pipeline/kpe_runner.py`（`python -m kpe` + `kpeimport`，产物 `data/kpe/<entry>/`） |
+| 老化域闸门 | `pipeline/domain_gate.py` + `lifecycle.py`/`aging.py`（黑名单语义、窗口化过滤） |
+| 无人值守 | `web/worker.py::IngestWorker`（serve 内置，`[ingest] enabled`）+ `kauto` 命令 |
+| 巡检主体 | `pipeline/ingest.py::run_ingest_pass`（激活→抓→分流→抽→到点老化，失败 `dead` 队列） |
+| 契约 | `config.py` 新增 12 键；`point_extract` 2.2.0；`db.point_source_map()`；canary 升版 |
+| KPE 上游 | `kpe 0.2.0`：`extract --max-points`（默认 6，1–20），已推 + `git subtree pull` |
+
+### 现场数字（已实测，勿重跑）
+
+- 全量 `pytest -o addopts= -q` → **715 passed / 1 skipped**（基线 694，新增 21）；
+  `tests/test_canary.py` 零漂移；KPE 上游 18 项全绿（新增 `tests/test_max_points.py` 4 项）。
+- 真库 `kauto --dry-run --limit 5`（22:4x）：待审 132 → 激活 97 / 拒绝 35
+  （`portal_homepage` 19、`index_subdir` 16）；路由 `pipeline 4 / kpe 1 / skip 8`；
+  `fetch_planned 5`；零写库、零 LLM（dry-run 已改为完全免费）。
+- `kpe_runner` 探测：`available()=True`、`supports --max-points=True`。
+
+### 提交
+
+- `77c9f2f feat: 入库即抽点与自动老化（kauto 巡检 + KPE 自动通道 + 老化域闸门）`
+- `da91df3 Squashed 'tools/kpe/' changes from 910c85c..ef0e251` + merge `27a62de`
+- 上游 kpe：`ef0e251 feat: extract --max-points（默认 6；prompt 与截断同源）`
+
+### 下一步（按序，首步可直接执行）
+
+1. 真库实跑一轮：先导入 key（用户级变量 → 当前进程），`uv run python -m knowatlas kauto --limit 3`，
+   确认 `split>0` 且 `points_created>0`；抽查 3 条 `meta.ingest`（route/reason/at）。
+2. 把 `[ingest] enabled = true` 写进本机 `config/knowatlas.toml`，`serve` 起来看巡检日志
+   （"入库巡检启动：每 600s 一轮"），再决定 `interval_seconds` 与 `max_entries_per_run`。
+3. 管理页补「上一轮巡检」视图（`GET /api/tasks`，服务化 P1，非阻塞）。
+4. 移动/远程访问按 `docs/design/架构-2026-10-27-服务化分层与服务端职责.md` §7 的 P1→P2 推进。
+
+### 不要重跑
+
+- 全量 pytest 715/1、canary、KPE 上游 18 项；
+- `kauto --dry-run --limit 5`（真库 132 待审的分流结果已记录）；
+- `git subtree pull --prefix=tools/kpe kpe main --squash`（已到 `ef0e251`）；
+- `temp/probe_aging_gate_20261027.py`、`temp/kpe-up`（上游克隆已推完，可留可删）。
+
+### 已知失败与处理
+
+- PowerShell 把 git/uv 的 stderr 当 `NativeCommandError`（exit 1）：看到 `main -> main` /
+  `18 passed` 即成功，别当失败重试。
+- `kauto --dry-run` 在 LLM 未配置时输出 WARN（"语义层降级"）——dry-run 本身不烧钱，实跑前必须
+  按 AGENTS.local 导入三个用户级环境变量。
+
+<!-- HANDOFF {"at":"2026-10-27T22:56:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-2255-r18入库即抽点与自动老化落地含-kpe-上游-020","draft":false,"goal":"R18 落地：入库即抽点与自动老化（kauto / serve 巡检 / KPE 自动通道 / 老化域闸门）+ KPE 0.2.0 --max-points（715 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 导入 key 后真库 kauto --limit 3，确认 split>0 与 meta.ingest；② [ingest] enabled=true 后 serve 看巡检日志；③ GET /api/tasks 上一轮巡检视图；④ 服务化 P1/P2（架构文档 §7）","not_rerun":"全量 pytest 715/1 与 canary；kauto --dry-run --limit 5（132 待审→97 激活/35 拒绝已记录）；git subtree pull tools/kpe（已在 ef0e251）；temp/kpe-up 上游克隆已推完；temp/probe_aging_gate_20261027.py","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":86000,"verify":"uv run python -m pytest -o addopts= -q -> 715 passed, 1 skipped"} -->
+
+<!-- HANDOFF {"at":"2026-10-27T22:52:10.799167+08:00","compactions":1,"doc":"docs/交接/2026-10-27-2252.md","draft":true,"goal":"上下文到 HANDOFF（88.2%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":129712,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
