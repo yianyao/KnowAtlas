@@ -9,7 +9,8 @@
 
 **执行顺序**（每步 = 一个 commit + 推送，跑完全量再进下一步）：
 
-1. 生成器转正：`tools/gen_docs.py`（含 `--check`）+ `tests/test_docs_in_sync.py`。
+1. ✅ 生成器转正（2026-10-27 23:50）：`tools/gen_docs.py`（`--check` 只比对不写）+
+   `tests/test_docs_in_sync.py`；全量 **716 passed / 1 skipped**。`temp/gen_docs_20261027.py` 可删。
 2. 护栏：`test_web_routes.py`（73 端点快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
 3. `cli.py` → `cli/`（7 文件）。
 4. `pipeline/sync.py` → `pipeline/sync/`（5 文件）。
@@ -127,8 +128,8 @@ git status -sb                                   # 期望只有本步改动
 已产出（由 `temp/gen_docs_20261027.py` 生成）：`docs/参考-命令.md`（13 子命令）、
 `docs/参考-配置.md`（59 键）、`docs/参考-接口.md`（73 端点）。
 
-- [ ] **把生成器提升为 `tools/gen_docs.py`**：加 `--check`（只比对不写，CI 用），
-      加一条测试断言「三份文档与当前源码一致」，防漂移。
+- [x] **把生成器提升为 `tools/gen_docs.py`**：带 `--check`（只比对不写，CI 用），
+      并加 `tests/test_docs_in_sync.py` 断言三份文档与源码一致（2026-10-27 完成，716 passed）。
 - [ ] 12 个端点缺 docstring（列表见 `docs/参考-接口.md` 文末），补一行说明即可。
 - [ ] 三份参考接进 `docs/README.md` 索引与 README 的「参考」小节。
 - [ ] 配置参考里的 I 类常量表随代码核对一次（`CleanThresholds`、`EOL` 的位置是否还准确）。
