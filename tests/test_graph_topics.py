@@ -359,3 +359,128 @@ def test_api_graph_topics_q_scope(cfg, dl, registries):
     assert body["total"] >= 1 and body["scope"]["points"] >= 2
     assert all("git" in t["name"].lower() or "分支" in t["name"] for t in body["topics"])
     assert client.get("/api/graph/topics").json()["scope"]["mode"] == "all"
+
+
+# ---- R14（2026-10-27 工单 变更工单-2026-10-27-分类浏览按主题与主题聚合缓存.md）----
+
+def _seed_entry_points(dl: DataLayer, key: str,
+                       items: list[tuple[str, list[float]]]) -> tuple[str, list[str]]:
+    """建一个条目 + 若干点向量（8 维），返回 (entry_id, point_ids)。"""
+    from knowatlas.pipeline.points import point_hash
+
+    e = Entry.build(source_type="manual", source_key=f"r14:{key}",
+                    title=f"R14 {key}", locator=f"https://r14.example/{key}",
+                    locator_canonical=None, inline_content=f"正文 {key}",
+                    native_path=None, meta={})
+    dl.upsert_entries([e])
+    pids: list[str] = []
+    for text, vec in items:
+        pid = point_hash(text)[:16]
+        dl.put_point({"content_hash": point_hash(text), "text": text,
+                      "summary": "", "source_type": "manual", "judge": "integral",
+                      "meta": {}},
+                     {"entry_id": e.id, "char_offset": 0, "anchor": text[:120]})
+        dl.put_point_vectors([{"point_id": pid, "dim": 8, "model": "fake:test",
+                               "vector": vec_to_blob(normalize(vec))}])
+        pids.append(pid)
+    return e.id, pids
+
+
+def test_api_graph_topics_category_scope(cfg, dl, registries):
+    """分类口径：category_id → 子树条目 → 点域（分类页「按主题看」的底座）。
+
+    分类内 2 条目 4 点成 2 个主题；分类外条目（python 主题）不进点域。
+    """
+    from knowatlas.web.app import create_app as _ca
+
+    cat = dl.create_category("R14 分类", [], "manual")
+    in_a, _ = _seed_entry_points(dl, "git1", [
+        ("git 提交规范与分支策略", [1.0, 0, 0, 0, 0, 0, 0, 0]),
+        ("git 命令行常用操作", [0.98, 0.1, 0, 0, 0, 0, 0, 0])])
+    in_b, _ = _seed_entry_points(dl, "git2", [
+        ("git 分支合并与冲突解决", [0.99, 0.08, 0, 0, 0, 0, 0, 0])])
+    out, _ = _seed_entry_points(dl, "py", [
+        ("python 装饰器原理", [0, 1.0, 0, 0, 0, 0, 0, 0]),
+        ("python 生成器用法", [0.1, 0.98, 0, 0, 0, 0, 0, 0])])
+    for eid in (in_a, in_b):
+        dl.attach_category(eid, cat.id, 1.0, "manual", "t-r14")
+
+    client = TestClient(_ca(cfg, dl, *registries), headers={"Host": "127.0.0.1:8420"})
+    body = client.get(f"/api/graph/topics?category_id={cat.id}&limit=10").json()
+    assert body["scope"]["mode"] == "category"
+    assert body["scope"]["category_id"] == cat.id
+    assert body["scope"]["points"] == 3          # 分类内 3 点（分类外 2 点不进）
+    assert body["total"] == 1 and body["topics"][0]["size"] == 3
+    assert all("git" in t["name"].lower() for t in body["topics"])
+    assert out not in {s["entry_id"] for t in body["topics"]
+                       for p in t["points"] for s in p["sources"]}
+
+
+def test_api_graph_topics_cache(cfg, dl, registries, monkeypatch):
+    """同参数只算一次；换点域/换 limit 才重算（R14 缓存口径）。"""
+    import knowatlas.pipeline.graph_topics as gt
+
+    from knowatlas.web.app import create_app as _ca
+
+    _seed_three_topics(dl)
+    calls = {"n": 0}
+    real = gt.topic_clusters
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(gt, "topic_clusters", counting)
+    client = TestClient(_ca(cfg, dl, *registries), headers={"Host": "127.0.0.1:8420"})
+
+    first = client.get("/api/graph/topics?limit=10").json()
+    again = client.get("/api/graph/topics?limit=10").json()
+    assert calls["n"] == 1 and again == first        # 命中缓存，字节级一致
+    client.get("/api/graph/topics?q=git&limit=10")
+    assert calls["n"] == 2                            # 点域变了 → 换键
+    client.get("/api/graph/topics?limit=20")
+    assert calls["n"] == 3                            # limit 参与键
+    client.get("/api/graph/topics?limit=10&merge=false")
+    assert calls["n"] == 4                            # 合并开关参与键
+
+
+def test_api_graph_topics_cache_invalidated_by_data_change(cfg, dl, registries,
+                                                           monkeypatch):
+    """数据一变（新点/新向量）→ 指纹变化 → 缓存自动失效，不需要手工清。"""
+    import knowatlas.pipeline.graph_topics as gt
+
+    from knowatlas.web.app import create_app as _ca
+
+    _seed_three_topics(dl)
+    calls = {"n": 0}
+    real = gt.topic_clusters
+
+    def counting(*a, **kw):
+        calls["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(gt, "topic_clusters", counting)
+    client = TestClient(_ca(cfg, dl, *registries), headers={"Host": "127.0.0.1:8420"})
+
+    before = dl.points_fingerprint()
+    client.get("/api/graph/topics?limit=10")
+    assert calls["n"] == 1
+
+    _seed_entry_points(dl, "rust", [("rust 所有权与借用检查", [0, 0, 0, 0, 1.0, 0, 0, 0])])
+    assert dl.points_fingerprint() != before          # 指纹随数据变化
+    body = client.get("/api/graph/topics?limit=10").json()
+    assert calls["n"] == 2
+    assert body["vectors"] >= 8
+
+
+def test_category_topic_switch_in_static_ui():
+    """分类页三态开关（R14）：模式条 + 主题渲染 + 旧键兼容都在 index.html 里。"""
+    from pathlib import Path
+
+    index = (Path(__file__).resolve().parents[1] / "src" / "knowatlas" / "web"
+             / "static" / "index.html").read_text(encoding="utf-8")
+    for needle in ("knowatlas.catMode", "🧠 按主题", 'data-cmode', "renderCategoryTopics",
+                   "knowatlas.catGrouped",          # 旧键兼容读取
+                   "主题模式按分类点域聚合",         # 来源筛选禁用提示
+                   "topicRowsHtml"):                # 与检索 tab 共用行渲染
+        assert needle in index, needle

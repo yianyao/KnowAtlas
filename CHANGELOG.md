@@ -4,6 +4,17 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 分类浏览「按主题看」+ 主题聚合进程内缓存（2026-10-27，R14）
+
+- **为什么**：R13 交接块下一步②——后端 `/api/graph/topics?category_id=` 已就绪，分类页缺入口。真库探针（`temp/prof_topics_r14.py`）先算代价：「人工智能」子树 **25 条目 / 4507 点**（全库 4552 点），一次归簇+合并+命名 **6.7–6.9 s**（`_greedy_np` 主导，995 簇→926 主题、落单 1752）——比现有「按集分组」（条目级 `/api/sets/group`，0.27 s）慢 20 倍以上，直接做成开关会像卡死。
+- **前端**（`web/static/index.html`）：`catGrouped` 布尔 → `catMode` 三态（`flat` / `set` / `topic`），localStorage `knowatlas.catMode`，旧键 `knowatlas.catGrouped` 兼容读取；统一模式条三个按钮（📄 平铺 / 📐 按集分组 / 🧠 按主题）。主题视图拉 `?category_id=<当前分类>&limit=40`，头行「N 条目 → P 点 → M 个主题（共 T 个，取前 M）· 阈值 0.72、合并 0.85、落单 s 点」，主题行展开成员点、溯源走 `openPreview`；行渲染与检索「主题」tab 共用 `topicPointCard`/`topicRowsHtml`（防两处漂移）。主题模式下来源筛选**禁用 + tooltip 说明**（端点只吃 `category_id`，不静默忽略）。
+- **缓存**（`web/api.py`）：进程内 TTL 缓存，`_TOPICS_TTL=300 s`、`_TOPICS_MAX=8`（按写入时间淘汰）；键 = 库路径 + 点域指纹 + scope + 点域签名（`sha1(排序 point_id)`）+ limit/merge/阈值。点域先算再查缓存（分类口径 53 ms），改分类/换检索词直接换键；数据一变即换键，无需手工失效。
+- **数据层**（`datalayer/db.py`）：新增只读 `points_fingerprint()`（`点数:最新点时间:向量数:最新向量时间`，< 10 ms），作为缓存失效依据。
+- **契约**：表结构 / 字段 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 能力注册表 / 接口签名**零变更**，响应 JSON 不变、无新增 query 参数；唯一可观测变化 = 同范围结果最多陈旧 300 s（已在工单备案）。
+- **测试**：新增 4 例（分类口径点域、缓存命中与键隔离、数据变化自动失效、静态 UI 三态标记）；定向回归 `test_web_api`/`test_cloud`/`test_timeline`/`test_canary` 全绿；全量 **672 passed / 1 skipped**（原 668，收集 673）。
+- **实测**：真库 `?category_id=…&limit=40` **冷 4.12 s → 热 0.095 s**（约 43×）；全库 `?limit=40` **冷 2.95 s → 热 0.030 s**；headless Edge：进入「人工智能」→ 点「🧠 按主题」→ **40 行主题 / 517 ms**（首行「智能·任务 116 点 · 并 27 簇 · 溯源 12 条目」）→ 展开 → 溯源预览打开（`Hello-Agents-V1.0.3-20260717`）。
+- **工单**：`docs/design/变更工单-2026-10-27-分类浏览按主题与主题聚合缓存.md`。
+
 ### 变更工单 · 主题命名补第二词 + 合并迭代 + 检索结果主题聚合（2026-10-27）
 
 - **为什么**：用户追问「为什么还有 GRPO（6 点）/ GRPO（4 点）」。定位三件事：① 命名只取 100% 覆盖的共享词，只剩 1 个词时退化成 `GRPO（N 点）`，而 GRPO 实际被切成 3 个**不同侧面**（质心 0.805–0.838 < 0.85，不该并）；② 合并是「先比后漂」的单遍贪心——MCP 的 17 点/9 点两簇事后质心 0.886 却没并（比较发生在质心漂移之前，`temp/topic_merge_debug.py` 复现）；③ jieba HMM 伪词混进名字（`体应·智能` 来自「智能体应…」）。

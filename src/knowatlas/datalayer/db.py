@@ -2234,6 +2234,20 @@ class DataLayer:
         return self._conn.execute(
             "SELECT COUNT(*) FROM point_vectors").fetchone()[0]
 
+    def points_fingerprint(self) -> str:
+        """点域指纹（R14，主题聚合缓存的失效依据）。
+
+        `点数:最新点时间:向量数:最新向量时间`。任何一次 kpoints 重抽（删后重插）
+        或 ksync --embed（向量重建）都会改动 COUNT 或 MAX(created_at)，指纹随之
+        变化——缓存因此无需手工失效，也不怕「同数不同内容」的重建。
+        只读两行聚合查询，真库 4500 点实测 < 10 ms。
+        """
+        p = self._conn.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS m FROM points").fetchone()
+        v = self._conn.execute(
+            "SELECT COUNT(*) AS n, MAX(created_at) AS m FROM point_vectors").fetchone()
+        return f"{p['n']}:{p['m'] or ''}:{v['n']}:{v['m'] or ''}"
+
     # ---- 知识点（迁移 007，第六十二批；点 text 是抽取产物可重抽重建，原文永在
     #      entries/content_store；content_hash 去重，一点多溯源走 point_sources） ----
 

@@ -2125,3 +2125,59 @@ baseline 147,059，effective **125.2%**（CRITICAL），2026-10-27T06:50+08:00�
 3. 若嫌全库 4.9 s 慢：可加进程内 TTL 缓存（R11 曾记「本轮不做」）。
 
 <!-- HANDOFF {"at":"2026-10-27T12:45:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-27-1245","draft":false,"goal":"主题命名补第二词 + 合并迭代到不动点 + 检索工作台「主题」tab，已实现并实测","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收 graph 主题名与检索主题 tab；② 分类浏览页「按主题看」开关（后端已就绪）","not_rerun":"pytest 全量 668/1 与 canary；temp/topic_r13_check.py、temp/topic_r13_names.py、temp/edge_topics_tab.mjs、三个 topic_* 探针","schema":1,"session":"session-5399c118-17f5-4acb-910b-80776261f016","status":"HANDOFF","tokens":160000,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+
+## 2026-10-27 R14：分类浏览「按主题看」+ 主题聚合进程内缓存
+
+**触发**：R13 接交块下一步②（后端 `?category_id=` 已就绪，只差 UI）。开工前用
+`temp/prof_topics_r14.py` 先量代价：「人工智能」子树 25 条目 → **4507 点**（全库 4552，
+单条目前 4 本大书占 1373/820/571/420），一次归簇+合并+命名 **6.7–6.9 s**（HTTP 实测；
+进程内 2.5 s，`_greedy_np` 3.7 s 主导；995 簇 → 926 主题、落单 1752）——对照现有
+「按集分组」`/api/sets/group` **0.27 s**（条目级）慢 20 倍以上，直接做开关会像卡死。
+
+### 改动
+
+| 文件 | 内容 |
+|---|---|
+| `src/knowatlas/web/static/index.html` | `catGrouped` 布尔 → `catMode` 三态（flat/set/topic，旧键 `knowatlas.catGrouped` 兼容）；统一模式条三个按钮；`renderCategoryTopics` 拉 `?category_id=&limit=40`，头行「N 条目 → P 点 → M 主题（共 T）」，主题行展开成员点 + 溯源 `openPreview`；主题模式 `#filter` 禁用 + tooltip；行渲染抽 `topicPointCard`/`topicRowsHtml`/`bindTopicOpen` 与检索 tab 共用 |
+| `src/knowatlas/web/api.py` | `/api/graph/topics` 进程内 TTL 缓存（`_TOPICS_TTL=300 s`、`_TOPICS_MAX=8`，按写入时间淘汰）；键 = 库路径 + `points_fingerprint()` + scope + 点域签名 `sha1(排序 point_id)` + limit/merge/阈值；**点域先算再查缓存**（分类口径 53 ms） |
+| `src/knowatlas/datalayer/db.py` | 新增只读 `points_fingerprint()`（点数:最新点时间:向量数:最新向量时间，< 10 ms）作缓存失效依据 |
+| `tests/test_graph_topics.py` | 新增 4 例：分类口径点域、缓存命中与键隔离、数据变化自动失效、静态 UI 三态标记 |
+| `docs/design/变更工单-2026-10-27-分类浏览按主题与主题聚合缓存.md`、`CHANGELOG.md` | 工单与变更记录 |
+
+### 契约
+
+无表结构 / 字段 / scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` / 接口签名变更；
+响应 JSON 不变，**无新增 query 参数**。唯一可观测变化 = 同范围结果最多陈旧 300 s（工单备案）。
+
+### 验证（现场数字）
+
+- 全量 pytest：**672 passed / 1 skipped**（收集 673；进度行统计 673 = 672 pass + 1 skip，0 F/E）。
+- 定向：`test_graph_topics` 22 例、`test_web_api`/`test_cloud`/`test_timeline`/`test_canary` 合计 63 例全绿。
+- 真库 curl：`?category_id=4d77324c78e541b0&limit=40` **冷 4.12 s → 热 0.095 s**；
+  `?limit=40` **冷 2.95 s → 热 0.030 s**。
+- headless Edge（CDP，`temp/edge_cat_topic.mjs`）：进入「人工智能」→ 模式条 `[flat, set*, topic]`
+  → 点「🧠 按主题」→ **40 行 / 517 ms**（缓存热），首行「智能·任务 116 点 · 并 27 簇 · 溯源 12 条目」
+  → `#filter` disabled + title 提示 → 展开成员点 → 溯源预览 `Hello-Agents-V1.0.3-20260717`。
+  截图 `temp/cat_topic_tab.png`（1570×805）。
+- canary 零漂移。
+
+### 运行态
+
+- serve 已重启（旧 pid 19948 已 `taskkill`，新进程由后台作业
+  `pwsh-e1fafbf6e9a54e6b` 持有，`/api/stats` 200）；页面改动需 **Ctrl+F5**。
+- 后台还有 headless Edge（CDP 9333）在跑，收尾时可关。
+
+### 不要重跑
+
+- 全量 pytest（672/1）与定向 63 例、canary；
+- `temp/prof_topics_r14.py`、`temp/edge_cat_topic.mjs`（探针与 UI 脚本，已完成使命）。
+
+### 下一步
+
+1. 用户 Ctrl+F5 验收：分类页模式条「🧠 按主题」→ 展开主题 → 点溯源。
+2. 首调 3–7 s 若嫌慢：改 `_greedy_np` 归簇（近似最近邻 / MiniBatchKMeans）或落盘缓存——会动主题质量，另开工单。
+3. `graph.html` 主题视图与检索「主题」tab **已自动受益**于同一口缓存（同参数键）。
+4. 缓存 TTL 300 s 若需可配：加 `CONFIG_SCHEMA_KEYS` 属契约变更，需工单。
+
+<!-- HANDOFF {"at":"2026-10-27T19:04:06+08:00","compactions":0,"doc":"docs/log.md#2026-10-27-r14","draft":false,"goal":"分类浏览「按主题看」三态开关 + /api/graph/topics 进程内 TTL 缓存，已实现并实测（672 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收分类页「🧠 按主题」；② 首调 3–7 s 若嫌慢→改 _greedy_np 归簇或落盘缓存（另开工单）；③ 缓存 TTL 若要可配需开契约工单","not_rerun":"全量 pytest 672/1 与定向 63 例、canary；temp/prof_topics_r14.py、temp/edge_cat_topic.mjs","schema":1,"session":"session-37749571-52c4-441b-ae9f-d3bd00fa9ded","status":"HANDOFF","tokens":132815,"verify":"uv run --with zstandard python tools/session_check.py"} -->
+

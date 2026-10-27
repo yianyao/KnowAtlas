@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +28,14 @@ from ..semantic.keywords import word_ok as _cloud_word_ok
 
 _TOKEN_HEADER = "x-knowatlas-token"
 _WRITE_COOKIE = "knowatlas_write"  # 同源自动写凭据（HttpOnly，JS 读不到明文）
+
+# R14：主题聚合进程内缓存。真库 4507 点域一次归簇+合并+命名 3–7 s，而分类页
+# 「按主题看」是来回切换的浏览动作——同参数重复访问必须为 0 s。失效靠两点：
+# ① 点域指纹（db.points_fingerprint：点数/向量数 + 最新时间，kpoints/ksync 一变即失效）；
+# ② 点域签名（本次涉及的 point_id 集合 sha1，改分类/换检索词即换键）。
+# TTL 只兜「同数据重复看」这一层，故不必很短；单条响应约 140 KB，8 条 ≈ 1.1 MB。
+_TOPICS_TTL = 300.0
+_TOPICS_MAX = 8
 
 
 def _now_iso() -> str:
@@ -611,6 +621,27 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         return {"entry_id": entry.id, "title": title, "points": len(items),
                 "missing": missing}
 
+    # R14 主题聚合缓存：只缓存纯计算结果（返回给调用方的仍是同一份 dict，
+    # 序列化不改动它）。并发重复计算不做 single-flight——多算一次只是慢一点，
+    # 加锁等别人算完反而会把两类请求串成一条队。
+    _topics_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+    _topics_lock = threading.Lock()
+
+    def _topics_cached(key: str, compute) -> dict[str, Any]:
+        now = time.monotonic()
+        with _topics_lock:
+            hit = _topics_cache.get(key)
+            if hit is not None and now - hit[0] <= _TOPICS_TTL:
+                return hit[1]
+        result = compute()
+        with _topics_lock:
+            _topics_cache[key] = (time.monotonic(), result)
+            if len(_topics_cache) > _TOPICS_MAX:   # 按写入时间淘汰最旧的
+                for stale in sorted(_topics_cache,
+                                    key=lambda k: _topics_cache[k][0])[:len(_topics_cache) - _TOPICS_MAX]:
+                    _topics_cache.pop(stale, None)
+        return result
+
     @app.get("/api/graph/topics")
     def graph_topics(limit: int = 80, merge: bool = True,
                      merge_threshold: float = 0.85,
@@ -636,6 +667,13 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
         加检索/分类过滤——`q` 走点 FTS（`points_limit` 条召回）、`category_id`
         走分类子树（条目 → 点），两者给定时取交集；只在点域内聚类（`point_ids`）。
         响应加 `scope`（本次点域），前端检索工作台据此出「主题」tab。
+
+        R14（2026-10-27，工单 变更工单-2026-10-27-分类浏览按主题与主题聚合缓存.md）：
+        分类页「按主题看」复用本端点（`category_id`）。真库「人工智能」子树 4507 点
+        实测 3–7 s，故加进程内 TTL 缓存（`_TOPICS_TTL`=300 s、`_TOPICS_MAX`=8 条 /
+        按写入时间淘汰）。键 = 库路径 + 点域指纹 + 点域签名 + limit/merge/阈值 + scope
+        文本；**响应 JSON 不变、无新增 query 参数**。口径代价：同数据同范围最多
+        陈旧 300 s，数据一变（kpoints/ksync --embed）立即换键。
         """
         from ..pipeline.graph_topics import MAX_LIMIT, topic_clusters
         mt = max(0.5, min(float(merge_threshold), 0.99))
@@ -654,8 +692,15 @@ def register_routes(app: FastAPI, cfg: Any, dl: Any, locators: Any, semantics: A
             qids = {h.point_id for h in dl.search_points(scope["q"], limit=n)}
             pids = qids if pids is None else (pids & qids)
             scope["mode"] = "category+q" if scope["category_id"] else "q"
-        result = topic_clusters(dl, limit=cap, merge=bool(merge),
-                                merge_threshold=mt, point_ids=pids)
+        # 点域先算（分类口径 25 条目 / 4507 点实测 53 ms），再查缓存：改分类、
+        # 换检索词都直接换键，不会拿到别的范围的结果。
+        pid_sig = ("-" if pids is None
+                   else hashlib.sha1("\n".join(sorted(pids)).encode("utf-8")).hexdigest()[:16])
+        ckey = "|".join((str(getattr(dl, "db_path", "")), dl.points_fingerprint(),
+                         scope["mode"], scope["q"], scope["category_id"], pid_sig,
+                         str(cap), str(int(bool(merge))), f"{mt:.4f}"))
+        result = _topics_cached(ckey, lambda: topic_clusters(
+            dl, limit=cap, merge=bool(merge), merge_threshold=mt, point_ids=pids))
         scope["points"] = int(result.get("vectors") or 0)
         result["scope"] = scope
         return result

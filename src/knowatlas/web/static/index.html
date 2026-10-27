@@ -101,12 +101,20 @@
   .sig-host { color: #8d5aa8; border-color: #8d5aa866; }
   .set-excerpt { font-size: 12px; color: #888; margin: 2px 0 8px; }
   .set-note { display: block; margin-bottom: 6px; }
-  /* 分类浏览集分组切换条（批次 72 ①） */
-  .cat-agg-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  /* 分类浏览集分组切换条（批次 72 ①；R14 扩成三态模式条） */
+  .cat-agg-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
+                 flex-wrap: wrap; }
   .cat-agg-bar button { cursor: pointer; font-size: 12px; color: #4a9eff;
                         background: none; border: 1px solid #4a9eff55;
                         border-radius: 4px; padding: 1px 8px; }
+  .cat-agg-bar button.on { background: #4a9eff22; border-color: #4a9eff; color: #dbe9ff; }
+  .cat-agg-bar .cat-modes { display: inline-flex; gap: 6px; }
   .cat-agg-bar .set-note { margin-bottom: 0; }
+  /* 主题行（R13 检索 tab / R14 分类页共用） */
+  .topic-row { border: 1px solid #8883; border-radius: 6px; padding: 4px 8px;
+               margin: 6px 0; background: #ffffff05; }
+  .topic-row > summary { cursor: pointer; line-height: 1.8; }
+  .topic-row > div { padding: 4px 0 2px 8px; }
   .badge { display: inline-block; font-size: 11px; border: 1px solid #8886;
            border-radius: 4px; padding: 0 4px; margin-left: 6px; color: #888; }
   .cat-chip { display: inline-block; font-size: 11px; color: #4a9eff;
@@ -1024,9 +1032,10 @@ async function opReject(entryId, title) {
   if (res.error) { ka.toast("失败：" + res.error.message, "error"); return; }
   refreshCurrent ? refreshCurrent() : loadTree();
 }
-function renderEntries(list) {
+function renderEntries(list, prefixHtml = "") {
   const box = document.getElementById("hits");
-  box.innerHTML = list.length ? list.map(entryHTML).join("") : "<small>该分类下暂无条目。</small>";
+  box.innerHTML = prefixHtml
+    + (list.length ? list.map(entryHTML).join("") : "<small>该分类下暂无条目。</small>");
   bindEntryButtons();
 }
 
@@ -1038,6 +1047,7 @@ async function showCategory(catId) {
   const data = await (await fetch(`/api/categories/${catId}/entries`)).json();
   if (data.error) { ka.toast(data.error.message, "error"); return; }
   catEntries = data.entries;
+  catTopics = null;   // R14：换分类/刷新即重取主题（服务端 300 s 缓存兜住重算成本）
   const crumb = document.getElementById("crumb");
   const parts = (data.paths[0] || "").split("/");
   crumb.innerHTML = parts.map((p, i) =>
@@ -1052,19 +1062,61 @@ async function showCategory(catId) {
   else if (curView === "timeline") renderTimelineTab();
 }
 
-// ---- 分类浏览集分组（批次 72 ①，用户四问裁决：点左树分类右侧按知识集聚合） ----
-// 复用批次 60 GET /api/sets/group 查询期聚合（语义贪心聚类 / 主分类+同host 结构
-// 聚合，组头 = 成员自身信号禁发明命名），分类视图接入而非新造。>5 条自动聚合，
-// 可切平铺（localStorage 记忆，58 批折叠纪律同款）；聚合失败/不成组平铺兜底。
+// ---- 分类浏览呈现模式（批次 72 ① → R14 三态：平铺 / 按集分组 / 按主题） ----
+// 按集分组复用批次 60 GET /api/sets/group（条目级语义聚类 / 主分类+同host 结构
+// 聚合，组头 = 成员自身信号禁发明命名）；按主题复用 R13 GET /api/graph/topics
+// ?category_id=（点级 0.72 归簇 + 0.85 合并，组头 = 成员共享词禁发明命名）。
+// 三态存 localStorage（knowatlas.catMode），旧键 knowatlas.catGrouped 兼容读取；
+// 聚合失败/不成组一律平铺兜底（返工纪律：降级不能变成空白）。
 let catEntries = [];    // 当前分类全量条目（filter 在其上过滤）
-let catGrouped = localStorage.getItem("knowatlas.catGrouped") !== "0";
 let _catViewToken = 0;  // 令牌：连续切换分类/筛选时只认最新响应（防迟到覆盖）
+const CAT_MODES = [["flat", "📄 平铺"], ["set", "📐 按集分组"], ["topic", "🧠 按主题"]];
+const CAT_MODE_TITLE = {
+  flat: "平铺列表（按当前排序逐条列出）",
+  set: "按「知识集」聚合：条目级语义聚类 / 主分类+同站点（组头 = 条目自身信号）",
+  topic: "按「知识主题」聚合：分类子树内点级聚类（首次约 3–7 秒，之后走服务端缓存）",
+};
+let catMode = (() => {
+  const m = localStorage.getItem("knowatlas.catMode");
+  if (m === "flat" || m === "set" || m === "topic") return m;
+  return localStorage.getItem("knowatlas.catGrouped") === "0" ? "flat" : "set";
+})();
+let catTopics = null;   // { key, data } —— 换分类即失效（key = 分类 id）
+
+function catBarHtml(note) {
+  const btns = CAT_MODES.map(([m, label]) =>
+    `<button data-cmode="${m}"${m === catMode ? ' class="on"' : ""}`
+    + ` title="${CAT_MODE_TITLE[m]}">${label}</button>`).join("");
+  return `<div class="cat-agg-bar"><span class="cat-modes">${btns}</span>`
+    + (note ? `<small class="set-note">${note}</small>` : "") + `</div>`;
+}
+
+function bindCatBar(box) {
+  box.querySelectorAll("[data-cmode]").forEach(b => b.onclick = () => {
+    if (catMode === b.dataset.cmode) return;
+    catMode = b.dataset.cmode;
+    localStorage.setItem("knowatlas.catMode", catMode);
+    renderCategoryView();
+  });
+}
+
+// 主题模式在分类点域内聚簇，端点只吃 category_id —— 来源筛选置灰并说明，
+// 不做「静默忽略」（用户点过筛选却看到没筛的结果，比不能用更糟）。
+function syncCatFilter() {
+  const f = document.getElementById("filter");
+  const off = catMode === "topic";
+  f.disabled = off;
+  f.title = off ? "主题模式按分类点域聚合，来源筛选不适用" : "";
+  f.style.opacity = off ? ".45" : "";
+}
 
 async function renderCategoryView() {
   const tk = ++_catViewToken;
   const fv = document.getElementById("filter").value;
   const list = fv ? catEntries.filter(x => x.source_type === fv) : catEntries;
-  if (catGrouped && list.length > 5) {
+  syncCatFilter();
+  if (catMode === "topic") { await renderCategoryTopics(tk); return; }
+  if (catMode === "set" && list.length > 5) {
     const box = document.getElementById("hits");
     box.innerHTML = "<small>聚合中…</small>";
     try {
@@ -1073,18 +1125,22 @@ async function renderCategoryView() {
       if (tk !== _catViewToken) return;   // 迟到响应丢弃
       if (g.groups && g.groups.length) { renderCategoryGrouped(box, g, list); return; }
     } catch (e) { /* 聚合不可用 → 平铺兜底 */ }
+    if (tk !== _catViewToken) return;
   }
-  renderEntries(list);
-  addCatGroupToggle();   // 平铺态给切回分组入口（条目多时才有意义）
+  renderCategoryFlat(list);
+}
+
+function renderCategoryFlat(list) {
+  renderEntries(list, catBarHtml(`共 ${catEntries.length} 条`
+    + (list.length !== catEntries.length ? `（当前筛选 ${list.length} 条）` : "")));
+  bindCatBar(document.getElementById("hits"));
 }
 
 function renderCategoryGrouped(box, g, list) {
   const byId = new Map(list.map(x => [x.id, x]));
   const toCard = x => byId.get(x.id) || x;   // _row 精简形态，缺的字段回退原条目
   const note = g.mode === "semantic" ? "语义聚类（sim 通道，阈值 0.72）" : "主分类 + 同站点";
-  let html = `<div class="cat-agg-bar"><small class="set-note">按「知识集」分组`
-    + `（${note}；组头 = 成员自身信号，非人工命名）</small>`
-    + `<button id="cat-flat-btn" title="切回平铺列表">📄 平铺</button></div>`;
+  let html = catBarHtml(`按「知识集」分组（${note}；组头 = 成员自身信号，非人工命名）`);
   for (const gr of g.groups) {
     html += `<div class="set-group"><div class="set-head">`
       + gr.signals.map(s =>
@@ -1100,27 +1156,66 @@ function renderCategoryGrouped(box, g, list) {
       + `<span class="badge">${g.singles.length} 条</span></div>`
       + g.singles.map(toCard).map(entryHTML).join("") + `</div>`;
   box.innerHTML = html;
-  const fb = document.getElementById("cat-flat-btn");
-  if (fb) fb.onclick = () => {
-    catGrouped = false;
-    localStorage.setItem("knowatlas.catGrouped", "0");
-    renderCategoryView();
-  };
+  bindCatBar(box);
   bindEntryButtons();
 }
 
-function addCatGroupToggle() {
-  if (catEntries.length <= 5) return;
+// ---- 主题行渲染（R13 检索 tab / R14 分类页共用，避免两处漂移）----
+function topicPointCard(p) {
+  const src = (p.sources || [])[0];
+  return `<div class="pt-card"><div style="line-height:1.6">`
+    + `${_escHtml((p.text || p.summary || "").slice(0, 200))}</div>`
+    + (src ? `<small style="opacity:.6">溯源：<a href="#" class="pt-open" data-eid="${src.entry_id}">`
+      + `${_escHtml(src.title || src.entry_id)}</a></small>` : "")
+    + `</div>`;
+}
+
+function topicRowsHtml(topics) {
+  return topics.map(t => `<details class="topic-row"><summary>`
+    + `<b>${_escHtml(t.name)}</b> <span class="badge">${t.size} 点</span>`
+    + (t.merged > 1 ? `<span class="badge">并 ${t.merged} 簇</span>` : "")
+    + `<small style="opacity:.6"> · 溯源 ${t.sources_count} 条目</small>`
+    + `</summary><div>${(t.points || []).map(topicPointCard).join("")}</div></details>`).join("");
+}
+
+function bindTopicOpen(box) {
+  box.querySelectorAll(".pt-open").forEach(a => a.onclick = e => {
+    e.preventDefault();
+    openPreview(a.dataset.eid);
+  });
+}
+
+async function renderCategoryTopics(tk) {
   const box = document.getElementById("hits");
-  const bar = document.createElement("div");
-  bar.className = "cat-agg-bar";
-  bar.innerHTML = `<button id="cat-group-btn" title="按知识集聚合呈现（组头 = 成员自身信号，非人工命名）">📐 按集分组</button>`;
-  box.prepend(bar);
-  bar.querySelector("#cat-group-btn").onclick = () => {
-    catGrouped = true;
-    localStorage.setItem("knowatlas.catGrouped", "1");
-    renderCategoryView();
-  };
+  const note = "按「知识主题」聚合（点级 0.72 归簇 + 0.85 合并；组头 = 成员共享词，非人工命名）";
+  const draw = html => { box.innerHTML = html; bindCatBar(box); };
+  if (!currentCat) { draw(catBarHtml(note) + "<small>请先在左侧选择分类。</small>"); return; }
+  if (!catTopics || catTopics.key !== currentCat) {
+    draw(catBarHtml(note) + "<small>聚合中…（大分类首次约 3–7 秒，之后走缓存）</small>");
+    try {
+      catTopics = { key: currentCat, data: await (await fetch("/api/graph/topics?category_id="
+        + encodeURIComponent(currentCat) + "&limit=40")).json() };
+    } catch (e) {
+      if (tk !== _catViewToken) return;
+      draw(catBarHtml(note) + "<small>主题聚合失败（接口不可用）。</small>");
+      return;
+    }
+  }
+  if (tk !== _catViewToken) return;   // 迟到响应丢弃
+  const d = catTopics.data || {}, sc = d.scope || {}, topics = d.topics || [];
+  if (!topics.length) {
+    draw(catBarHtml(note) + `<small>${_escHtml(d.note || "该分类下知识点太少，聚不出主题（至少 2 个语义相近的点）。")}</small>`);
+    return;
+  }
+  const head = `${catEntries.length} 条目 → <b>${sc.points ?? d.vectors ?? 0}</b> 点 → `
+    + `<b>${topics.length}</b> 个主题`
+    + (d.total > topics.length ? `（共 ${d.total} 个，按点数取前 ${topics.length}）` : "")
+    + ` <span style="opacity:.55">· 阈值 ${d.threshold}，合并 ${d.merge_threshold}`
+    + `，落单 ${d.singles} 点</span>`;
+  draw(catBarHtml(note)
+    + `<div style="font-size:13px;margin:4px 0 8px">${head}</div>`
+    + topicRowsHtml(topics));
+  bindTopicOpen(box);
 }
 
 // ---- 手动收录（第四十二批引入，第五十九批上移顶栏对话框）----
@@ -1343,24 +1438,9 @@ async function renderTopicsTab() {
     + (d.total > topics.length ? `（共 ${d.total} 个，按点数取前 ${topics.length}）` : "")
     + ` <span style="opacity:.55">· 阈值 ${d.threshold}，合并 ${d.merge_threshold}`
     + `，落单 ${d.singles} 点</span>`;
-  const pointCard = p => {
-    const src = (p.sources || [])[0];
-    return `<div class="pt-card"><div style="line-height:1.6">`
-      + `${_escHtml((p.text || p.summary || "").slice(0, 200))}</div>`
-      + (src ? `<small style="opacity:.6">溯源：<a href="#" class="pt-open" data-eid="${src.entry_id}">`
-        + `${_escHtml(src.title || src.entry_id)}</a></small>` : "")
-      + `</div>`;
-  };
   box.innerHTML = `<div style="font-size:13px;margin:4px 0 8px">${head}</div>`
-    + topics.map(t => `<details class="topic-row"><summary>`
-      + `<b>${_escHtml(t.name)}</b> <span class="badge">${t.size} 点</span>`
-      + (t.merged > 1 ? `<span class="badge">并 ${t.merged} 簇</span>` : "")
-      + `<small style="opacity:.6"> · 溯源 ${t.sources_count} 条目</small>`
-      + `</summary><div>${(t.points || []).map(pointCard).join("")}</div></details>`).join("");
-  box.querySelectorAll(".pt-open").forEach(a => a.onclick = e => {
-    e.preventDefault();
-    openPreview(a.dataset.eid);
-  });
+    + topicRowsHtml(topics);   // R14：与分类页「按主题看」共用同一份行渲染
+  bindTopicOpen(box);
 }
 
 // ---- 词云视图（第四十三批：scoped cloud 三态词元） ----
