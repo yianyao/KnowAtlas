@@ -403,6 +403,8 @@ reader: 执行者（人与 agent）
 - [ ] 8.7 万兴脑图接入验证（配置已指 `roots=["D:/sData/KnowLedge"]`，现存 1 个 `.emmx`；先 `enabled=true` 跑通「节点→点→检索→树浏览」全链，再决定是否扩到批量脑图库）
       - 探针：该文件 integral 判定 + 整图点入库；`/api/entries/{id}/emmx_tree` 树形浏览可开合
       - **格式缺口（样本验证 2026-10-24）**：样本是 `Document Version="14.0.3"`，`document.xml` 只有 `<Properties>`，节点树在 `mmpage/page*.bin` 二进制页里；适配器只认旧版 `page.xml` → `nodes=0, degraded=1`。已探明 bin 内节点文本为 **UTF-8 明文**（原型/原型链/作用域/闭包/箭头函数 4 页），可实现流式抽取；层级需从二进制记录解出 → 需单独立项（不属 97a）
+      - **2026-10-27 复核**：真库唯一 emmx 条目 `43a1b524bc586b88`（重要概念）仍 `degraded=true`、正文空、**0 点**；
+        `page/` 为空目录、树在 `mmpage/page.bin`，与上述缺口一致。路线待裁决：源端另存 PDF（零代码）/ 立项解析二进制 / 维持降级
 - [ ] 8.8 AI 会话（97d：`sources.session.harvester_dirs` + 分支主干 + 平台思考块剔除 + redact）
       - 探针：真实导出会话清洗前后对比；条目含 title/session_id/turns 摘要
 - [ ] 8.9 邮件（97c：furniture 补丁 + redact + 线程还原）
