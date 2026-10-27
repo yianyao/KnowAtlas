@@ -2618,3 +2618,38 @@ uv run python -m pytest -o addopts= -q                 # 期望 720 passed / 1 s
 2. `pipeline/sync/__init__.py` 必须 re-export `_categorize` `_fetch_missing` `_apply_content` `_fetch_candidates` `_freshness_scan` `_clear_stale_fetch_flags` —— `ingest.py` 与 6 个测试按名取用，漏一个就是 ImportError。
 
 <!-- HANDOFF {"at":"2026-10-28T00:16:10+08:00","compactions":2,"doc":"docs/log.md#2026-10-28-0015-追加sync-拆包已备好但未落地上下文-critical","draft":false,"goal":"路线 A 进度：护栏+cli 已落地（720/1）；sync 拆包脚本已备好并通过预览自检，只差 --apply","host":"dsh","kind":"handoff","next":"① uv run python temp/split_sync_20261028.py --apply；② 删 src/knowatlas/pipeline/sync.py；③ 全量 pytest 期望 720/1；④ 绿了提交推送；⑤ 接着 api.py 拆 routers；⑥ db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档；护栏三件；cli 拆包；sync 预览自检（已通过，别重复调试脚本）；pg 评估；kpe 克隆","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":179000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
+
+## 2026-10-28 01:35 R21：路线 A 第 3 步（sync.py 拆包）
+
+### 落地
+
+`pipeline/sync.py` 861 行 → `pipeline/sync/` 6 文件：`__init__.py` 276（编排壳 + re-export）、
+`enrich.py` 273、`fetch.py` 155、`store.py` 108、`_common.py` 42、`flags.py` 40。
+函数体逐字搬迁（AST 逐字等价校验通过），`pipeline.sync.run_sync` 与 `_categorize/_fetch_missing/_apply_content/
+_fetch_candidates/_freshness_scan/_clear_stale_fetch_flags` 路径不变。全量 **720 passed / 1 skipped**，
+canary 零漂移，三份参考 `gen_docs --check` 仍 OK。
+
+### 关键坑：兄弟模块符号必须显式 import（预览自检的盲区）
+
+首次 apply 后 **37 个测试 `NameError`**：`_now_iso`/`_flag_value` 搬进了 `flags.py`，但 `enrich.py`/`fetch.py`/`store.py`
+的**嵌套函数**仍在调用它们；原脚本只补 `_common` 常量导入，没补兄弟模块。
+**编译能过、AST 逐字等价也能过，只有运行时才炸**——预览自检当时没覆盖这一类。
+
+修复（已写回 `temp/split_sync_20261028.py`）：
+
+1. 按 owner 映射自动补 `from .<模块> import ...`；
+2. **新增第四道自检**：对每个产物算 `needs（Load 名）− avail（导入+定义+内置）`，若命中 owner 符号即报错。
+
+依赖图为 `fetch→{flags,store}`、`store→flags`、`enrich→flags`、`__init__→REEXPORT`，无环。
+
+### 不要重跑
+
+- sync 拆包与全量 720/1（已提交）；`temp/sync_preview/` 与 `temp/check_sync_cross_20261028.py` 是过程产物，可删；
+- 三份参考文档、护栏三件、cli 拆包（均已提交）。
+
+### 下一步（按序）
+
+1. `web/api.py` 1,799 行 → `web/ctx.py` + `web/routers/`（7 域），URL 逐字不动，靠 `test_web_routes.py` 兜底。
+2. `datalayer/db.py` 3,194 行 → 10 文件 + mixin；**先改 `_guard` 的扫描为 `mro`**，否则锁静默失效。
+
+<!-- HANDOFF {"at":"2026-10-28T01:36:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0135-r21路线-a-第-3-步sync-拆包","draft":false,"goal":"路线 A 进度：护栏+cli+sync 已落地（720/1）；剩 api.py 拆 routers 与 db.py 拆 mixin","host":"dsh","kind":"handoff","next":"① web/api.py 拆 ctx.py+routers/（URL 逐字，test_web_routes 兜底）；② datalayer/db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档；护栏三件；cli 拆包；sync 拆包（已提交，含第四道跨模块自检）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"OK","tokens":26000,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->

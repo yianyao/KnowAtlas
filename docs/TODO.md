@@ -15,7 +15,9 @@
    `test_datalayer_surface.py`（127 个公开方法）；全量 **720 passed / 1 skipped**，且已验证"故意改坏会红"。
 3. ✅ `cli.py` → `cli/`（2026-10-28 00:0x，`454ff1b`）：8 文件（`__init__/parser/_shared/cmd_entry/cmd_sync/cmd_ops/cmd_points/cmd_quality`），
    最大 193 行；函数体逐字搬迁，`from .` 统一升一级为 `from ..`；全量仍 **720 passed / 1 skipped**。
-4. `pipeline/sync.py` → `pipeline/sync/`（5 文件）。
+4. ✅ `pipeline/sync.py` → `pipeline/sync/`（2026-10-28 01:3x）：6 文件（`__init__` 276 / `enrich` 273 /
+   `fetch` 155 / `store` 108 / `_common` 42 / `flags` 40）；函数体逐字搬迁，`run_sync` 与 5 个私有入口路径不变；
+   坑：兄弟模块符号要显式 import，否则运行期 `NameError`（已在脚本里加第四道自检）。全量仍 **720 passed / 1 skipped**。
 5. `web/api.py` → `ctx.py` + `routers/`（7 域）。
 6. `datalayer/db.py` → `datalayer/`（10 文件 + mixin；**先验证 `_guard` 的 MRO 扫描**）。
 
@@ -112,9 +114,9 @@ git status -sb                                   # 期望只有本步改动
 
 按 `docs/design/方案-2026-10-27-四个大文件拆分.md` 执行，先后顺序即下方顺序：
 
-- [ ] 护栏：`test_web_routes.py`（71 条路由快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
-- [ ] `cli.py` 775 → `cli/`（7 文件）。
-- [ ] `pipeline/sync.py` 782 → `pipeline/sync/`（5 文件）。
+- [x] 护栏：`test_web_routes.py`（73 条路由快照）、`test_cli_surface.py`、`test_datalayer_surface.py`（`cc0e556`）。
+- [x] `cli.py` 775 → `cli/`（8 文件，`454ff1b`）。
+- [x] `pipeline/sync.py` 861 → `pipeline/sync/`（6 文件，2026-10-28 01:3x）。
 - [ ] `web/api.py` 1,799 → `web/ctx.py` + `web/routers/`（7 域）。
 - [ ] `datalayer/db.py` 3,194 → `datalayer/`（10 文件 + mixin；**注意 `_guard` 的 MRO 扫描坑**）。
 
