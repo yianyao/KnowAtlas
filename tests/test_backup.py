@@ -194,6 +194,7 @@ def test_sync_aborts_when_backup_fails(bcfg, bdl, registries):
 def test_cmd_kbackup_cli(bcfg, tmp_path, monkeypatch, capsys):
     """CLI 冒烟：--snap / --verify / --restore 三模式真跑。"""
     from knowatlas import cli
+    from knowatlas.cli import cmd_ops  # 拆分后 load_config/setup_logging 绑在子模块上
 
     seeder = DataLayer(bcfg.db_path)
     seeder.init_schema()
@@ -201,8 +202,8 @@ def test_cmd_kbackup_cli(bcfg, tmp_path, monkeypatch, capsys):
     seeder.close()  # 不占锁：CLI 各子命令自己 _open，restore 要换文件
     args = type("A", (), {"snap": True, "restore": None, "verify": None,
                           "keep": None, "no_throttle": True})()
-    monkeypatch.setattr(cli, "load_config", lambda: bcfg)
-    monkeypatch.setattr(cli, "setup_logging", lambda *a: None)
+    monkeypatch.setattr(cmd_ops, "load_config", lambda: bcfg)
+    monkeypatch.setattr(cmd_ops, "setup_logging", lambda *a: None)
     assert cli._cmd_kbackup(args) == 0
     out = capsys.readouterr().out
     assert "OK 快照完成" in out
