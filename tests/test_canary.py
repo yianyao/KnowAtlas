@@ -20,13 +20,15 @@ CANARY: dict[str, str] = {
     "source_types": "6b64be2ddfef",
     "schemes": "021aa146daa7",
     "entry_fields": "1a9d42828612",
-    "config_keys": "213c47faed24",
+    "config_keys": "066e696a6766",
     # capabilities：point_extract 2.0.0 → 2.1.0（自洽性纪律 + 允许空点，
     # 工单 变更工单-2026-10-24-8.5自洽性闸门.md）；point_triage@1.0.0（P0 点分诊）
     # 与 point_errata@1.0.0（P1 点级勘误）新增（工单 变更工单-2026-10-25-点分诊.md
     # / 变更工单-2026-10-25-P1点级勘误.md）；point_lifecycle@1.0.0 新增
-    # （P2 老化两型，工单 变更工单-2026-10-26-P2点级老化两型.md）；其余指纹均未动。
-    "capabilities": "e293e25d725c",
+    # （P2 老化两型，工单 变更工单-2026-10-26-P2点级老化两型.md）；
+    # point_extract 2.1.0 → 2.2.0（max_points 可调，工单
+    # 变更工单-2026-10-27-入库即抽点与自动老化.md）；其余指纹均未动。
+    "capabilities": "337563e0e735",
 }
 
 

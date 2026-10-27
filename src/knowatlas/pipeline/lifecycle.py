@@ -25,6 +25,7 @@ from ..semantic import eol
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
 from ..semantic.tasks import point_lifecycle
+from .domain_gate import eligible_points
 
 LIFECYCLE_BATCH = 20   # 单次 LLM 调用的技术数（按技术栈分组，与 aging 20/批同口径）
 SAMPLE_CAP = 240       # 送给 LLM 的上下文片段上限（点文本）
@@ -87,6 +88,11 @@ def run_lifecycle(cfg: Any, dl: Any, *, limit: int = 0, dry_run: bool = False,
     }
     try:
         points = dl.points_of_kind("hard")
+        # 域闸门（工单 2026-10-27 §2.3）：社科/人文类一级分类不判——「技术过时」
+        # 对文学/历史/哲学没有意义；无分类的点也不判（宁漏勿误）。
+        exclude = getattr(cfg, "aging_exclude_categories", ()) if cfg is not None else ()
+        allowed = eligible_points(dl, [p["id"] for p in points], exclude)
+        points = [p for p in points if allowed.get(p["id"])]
         if limit and limit > 0:
             points = points[:limit]
         cands = [p for p in points
@@ -117,7 +123,8 @@ def run_lifecycle(cfg: Any, dl: Any, *, limit: int = 0, dry_run: bool = False,
         stats["tech_groups"] = len(groups)
         if not groups:
             return stats
-        if llm is None and cfg is not None:
+        # 试跑不自动连 LLM（dry_run 必须零费用）；要演练 B 段就显式传替身 llm。
+        if llm is None and cfg is not None and not dry_run:
             llm = LlmClient.from_config(cfg)
         if llm is None:
             stats["llm_skipped"] = ("llm 未启用（[llm] enabled=false 或 key 未设）——"

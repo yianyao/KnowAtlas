@@ -36,18 +36,20 @@ from ..base import TaskContext
 
 SPEC = CapabilitySpec(
     name="point_extract",
-    input_contract={"item": "dict（entry_id/title/source_type/body/forced_judge?）"},
+    input_contract={"item": "dict（entry_id/title/source_type/body/forced_judge?/max_points?）"},
     output_contract={"judge": "integral|split", "reason": "一句话判定理由",
                      "summary": "整条一句话摘要",
                      "points": "list[{text, summary, quote?}]（可为空：确认无可独立成点的知识）",
                      "llm_used": "bool", "error": "str（可空）"},
-    version="2.1.0",
+    version="2.2.0",
     description="知识提炼（批次 92，裁决 12：入库=知识整理不是切片）：通读全文"
                 "归纳为整理后的知识点，quote 留原文锚点；自洽性纪律（8.5）禁裸名词/"
-                "残缺步骤、允许零产出；llm 不可用静默降级",
+                "残缺步骤、允许零产出；llm 不可用静默降级；max_points 可调单条点数上限"
+                "（工单 2026-10-27 入库即抽点）",
 )
 
-_MAX_POINTS = 8  # split 切点硬上限（防 LLM 失控刷点）
+_MAX_POINTS = 8  # split 切点缺省硬上限（防 LLM 失控刷点）；item["max_points"] 可下调
+_MAX_POINTS_CAP = 20  # 配置再大也不超过此值（单条 500 字 × 20 已够，防 prompt 失控）
 
 _REFINE_RULES = (
     "提炼规则（用户裁决 2026-10-23：入库=知识整理，产出必须是知识）：\n"
@@ -138,6 +140,17 @@ _FORCED_INTEGRAL_REASON = ("用户口径 2026-10-23：整体型文档整条即�
                            "LLM 提炼为整理后的知识陈述")
 
 
+def _tune(prompt: str, n: int) -> str:
+    """把 prompt 里的「2-8 个点」换成「2-N 个点」（工单 2026-10-27 §2.3 阈值参数化）。
+
+    只改上限，不改「宁全勿碎」口径：N < 2 时按 2 处理（一个条目至少一个点）；
+    N == 8 时字符串不变（缺省行为逐字保持）。
+    """
+    if n == _MAX_POINTS:
+        return prompt
+    return prompt.replace("2-8 个点", f"2-{n} 个点").replace("2-8 个", f"2-{n} 个")
+
+
 def _user_prompt(item: dict[str, Any], body: str) -> str:
     parts = [f"来源类型:{item.get('source_type', '')}",
              f"标题:{str(item.get('title') or '')[:100]}",
@@ -166,6 +179,12 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
     else:
         prompt = _SYSTEM_PROMPT
     try:
+        n = int(item.get("max_points") or _MAX_POINTS)
+    except (TypeError, ValueError):
+        n = _MAX_POINTS
+    n = max(2, min(int(_MAX_POINTS_CAP), n))
+    prompt = _tune(prompt, n)
+    try:
         obj = extract_json_object(ctx.llm.chat(prompt,
                                                _user_prompt(item, body)))
     except LlmError as exc:
@@ -189,7 +208,7 @@ def run(item: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
                 "summary": str(obj.get("summary", "")).strip(),
                 "points": [], "llm_used": True}
     points: list[dict[str, str]] = []
-    for p in raw_points[:_MAX_POINTS]:
+    for p in raw_points[:n]:
         if not isinstance(p, dict):
             continue
         text = str(p.get("text", "")).strip()

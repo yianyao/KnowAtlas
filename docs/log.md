@@ -2428,4 +2428,7 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 1. 用户确认计划骨架（尤其 C 的闸门取舍与 F 的费用上限）。
 2. 新会话开工：先写 `docs/design/变更工单-2026-10-28-入库即抽点.md`（含 `CONFIG_SCHEMA_KEYS` 变更），
    再改 `pipeline/sync.py` + `cli.py` + `config.py`，补测试，跑 canary。
-3. 不要重跑：R17 的全量 694/1、folders 全量同步、7 条元文件归档。
+3. 不要重跑：R17 的全量 694/1、folders 全量同步、7 条元文件归档。<!-- HANDOFF {"at":"2026-10-27T22:26:12.709349+08:00","compactions":0,"doc":"docs/交接/2026-10-27-2226.md","draft":true,"goal":"上下文到 CRITICAL（98.5%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"CRITICAL","tokens":144833,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T22:42:10.747998+08:00","compactions":1,"doc":"docs/交接/2026-10-27-2242.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":79165,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+

@@ -190,6 +190,17 @@ def build_parser() -> argparse.ArgumentParser:
     kpeimport.add_argument("--no-backup", action="store_true", help="跳过写库前快照")
     kpeimport.add_argument("--limit", type=int, default=0, help="最多导入 N 个点（调试用）")
 
+    kauto = sub.add_parser(
+        "kauto", help="入库即处理（工单 2026-10-27）：待审激活 → 补抓正文 → 按类型分流抽点"
+                      "（管道/KPE）→（到点）自动老化。serve 内置同名巡检线程，本命令是无界面等价物")
+    kauto.add_argument("--dry-run", action="store_true", help="只出计划不写库/不烧 LLM")
+    kauto.add_argument("--limit", type=int, default=None,
+                       help="本轮总条数上限（缺省 [ingest] max_entries_per_run；0=不限）")
+    kauto.add_argument("--activate-only", action="store_true",
+                       help="只跑待审激活（L0 守门 → 拒绝/转正），不抓不抽")
+    kauto.add_argument("--no-aging", action="store_true", help="本轮不跑老化")
+    kauto.add_argument("--no-activate", action="store_true", help="本轮不做待审激活")
+
     return parser
 
 
@@ -612,9 +623,11 @@ def _cmd_kpoints(args: argparse.Namespace) -> int:
     if stats.get("pending_kpe"):
         detail = "、".join(f"{d['title']}（{d['chars']:,} 字）"
                           for d in stats.get("pending_kpe_detail", [])[:5])
-        print(f"  PENDING {stats['pending_kpe']} 条正文超过分块上限 60,000 字"
+        print(f"  PENDING {stats['pending_kpe']} 条正文超过分块上限"
+              f"{cfg.points_chunk_total_max:,} 字"
               f"（meta.points_pending_kpe）：{detail}")
-        print("    这些长文（书/长报告）不截断抽点；用 kpe 分块后导入：")
+        print("    这些长文（书/长报告）不截断抽点；自动通道：`kauto`（或 serve 内置巡检）"
+              "会按类型走 KPE，见 [ingest] allow_kpe。手工等价步骤：")
         print("      uv run python -m kpe chunks <源文件> --out temp/kpe-<名>")
         print("      uv run python -m kpe extract temp/kpe-<名> --base-url <url>"
               " --model <model> --api-key-env <KEY_ENV>")
@@ -795,6 +808,35 @@ def _cmd_kpeimport(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def _cmd_kauto(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from .pipeline.ingest import activate_pending, run_ingest_pass
+
+    cfg = load_config()
+    setup_logging(cfg.log_level)
+    _warn_if_llm_unavailable(cfg, "kauto")
+    dl = _open(cfg)
+    try:
+        if args.activate_only:
+            stats = activate_pending(cfg, dl, dry_run=args.dry_run)
+        else:
+            stats = run_ingest_pass(cfg, dl, None, None, dry_run=args.dry_run,
+                                    limit=args.limit,
+                                    do_aging=not args.no_aging,
+                                    activate=not args.no_activate)
+    finally:
+        dl.close()
+    head = "OK 试跑完成（dry-run 未写库）" if args.dry_run else "OK 巡检完成"
+    print(f"{head}：{_json.dumps(stats, ensure_ascii=False, default=str)}")
+    if stats.get("activate") and stats["activate"].get("rejects"):
+        for r in stats["activate"]["rejects"][:5]:
+            print(f"  REJECT {r['entry_id']} {r['title']}：{r['reason']}")
+    for err in (stats.get("errors") or [])[:5]:
+        print(f"  ERROR {_json.dumps(err, ensure_ascii=False)[:200]}")
+    return _EXIT_OK
+
+
 _COMMANDS = {
     "kinit": _cmd_kinit,
     "kadd": _cmd_kadd,
@@ -808,6 +850,7 @@ _COMMANDS = {
     "kaging": _cmd_kaging,
     "kerrata": _cmd_kerrata,
     "kpeimport": _cmd_kpeimport,
+    "kauto": _cmd_kauto,
 }
 
 

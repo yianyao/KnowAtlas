@@ -55,12 +55,13 @@ from .point_gate import gate_point
 
 _ZERO_WIDTH = re.compile(r"[\u200b\u200c\u200d\ufeff]")
 _WS = re.compile(r"\s+")
-_BODY_CAP = 6000      # 管道单次上限：正文超过即分块（P3 2026-10-26；R16 起改为管道内切块）
-_CHUNK_TOTAL_MAX = 60000  # 分块上限：≤ 此值在管道内切块抽取；超过（书/长报告）仍交 kpe
+_BODY_CAP = 6000      # 管道单次上限缺省值：正文超过即分块（可用 [points] chunk_chars 覆盖）
+_CHUNK_TOTAL_MAX = 60000  # 分块上限缺省值：≤ 此值管道内切块抽取；超过（书/长报告）走 KPE
 # 为什么不再截断：截断后的点会「假装覆盖全文」，下游 P0 分诊/ P1 勘误据此判错源头。
 # 6k–60k 管道内分块；> _CHUNK_TOTAL_MAX 才落 meta.points_pending_kpe 交 tools/kpe。
 _MIN_BODY_CHARS = 50  # 短于此的正文跳过（无点可抽）
 _POINT_BODY_CAP = 20000  # integral 点 text 上限（零 LLM 不心疼 token，保真优先）
+_MAX_POINTS_PIPE = 8  # split 切点缺省上限（[points] max_per_chunk 覆盖；语义任务再兜一层）
 _SPLIT_CATEGORY_HINT = "文学创作"  # 用户口径：此分类子树 = 知识点（切），其余 = 方案
 # 目录信号杂烩（批次 67）：目录末段名含暗示词（用户自己起的名即信号）——
 # 只认粗颗粒暗示词，宁整勿碎；不搞语义猜测。
@@ -152,7 +153,8 @@ def _chunk_body(body: str, limit: int = _BODY_CAP) -> list[tuple[int, str]]:
 
 def _candidates(dl: Any, limit: int,
                 only_ids: list[str] | None = None,
-                retry_blocked: bool = False) -> tuple[list[Any], dict[str, int]]:
+                retry_blocked: bool = False,
+                chunk_total_max: int = _CHUNK_TOTAL_MAX) -> tuple[list[Any], dict[str, int]]:
     """候选条目：active + 有正文 + 非待清理 + 未抽过。返回 (列表, 跳过统计)。
 
     only_ids（批次 70 条目级形态覆盖）：指定条目直取——跳过游标检查（调用方
@@ -181,7 +183,7 @@ def _candidates(dl: Any, limit: int,
         if (only_ids is None and not retry_blocked
                 and e.meta.get("points_pending_kpe")):
             pend = e.meta.get("points_pending_kpe") or {}
-            if int(pend.get("chars") or 0) > _CHUNK_TOTAL_MAX:
+            if int(pend.get("chars") or 0) > chunk_total_max:
                 skipped["pending_kpe"] += 1
                 continue
         if str(e.meta.get("value_flag", "")) == "not_knowledge":
@@ -285,6 +287,11 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     """
     if llm is None:
         llm = LlmClient.from_config(cfg)
+    # 阈值读配置（工单 2026-10-27《入库即抽点与自动老化》§2.1）：缺省值与常量一致，
+    # 老配置文件零行为变化；KPE 通道用的是同一组键（见 kpe_runner）。
+    chunk_chars = int(getattr(cfg, "points_chunk_chars", _BODY_CAP))
+    chunk_total_max = int(getattr(cfg, "points_chunk_total_max", _CHUNK_TOTAL_MAX))
+    max_points = int(getattr(cfg, "points_max_per_chunk", _MAX_POINTS_PIPE))
     run_id = uuid.uuid4().hex[:16]
     dl.start_run(run_id, "kpoints")
     stats: dict[str, Any] = {"run_id": run_id, "limit": limit, "dry_run": dry_run,
@@ -304,7 +311,8 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
     dry_seen: set[str] = set()  # dry-run 内存态去重（模拟 created/linked 归并）
     try:
         cand, skipped = _candidates(dl, limit, only_ids=entry_ids,
-                                    retry_blocked=retry_blocked)
+                                    retry_blocked=retry_blocked,
+                                    chunk_total_max=chunk_total_max)
         stats["skip_counts"] = skipped
         stats["pool_remaining"] = max(0, dl.count_entries("active")
                                       - len(cand) - sum(skipped.values()))
@@ -327,7 +335,7 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
             # 长文分块（R16，变更工单 2026-10-27）：6k–60k 在管道内按段落切块、逐块抽取，
             # 点合并回同一条目；> 60,000 仍交 kpe（几十块 × LLM 又贵又慢，书走离线分块）。
             # LLM 未启用时长文也不分块：照抄 6,000 字/块的点没有提炼价值，仍等 kpe。
-            if len(body) > _CHUNK_TOTAL_MAX or (len(body) > _BODY_CAP and llm is None):
+            if len(body) > chunk_total_max or (len(body) > chunk_chars and llm is None):
                 stats["pending_kpe"] += 1
                 if len(stats["pending_kpe_detail"]) < _REJECTED_DETAIL_CAP:
                     stats["pending_kpe_detail"].append(
@@ -358,7 +366,7 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                                             "error": "杂烩目录需 LLM 判定但 llm 未启用"})
                     continue
 
-            chunks = _chunk_body(body)
+            chunks = _chunk_body(body, limit=chunk_chars)
             chunked = len(chunks) > 1
             judge: str = ""
             accepted: list[dict[str, Any]] = []
@@ -371,7 +379,8 @@ def run_points_extract(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False
                     res = _integral_result(e, piece)
                 else:
                     payload: dict[str, Any] = {"entry_id": e.id, "title": e.title,
-                                               "source_type": e.source_type, "body": piece}
+                                               "source_type": e.source_type, "body": piece,
+                                               "max_points": max_points}
                     if is_split:
                         payload["forced_judge"] = "split"
                     elif not is_mixed:

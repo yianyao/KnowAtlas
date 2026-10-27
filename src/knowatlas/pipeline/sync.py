@@ -760,13 +760,45 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         # 全部按 status='active' 过滤，天然隔离），管理页「🆕 待审」批量转正或舍弃。
         # 默认 active（零行为变化）；给未来高噪音源（聊天记录/AI 会话/邮件）立闸门。
         pending_ids: set[str] = set()
-        if str(sec.get("new_entries", "active")).strip() == "pending" and new_ids:
+        entry_mode = str(sec.get("new_entries", "active")).strip().lower()
+        if entry_mode == "pending" and new_ids:
             pending_ids = set(new_ids)
             dl.set_status(sorted(pending_ids), "pending")
             dl.log_task(_now_iso(), "sync", "stage_pending", ",".join(sorted(pending_ids)),
                         {"count": len(pending_ids),
                          "source_type": _SOURCE_TYPE_BY_NAME.get(name, name),
                          "mode": "new_entries=pending"})
+        elif entry_mode == "auto" and new_ids:
+            # 工单 2026-10-27《入库即抽点与自动老化》§2.3：第三取值 auto = 守门后自动转正。
+            # 判定口径与 kauto 的 activate_pending 同源（semantic.value_guard 零成本规则）；
+            # 误杀可在管理页一键转正，审计走 task_log 的 auto_activate / auto_reject。
+            from .ingest import l0_guard
+
+            now = _now_iso()
+            ok_ids: list[str] = []
+            bad: list[tuple[str, str]] = []
+            for e in entries:
+                if e.id not in new_ids:
+                    continue
+                reason = l0_guard(str(e.locator or ""),
+                                  str(e.inline_content or "").strip())
+                if reason:
+                    bad.append((e.id, reason))
+                else:
+                    ok_ids.append(e.id)
+            if bad:
+                dl.set_status([eid for eid, _ in bad], "rejected")
+                for eid, reason in bad:
+                    dl.merge_meta(eid, {"value_flag": "not_knowledge",
+                                        "value_flag_reason": reason,
+                                        "auto_rejected_at": now})
+                dl.log_task(now, "sync", "auto_reject",
+                            ",".join(eid for eid, _ in bad),
+                            {"count": len(bad),
+                             "reasons": sorted({r for _, r in bad})})
+            dl.log_task(now, "sync", "auto_activate", ",".join(ok_ids),
+                        {"count": len(ok_ids),
+                         "source_type": _SOURCE_TYPE_BY_NAME.get(name, name)})
         cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id,
                           pending_ids=pending_ids)
         # 跨源判重（第三十八批）：新建/更新条目 canonical/hash 命中已有可消费

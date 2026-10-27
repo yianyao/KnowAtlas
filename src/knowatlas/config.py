@@ -9,7 +9,8 @@ from pathlib import Path
 from .errors import ConfigError
 
 # 顶层节（环境变量覆盖识别用）
-_TOP_SECTIONS = ("general", "web", "llm", "embedding", "fetch", "clean")
+_TOP_SECTIONS = ("general", "web", "llm", "embedding", "fetch", "clean",
+                 "ingest", "points", "aging")
 
 # config schema 键集（canary 覆盖项：改动必须先写工单）
 CONFIG_SCHEMA_KEYS = (
@@ -26,6 +27,11 @@ CONFIG_SCHEMA_KEYS = (
     "fetch.pdf_backend",
     "fetch.rate_limit_qps", "fetch.timeout_seconds",
     "clean.enabled", "clean.min_keep_ratio", "clean.redact_enabled",
+    "aging.auto", "aging.exclude_categories", "aging.interval_hours",
+    "aging.limit_per_run",
+    "ingest.allow_kpe", "ingest.enabled", "ingest.interval_seconds",
+    "ingest.kpe_max_chars", "ingest.max_entries_per_run", "ingest.max_retries",
+    "points.chunk_chars", "points.chunk_total_max", "points.max_per_chunk",
     "sources.bilibili", "sources.bookmarks", "sources.db", "sources.emmx",
     "sources.folders", "sources.ima", "sources.mail", "sources.manual",
     "sources.opml", "sources.session", "sources.txdoc", "sources.wx",
@@ -104,6 +110,77 @@ class Config:
     def sources(self) -> dict:
         v = self._data.get("sources")
         return dict(v) if isinstance(v, dict) else {}
+
+    # ---- 入库即抽点（工单 2026-10-27-入库即抽点与自动老化 §2.1）----
+
+    @property
+    def ingest_enabled(self) -> bool:
+        """serve 内置 worker 开关（kauto 不受此限：显式命令总是执行）。"""
+        return bool(self.get("ingest.enabled", False))
+
+    @property
+    def ingest_interval_seconds(self) -> int:
+        return max(30, int(self.get("ingest.interval_seconds", 600)))
+
+    @property
+    def ingest_max_entries_per_run(self) -> int:
+        """每轮总条数上限（费用护栏）；0 = 不限（不建议）。"""
+        return max(0, int(self.get("ingest.max_entries_per_run", 10)))
+
+    @property
+    def ingest_max_retries(self) -> int:
+        """单条目失败重试上限；超限进 meta.ingest.dead，不再自动烧钱。"""
+        return max(0, int(self.get("ingest.max_retries", 2)))
+
+    @property
+    def ingest_allow_kpe(self) -> bool:
+        return bool(self.get("ingest.allow_kpe", True))
+
+    @property
+    def ingest_kpe_max_chars(self) -> int:
+        """单本进 KPE 的正文字数上限（防 250 万字级误入，堵死一轮巡检）。"""
+        return max(10000, int(self.get("ingest.kpe_max_chars", 600000)))
+
+    # ---- 抽点阈值（KPE 与管道同源，工单 §2.1）----
+
+    @property
+    def points_max_per_chunk(self) -> int:
+        """单块/单条最多几个点：KPE --max-points；管道 split 上限。"""
+        return max(1, int(self.get("points.max_per_chunk", 6)))
+
+    @property
+    def points_chunk_chars(self) -> int:
+        return max(1000, int(self.get("points.chunk_chars", 6000)))
+
+    @property
+    def points_chunk_total_max(self) -> int:
+        """管道内分块上限；超过的条目改走 KPE（书/超长文档）。"""
+        return max(6000, int(self.get("points.chunk_total_max", 60000)))
+
+    # ---- 老化（工单 §2.1）----
+
+    @property
+    def aging_auto(self) -> bool:
+        return bool(self.get("aging.auto", True))
+
+    @property
+    def aging_interval_hours(self) -> int:
+        return max(1, int(self.get("aging.interval_hours", 24)))
+
+    @property
+    def aging_limit_per_run(self) -> int:
+        return max(1, int(self.get("aging.limit_per_run", 200)))
+
+    @property
+    def aging_exclude_categories(self) -> tuple[str, ...]:
+        """域闸门黑名单：一级分类名（含子树）命中即不自动老化（社科/人文类）。"""
+        v = self.get("aging.exclude_categories",
+                     ["文学创作", "哲学", "历史", "文学", "艺术", "社会学",
+                      "心理学", "经济学", "政治学", "法律", "教育", "宗教",
+                      "人类学", "语言学", "传播学"])
+        if isinstance(v, str):
+            v = [x.strip() for x in v.split(",") if x.strip()]
+        return tuple(str(x).strip() for x in (v or []) if str(x).strip())
 
 
 def _apply_env_overrides(data: dict) -> None:

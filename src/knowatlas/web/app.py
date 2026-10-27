@@ -27,11 +27,20 @@ class _NoStoreHTML(StaticFiles):
         return resp
 
 
-def create_app(cfg, dl, locators, semantics) -> FastAPI:
+def create_app(cfg, dl, locators, semantics, *, start_ingest: bool = True) -> FastAPI:
     app = FastAPI(title="KnowAtlas（知道）", version="0.1.0",
                   docs_url=None, redoc_url=None, openapi_url=None)
     install_security_middleware(app, cfg)
     register_routes(app, cfg, dl, locators, semantics)
     if _STATIC_DIR.is_dir():
         app.mount("/", _NoStoreHTML(directory=str(_STATIC_DIR), html=True), name="static")
+    if start_ingest:
+        # 入库巡检（工单 2026-10-27）：serve 起来就自动抓正文/抽点/到点老化；
+        # 配置 [ingest] enabled=false 时 start_worker 返回 None（零副作用）。
+        from .worker import start_worker
+
+        worker = start_worker(cfg, dl, locators, semantics)
+        app.state.ingest_worker = worker
+        if worker is not None:
+            app.add_event_handler("shutdown", worker.stop)
     return app

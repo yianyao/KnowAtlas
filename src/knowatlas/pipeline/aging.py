@@ -24,6 +24,7 @@ from typing import Any
 from ..semantic.base import TaskContext
 from ..semantic.llm import LlmClient
 from ..semantic.tasks import aging_judge, point_aging
+from .domain_gate import eligible_points
 
 AGING_BATCH = 20   # 单次 LLM 调用的条目数（方案 §7.5：batch 20）
 BODY_CAP = 3000    # 送 LLM 的单条正文字符上限（控成本；截断不计数——规则信号已含日期）
@@ -144,6 +145,9 @@ def run_point_aging(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False,
                              "candidates": 0, "stale": 0, "ok": 0, "keep": 0,
                              "llm_calls": 0, "errors": []}
     try:
+        # 多取一个窗口再过滤：域闸门（工单 2026-10-27 §2.3）会挡掉社科/人文点，
+        # 若先 LIMIT 再过滤，队头被挡住的点每轮都占着名额、队列永远不前进。
+        window = max(limit * 20, 200)
         rows = dl._conn.execute(
             "SELECT DISTINCT p.id AS point_id, p.text, "
             " COALESCE(json_extract(e.meta,'$.display_name'), e.title) AS title, "
@@ -156,8 +160,11 @@ def run_point_aging(cfg: Any, dl: Any, limit: int = 10, dry_run: bool = False,
             "   AND COALESCE(json_extract(e.meta,'$.freshness_flag'), '')"
             "       IN ('suspect', 'stale')"
             " ORDER BY p.created_at LIMIT ?",
-            (limit,),
+            (window,),
         ).fetchall()
+        exclude = getattr(cfg, "aging_exclude_categories", ()) if cfg is not None else ()
+        allowed = eligible_points(dl, [r["point_id"] for r in rows], exclude)
+        rows = [r for r in rows if allowed.get(r["point_id"])][:limit]
         stats["candidates"] = len(rows)
         if not rows:
             return stats

@@ -2540,6 +2540,32 @@ class DataLayer:
             "SELECT DISTINCT entry_id FROM point_sources").fetchall()
         return {r["entry_id"] for r in rows}
 
+    def point_source_map(self, point_ids: Sequence[str] | None = None
+                         ) -> dict[str, list[str]]:
+        """点 → 溯源条目 id 列表（只读；老化域闸门要按条目分类判点）。
+
+        point_ids=None 取全表（点量级 5k，一次查询比逐点查快两个数量级）；
+        显式给 id 时按 400/片分批（SQLite 变量上限 999）。
+        """
+        out: dict[str, list[str]] = {}
+        if point_ids is None:
+            rows = self._conn.execute(
+                "SELECT point_id, entry_id FROM point_sources ORDER BY point_id"
+            ).fetchall()
+            for r in rows:
+                out.setdefault(r["point_id"], []).append(r["entry_id"])
+            return out
+        ids = [p for p in point_ids if p]
+        for i in range(0, len(ids), 400):
+            chunk = ids[i:i + 400]
+            marks = ",".join("?" * len(chunk))
+            rows = self._conn.execute(
+                "SELECT point_id, entry_id FROM point_sources"
+                f" WHERE point_id IN ({marks}) ORDER BY point_id", chunk).fetchall()
+            for r in rows:
+                out.setdefault(r["point_id"], []).append(r["entry_id"])
+        return out
+
     def points_of_entries(self, entry_ids: list[str],
                           text_cap: int = 500) -> dict[str, list[dict[str, Any]]]:
         """批量取条目挂的点（③默认聚合呈现，批次 67）：entry_id → 点列表。
