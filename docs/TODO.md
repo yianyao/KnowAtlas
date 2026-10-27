@@ -95,6 +95,17 @@
 - [ ] `kpe_import` 与 `kpe_runner` 产物解析去重（两处都在读 manifest/points.jsonl）。
 - [ ] `docs/design/` 建索引页；已交付的工单移入 `archive/`（40+ 篇已影响检索）。
 
+## P2 · 文档自动化（三份参考已有初版，2026-10-27）
+
+已产出（由 `temp/gen_docs_20261027.py` 生成）：`docs/参考-命令.md`（13 子命令）、
+`docs/参考-配置.md`（59 键）、`docs/参考-接口.md`（73 端点）。
+
+- [ ] **把生成器提升为 `tools/gen_docs.py`**：加 `--check`（只比对不写，CI 用），
+      加一条测试断言「三份文档与当前源码一致」，防漂移。
+- [ ] 12 个端点缺 docstring（列表见 `docs/参考-接口.md` 文末），补一行说明即可。
+- [ ] 三份参考接进 `docs/README.md` 索引与 README 的「参考」小节。
+- [ ] 配置参考里的 I 类常量表随代码核对一次（`CleanThresholds`、`EOL` 的位置是否还准确）。
+
 ## P4 · 明确不做（防止反复讨论）
 
 - 多用户/账号/权限矩阵——个人知识库，token 即身份。
