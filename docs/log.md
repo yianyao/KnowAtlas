@@ -2755,3 +2755,62 @@ canary 零漂移，三份参考 `gen_docs --check` 仍 OK。
 4. **watcher 的 `draft:true` 交接块不是工作交接**，读本文这一段。
 
 <!-- HANDOFF {"at":"2026-10-28T01:46:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-0145-r23交接路线-a-只剩-dbpy上下文-86","draft":false,"goal":"路线 A 只剩 datalayer/db.py 拆 mixin（护栏+cli+sync+api 已落地，720/1）","host":"dsh","kind":"handoff","next":"① 读方案 §4；② 先改 _guard 扫 mro + 补 _datalayer_methods_are_guarded 测试，单独跑全量；③ 按表拆 10 文件 + mixin（SQL 逐字），同步改 AGENTS.md 的 sqlite3.connect 只允许 core.py；④ 全量 720/1 + canary 零漂移 + test_datalayer_surface 127 方法不飘；⑤ 提交推送","not_rerun":"全量 pytest 720/1；canary；gen_docs --check；三份参考；护栏三件；cli/sync/api 三个拆包（454ff1b/8dc998e/1bc9f8d 已推送）；pg 评估；kpe 克隆","schema":1,"session":"session-999552a1-9fd8-4ca6-9db1-fba411c01fc9","status":"HANDOFF","tokens":126624,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
+<!-- HANDOFF {"at":"2026-10-28T02:00:12.464401+08:00","compactions":0,"doc":"docs/交接/2026-10-28-0200.md","draft":true,"goal":"上下文到 HANDOFF（87.8%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-e61b3388-1a26-45e7-819a-fc3cfd2b6545","status":"HANDOFF","tokens":129128,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-28 02:0x R24：路线 A 收尾（`datalayer/db.py` 拆 mixin 完成）
+
+### 落地（两个提交）
+
+| 提交 | 内容 | 验收 |
+|---|---|---|
+| `adb544c` | `_guard` 扫整个 MRO + 新增 `test_public_methods_are_lock_guarded` | 721 passed / 1 skipped |
+| `<本提交>` | `datalayer/db.py` 3,462 行 → `datalayer/`（10 mixin + `core` + `_common` + 12 行 `db.py` façade） | 721 passed / 1 skipped |
+
+文件与行数：`core` 113（组合/连接/事务/迁移，唯一 `sqlite3.connect(`）/ `entries` 579 / `graph` 726 /
+`points` 518 / `views` 333 / `threads` 323 / `categories` 302 / `search` 264 / `vectors` 112 /
+`content` 107 / `ops` 97；`_common.py` 90（共享常量与纯函数助手）；`db.py` 12（兼容 façade，
+外部 `from knowatlas.datalayer.db import DataLayer` 一律不变）。
+
+### 与方案 §4 的三处结构偏离（都不改行为）
+
+1. **多一个 `_common.py`（11 个文件）**：模块级常量/助手（`REJECT_COOLING_DAYS` `_ID_RE` `_ORIGINS`
+   `_IN_CHUNK` `_ACTIVATION_ACTIONS` `_SOURCE_FIELDS` `_PATHS_CTE` `_consumable` `_parse_iso` `_now`
+   `_meta_json`）若留在 `core.py`，mixin 反向 import `core` 会成环；沿用 `pipeline/sync/_common.py` 先例。
+2. **多一个 `views.py`（12 个文件）**：方案的文件表没给 `cloud_*`/`timeline_data`/`_fill_buckets`/
+   `_stale_branches` 分配归属。最初塞进 `graph.py` 后它是 1,019 行（全库最大），拆出「视图聚合」后
+   `graph` 726 / `views` 333，符合 `docs/模块地图.md` 的「>700 行且多职责」判据。
+3. **5 个类级常量**（`_SPARSE_FOLD` `_RADIATE_KINDS` `_THREAD_NAME_MAX` `_RELATION_MAX`
+   `_POINT_SIM_THRESHOLD`）全部以 `self.` 访问 → 原样留在各自 mixin 类体，不进 `_common`。
+
+### 拆分器（`temp/split_db_20261028b.py`，analyze/preview/apply/verify）
+
+五道自检全绿：A 编译；B **162 个成员 AST 逐字等价**（唯 `__init__` 例外：只把锁循环改成 MRO 扫描）；
+C 字符串常量多重集与原件相等（SQL 逐字的最强证据）；D 公开方法集合相等；E 真 import 后逐名断言
+自由名可解析（口径修正两次：先补 locals/嵌套函数/`*args`，再只看类里的方法——嵌套函数的自由变量属
+外层作用域，不在本检查范围）。归属表显式列全 162 个成员，`assert` 不漏不重。
+
+### 验收（现场数字）
+
+- 全量 **721 passed / 1 skipped**；`test_canary.py` 零漂移；`tools/gen_docs.py --check` 三份 OK；
+  `test_datalayer_surface.py` 的 127 个公开方法快照不飘。
+- `grep -rn "sqlite3.connect(" src/` → `datalayer/core.py:33` + 两处既有只读外部库
+  （`adapters/dbfile.py:74`、`pipeline/backup.py:117/177`，`mode=ro`）；`sqlite3.Connection` 只是类型标注。
+- **反向实证**：把 `__init__` 改回 `vars(type(self))`，护栏测试报 **124 个公开方法未加锁**
+  （`1 failed`），随后从原文还原（sha256 一致）。锁定这一步不是「顺手改」而是有凭据的修复。
+- AGENTS.md 的 `sqlite3.connect` 纪律、`_SOURCE_FIELDS` 指针、mixin 锁坑三条已同步；`docs/模块地图.md`
+  的数据层/读写面/重构视角三处已改；`docs/TODO.md` 第 6 步与 P3 勾选已更新。
+
+### 不要重跑
+
+- 全量 pytest、canary、`gen_docs --check`、三份参考文档；护栏三件；`cli`/`sync`/`api`/`db` 四个拆包
+  （`454ff1b`/`8dc998e`/`1bc9f8d`/`adb544c`+本提交）；pg 评估；kpe 克隆。
+- 别重复调试拆分器语法：它已带 E 道自检、`views`/`_common` 归属和「备份只写一次」保护。
+
+### 下一步（路线 A 已完成，后续候选，按序）
+
+1. **（可选）`docs/design/` 建索引页**，把已交付工单移入 `archive/`（TODO P3 次要重构，40+ 篇影响检索）。
+2. **（可选）下一个大文件**：`adapters/emmx.py` 600 行、`pipeline/embed_index.py` 497 —— 先评估再动。
+3. **回到功能面**：TODO 的 P1 条目（判据明确、按「能让人少操作」排序）优先于继续重构。
+
+<!-- HANDOFF {"at":"2026-10-28T02:12:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-020x-r24路线-a-收尾datalayerdbpy-拆-mixin-完成","draft":false,"goal":"路线 A 全部完成：db.py 拆 mixin 收尾（adb544c 锁修复 + 本提交拆分），全量 721/1","host":"dsh","kind":"handoff","next":"① 路线 A 已收尾，无需继续拆；② 候选：docs/design 索引页+归档、adapters/emmx.py 600 行评估、TODO P1 功能项（优先）","not_rerun":"全量 pytest 721/1；canary；gen_docs --check；三份参考；护栏三件；cli/sync/api/db 四个拆包（454ff1b/8dc998e/1bc9f8d/adb544c+本提交）；pg 评估；kpe 克隆；拆分器调试","schema":1,"session":"session-e61b3388-1a26-45e7-819a-fc3cfd2b6545","status":"HANDOFF","tokens":145779,"verify":"uv run python -m pytest -o addopts= -q -> 721 passed, 1 skipped"} -->
+

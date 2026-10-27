@@ -21,12 +21,17 @@
 5. ✅ `web/api.py` → `web/ctx.py` + `web/routers/`（2026-10-28 01:4x）：7 域（`entries` 665 / `threads` 363 /
    `knowledge` 361 / `discovery` 226 / `graph` 190 / `admin` 168 / `categories` 124），`api.py` 只剩 103 行
    façade + 安全层。URL/响应逐字不变（路由清单 73→73 逐条比对），函数体 AST 逐字等价。全量仍 **720 passed / 1 skipped**。
-6. `datalayer/db.py` → `datalayer/`（10 文件 + mixin；**先验证 `_guard` 的 MRO 扫描**）。
+6. ✅ `datalayer/db.py` → `datalayer/`（2026-10-28 02:0x）：`core.py` 113 行（组合/连接/事务/迁移）+
+   10 个 mixin（`entries` 579 / `graph` 726 / `points` 518 / `views` 333 / `threads` 323 / `categories` 302 /
+   `search` 264 / `vectors` 112 / `content` 107 / `ops` 97）+ `_common.py` 90 + `db.py` 12 行 façade；
+   **先改 `_guard` 扫 MRO 并补锁护栏测试**（`adb544c`，实测改回 `vars(type(self))` 会有 124 个公开方法失锁、
+   护栏测试变红）。SQL/方法名/签名/事务边界逐字不动，AST 等价 + 字符串常量多重集校验通过；
+   全量仍 **721 passed / 1 skipped**，canary 零漂移。
 
 **每步固定验收三条**：
 
 ```powershell
-uv run python -m pytest -o addopts= -q          # 期望 715 passed / 1 skipped（新增护栏后条数会增加）
+uv run python -m pytest -o addopts= -q          # 期望 721 passed / 1 skipped（2026-10-28 基线）
 uv run python -m pytest -o addopts= -q tests/test_canary.py   # 期望零漂移
 git status -sb                                   # 期望只有本步改动
 ```
@@ -120,7 +125,7 @@ git status -sb                                   # 期望只有本步改动
 - [x] `cli.py` 775 → `cli/`（8 文件，`454ff1b`）。
 - [x] `pipeline/sync.py` 861 → `pipeline/sync/`（6 文件，2026-10-28 01:3x）。
 - [x] `web/api.py` 1,952 → `web/ctx.py` + `web/routers/`（7 域，2026-10-28 01:4x；`api.py` 103 行）。
-- [ ] `datalayer/db.py` 3,194 → `datalayer/`（10 文件 + mixin；**注意 `_guard` 的 MRO 扫描坑**）。
+- [x] `datalayer/db.py` 3,462 → `datalayer/`（2026-10-28 02:0x）：10 mixin + `core.py` + `_common.py`，`db.py` 12 行 façade；`_guard` 先改 MRO 扫描（`adb544c`）。路线 A 至此完成。
 
 次要重构：
 

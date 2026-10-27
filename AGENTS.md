@@ -106,7 +106,7 @@ uv run python -m pytest -q                             # 基线：全绿（含 1
 ## 4. 硬纪律（违反会被 pre-commit / CI / canary 拦下）
 
 1. **契约变更先写工单**：字段 / locator scheme / `SOURCE_TYPES`·`STATUSES` / 表结构 / 接口签名 / `CONFIG_SCHEMA_KEYS` 的任何改动，先写 `docs/design/变更工单-*.md`；改完跑 `uv run python -m pytest tests/test_canary.py`。
-2. **`datalayer/` 是唯一碰 SQLite 的模块**（防腐化红线）：`grep -rn "sqlite3.connect" src/` 只允许命中 `datalayer/db.py`，`INSERT/UPDATE/DELETE` 同理。
+2. **`datalayer/` 是唯一碰 SQLite 的模块**（防腐化红线）：`grep -rn "sqlite3.connect(" src/` 只允许命中 `datalayer/core.py`（唯一建连处；`datalayer/db.py` 只是 12 行兼容 façade）。既有的两处 `mode=ro` 外部库连接（`adapters/dbfile.py`、`pipeline/backup.py`）不在红线内，别再加第三处。`INSERT/UPDATE/DELETE` 同理，只允许出现在 `datalayer/` 的 mixin 里；`sqlite3.Connection` 只是类型标注，不算建连。
 3. **能力注册只出现在 `registry/builtins.py`**：handler/task 文件不得自注册（防 import 副作用）。新能力 = 新文件 + builtins 加一行，不改主流程。
 4. **格式**：落盘文本统一 UTF-8 无 BOM + LF（`.gitattributes` 锁 `eol=lf`；`*.bat/*.cmd` 例外为 CRLF）。禁止 `Set-Content -Encoding UTF8` 写源码（带 BOM）。
 5. **凭证纪律**：配置里只写 `*_env` 变量名，密钥本体不入仓库 / 不入配置 / 不入日志。
@@ -120,7 +120,8 @@ uv run python -m pytest -q                             # 基线：全绿（含 1
 - **端口与 Host 白名单**：`web/api.py::install_security_middleware` 按 `cfg.general.server_port` 生成白名单。`serve --port 9000` 不会回写 cfg → 换端口访问直接被 `FORBIDDEN_HOST` 拒。桌面壳（`desktop/main.py`）在 `create_app` 前覆盖了 cfg 值，CLI 的 `serve --port` 没有——改端口相关逻辑时两处都要看。
 - **写操作三件套**：`X-KnowAtlas-Token` 头 + `application/json` + Host/Origin 命中白名单。serve 未设环境变量时会**自动生成一次性令牌并打印在启动日志**里，重启即失效。
 - **`markitdown` 的 Office/PDF 解析依赖必须显式装**（`mammoth`/`openpyxl`/`xlrd`/`python-pptx`/`pdfplumber`），漏装时静默抛 `MissingDependencyException`——已在 `pyproject.toml` 里。
-- **`meta` 是浅合并**（`datalayer/db.py::_SOURCE_FIELDS` 注释）：upsert 只用源拥有的字段覆盖，`value_flag`/`link_status`/`dedupe_master`/`freshness_flag` 等后处理键必须保住，否则同步会抹掉人工结论。
+- **`meta` 是浅合并**（`datalayer/_common.py::_SOURCE_FIELDS` 注释，原 db.py 同名常量）：upsert 只用源拥有的字段覆盖，`value_flag`/`link_status`/`dedupe_master`/`freshness_flag` 等后处理键必须保住，否则同步会抹掉人工结论。
+- **`datalayer/` 是 mixin 组合**（2026-10-28 拆自 3,462 行的 db.py）：`DataLayer(_EntriesMixin, _CategoriesMixin, …, _CoreMixin)`，`db.py` 只是 12 行 façade。锁由 `_CoreMixin.__init__` 扫 `type(self).__mro__[:-1]` 后包装公开方法——**改回 `vars(type(self))` 会让父类方法全部漏包（锁静默失效）**，`tests/test_datalayer_surface.py::test_public_methods_are_lock_guarded` 会红（已实证 124 个方法失锁）。新增 `DataLayer` 方法落在对应 mixin 文件里，不要写进 `core.py`。
 - **消费面守卫 `_consumable()`** 同时存在 SQL 片段与 `pipeline/dedupe.py::_is_consumable` 两处口径，改一处必须同步另一处。
 - 版本号不一致：`pyproject.toml` 写 `0.2.0`，`src/knowatlas/__init__.py` 仍为 `0.1.0`（`--version` 取后者）；改版本时两处一起改。
 - Windows 控制台默认 GBK：CLI 中文输出会显示乱码（数据本身是 UTF-8）；看中文先 `chcp 65001` 并设 `PYTHONIOENCODING=utf-8`。
