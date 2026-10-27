@@ -13,7 +13,8 @@
    `tests/test_docs_in_sync.py`；全量 **716 passed / 1 skipped**。`temp/gen_docs_20261027.py` 可删。
 2. ✅ 护栏（2026-10-28 00:0x）：`test_web_routes.py`（73 端点）、`test_cli_surface.py`（13 子命令）、
    `test_datalayer_surface.py`（127 个公开方法）；全量 **720 passed / 1 skipped**，且已验证"故意改坏会红"。
-3. `cli.py` → `cli/`（7 文件）。
+3. ✅ `cli.py` → `cli/`（2026-10-28 00:0x，`454ff1b`）：8 文件（`__init__/parser/_shared/cmd_entry/cmd_sync/cmd_ops/cmd_points/cmd_quality`），
+   最大 193 行；函数体逐字搬迁，`from .` 统一升一级为 `from ..`；全量仍 **720 passed / 1 skipped**。
 4. `pipeline/sync.py` → `pipeline/sync/`（5 文件）。
 5. `web/api.py` → `ctx.py` + `routers/`（7 域）。
 6. `datalayer/db.py` → `datalayer/`（10 文件 + mixin；**先验证 `_guard` 的 MRO 扫描**）。

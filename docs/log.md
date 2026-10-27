@@ -2551,3 +2551,40 @@ effective **98.5%**（CRITICAL），2026-10-27T21:38+08:00。
 - `watcher` 会写 `draft:true` 的交接块（23:36 那条），那是上下文事件，不是工作交接——读本文上面这条。
 
 <!-- HANDOFF {"at":"2026-10-27T23:45:30+08:00","compactions":2,"doc":"docs/log.md#2026-10-27-2345-r19规划收口三份参考文档--四项决策--自主运行口径","draft":false,"goal":"规划收口：三份自动生成参考（命令/配置/接口）+ D1–D4 决策 + 路线 A 拆分方案；下一步按 TODO 自主开工","host":"dsh","kind":"handoff","next":"① tools/gen_docs.py --check + test_docs_in_sync.py；② 护栏三件（routes/cli/datalayer 快照）；③ cli.py 拆包；④ sync.py 拆包；⑤ api.py 拆 routers；⑥ db.py 拆 mixin","not_rerun":"三份参考文档已生成；全量 pytest 715/1 与 canary；kauto --dry-run --limit 5；git subtree pull tools/kpe（ef0e251）；pg 接入评估（D4 已定不 vendor）","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"OK","tokens":107434,"verify":"uv run python -m pytest -o addopts= -q -> 715 passed, 1 skipped"} -->
+<!-- HANDOFF {"at":"2026-10-27T23:48:11.867803+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2348.md","draft":true,"goal":"上下文到 HANDOFF（88.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":130811,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-27T23:50:11.916521+08:00","compactions":2,"doc":"docs/交接/2026-10-27-2350.md","draft":true,"goal":"上下文到 CRITICAL（96.5%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"CRITICAL","tokens":141956,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-28 00:00 R20：路线 A 第 1–2 步（护栏 + cli 拆包）
+
+### 落地（两个提交，均已推送）
+
+| 提交 | 内容 |
+|---|---|
+| `cc0e556` | 三道护栏：`test_web_routes.py`（73 端点）、`test_cli_surface.py`（13 子命令）、`test_datalayer_surface.py`（127 公开方法）。已实测"故意改坏会红"。全量 **720 passed / 1 skipped**。 |
+| `454ff1b` | `cli.py` 775 行 → `cli/` 8 文件（`__init__` 49、`_shared` 44、`parser` 191、`cmd_entry` 53、`cmd_sync` 70、`cmd_ops` 193、`cmd_points` 161、`cmd_quality` 158）。函数体逐字搬迁，`from .` 统一升一级为 `from ..`（含函数体内的局部 import）。全量仍 720/1，canary 零漂移，`gen_docs --check` 三份参考仍同步。 |
+
+### 两个必须记住的坑（拆后面三个文件会再遇到）
+
+1. **相对导入升一级**：`cli.py` 变包后，`from .config` 必须变 `from ..config`；**函数体内的局部 import 也要改**（`_cmd_kbackup` 里的 `from .pipeline.backup` 就是漏网之鱼，表现为 `ModuleNotFoundError: knowatlas.cli.config`）。包内兄弟模块（`._shared`/`.parser`/`.cmd_*`）保持单点。
+2. **测试 monkeypatch 的落点变了**：`monkeypatch.setattr(cli, "load_config", …)` 失效，因为 `load_config` 现在绑在 `cli.cmd_ops` 上。改法是 patch 使用处（`from knowatlas.cli import cmd_ops` 后 setattr）。已在 `test_backup.py` 修正。
+
+### 下一步（按序）
+
+1. `pipeline/sync.py` 782 行 → `pipeline/sync/`（`__init__` 编排壳 + `fetch/store/enrich/flags`），保留 `pipeline.sync.run_sync` 路径。
+2. `web/api.py` 1,799 行 → `web/ctx.py` + `web/routers/`（7 域），URL 逐字不动，靠 `test_web_routes.py` 兜底。
+3. `datalayer/db.py` 3,194 行 → 10 文件 + mixin；**先改 `_guard` 的扫描为 `mro`**，否则锁静默失效。
+
+### 不要重跑
+
+- 三份参考文档（`gen_docs --check` 已绿）；护栏三件与 cli 拆包（已提交）；
+- 全量 pytest 现基线是 **720 passed / 1 skipped**（不是 715）；
+- 别再评估 pg（D4 已定）、别再克隆 kpe（已在 `D:\sData\git\kpe`）。
+
+### 现场
+
+- 本会话上下文已到 **96.5%（141,956 tokens，CRITICAL）**，必须换会话。
+- 工作区干净，`main...origin/main` 同步，HEAD = `454ff1b`（TODO 的勾选在下一个提交里）。
+
+<!-- HANDOFF {"at":"2026-10-28T00:01:30+08:00","compactions":2,"doc":"docs/log.md#2026-10-28-0000-r20路线-a-第-12-步护栏--cli-拆包","draft":false,"goal":"路线 A 进度：护栏三件 + cli.py 拆包完成（720 passed/1 skipped，454ff1b）；剩 sync/api/db 三个大文件","host":"dsh","kind":"handoff","next":"① pipeline/sync.py 拆成 pipeline/sync/（保留 run_sync 路径）；② web/api.py 拆 ctx+routers（URL 逐字，靠 test_web_routes 兜底）；③ datalayer/db.py 拆 mixin（先改 _guard 扫 mro）","not_rerun":"三份参考文档已生成且 --check 绿；护栏三件与 cli 拆包已提交（cc0e556/454ff1b）；全量基线 720 passed/1 skipped；pg 接入评估（D4 已定）；kpe 克隆（已在 D:\\sData\\git\\kpe）","schema":1,"session":"session-9089cfba-7f7b-4fe0-997b-0cebec08ccbb","status":"HANDOFF","tokens":141956,"verify":"uv run python -m pytest -o addopts= -q -> 720 passed, 1 skipped"} -->
