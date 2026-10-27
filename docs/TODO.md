@@ -11,7 +11,8 @@
 
 1. ✅ 生成器转正（2026-10-27 23:50）：`tools/gen_docs.py`（`--check` 只比对不写）+
    `tests/test_docs_in_sync.py`；全量 **716 passed / 1 skipped**。`temp/gen_docs_20261027.py` 可删。
-2. 护栏：`test_web_routes.py`（73 端点快照）、`test_cli_surface.py`、`test_datalayer_surface.py`。
+2. ✅ 护栏（2026-10-28 00:0x）：`test_web_routes.py`（73 端点）、`test_cli_surface.py`（13 子命令）、
+   `test_datalayer_surface.py`（127 个公开方法）；全量 **720 passed / 1 skipped**，且已验证"故意改坏会红"。
 3. `cli.py` → `cli/`（7 文件）。
 4. `pipeline/sync.py` → `pipeline/sync/`（5 文件）。
 5. `web/api.py` → `ctx.py` + `routers/`（7 域）。
