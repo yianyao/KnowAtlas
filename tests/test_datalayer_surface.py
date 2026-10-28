@@ -46,7 +46,7 @@ EXPECTED = frozenset({
     "reorder_thread_items", "reverse_reach", "search_entries_direct", "search_fts",
     "search_graph", "search_points", "set_conv_thread", "set_point_aging", "set_status",
     "set_thread_digest", "start_run", "status_map", "subtree_category_ids",
-    "sweep_expired_rejections", "threads_for_entry", "timeline_data", "transaction",
+    "sweep_expired_rejections", "task_overview", "threads_for_entry", "timeline_data", "transaction",
     "update_thread", "update_thread_item", "upsert_conv_messages", "upsert_entries",
     "vacuum_into",
 })

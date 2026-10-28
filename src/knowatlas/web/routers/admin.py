@@ -2,6 +2,7 @@
 
 本域端点：
 - /sources
+- /tasks
 - /token-hint
 - /session
 - /mcp/search
@@ -46,6 +47,17 @@ def register(ctx: AppCtx) -> APIRouter:
         return {"sources": [{"name": name, "label": label,
                              "configured": bool(cfg.get(f"sources.{name}") or {})}
                             for name, label in _KNOWN_SOURCES]}
+
+    @router.get("/tasks")
+    def tasks(recent: int = 10) -> dict:
+        """任务运行概览（只读）：每类任务的最新一轮（时间/耗时/条数/错误数/试跑/未完成）
+        + 最近 N 条明细。
+
+        数据源是 `runs` 表（各 pipeline 的 `start_run`/`finish_run` 已写入），不读
+        `task_log` 明细——单条例子的审计仍在条目详情与 `get_task_log`。管理页
+        「数据管理 → 任务」卡片用它，替代原先只有 kind 的徽标。
+        """
+        return dl.task_overview(recent=recent)
 
     @router.get("/token-hint")
     def token_hint() -> dict:

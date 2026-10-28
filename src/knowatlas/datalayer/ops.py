@@ -6,7 +6,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from ._common import _meta_json, _now
+from ._common import _meta_json, _now, _parse_iso
+
+
+def _elapsed_seconds(started: Any, finished: Any) -> float | None:
+    """两个 ISO 时间串相差的秒数；任一侧为空串/坏串 → None（视图里显示「—」）。"""
+    a, b = _parse_iso(started), _parse_iso(finished)
+    if a is None or b is None:
+        return None
+    return round((b - a).total_seconds(), 1)
 
 
 class _OpsMixin:
@@ -94,4 +102,51 @@ class _OpsMixin:
         return [{"id": r["id"], "kind": r["kind"], "started_at": r["started_at"],
                  "finished_at": r["finished_at"], "stats": json.loads(r["stats"])}
                 for r in rows]
+
+    # ---- 任务视图（2026-10-28，工单《任务视图 API》）----
+
+    @staticmethod
+    def _run_row(row: Any) -> dict[str, Any]:
+        """runs 行 → 视图投影（私有；不加锁，由调用方持锁）。"""
+        stats = json.loads(row["stats"] or "{}")
+        started, finished = row["started_at"], row["finished_at"]
+        return {"id": row["id"], "kind": row["kind"],
+                "started_at": started, "finished_at": finished,
+                "duration_s": _elapsed_seconds(started, finished),
+                "unfinished": finished is None,
+                "dry_run": bool(stats.get("dry_run")), "stats": stats}
+
+    def task_overview(self, recent: int = 10) -> dict[str, Any]:
+        """任务运行概览（只读，`/api/tasks` 用）：每类任务最新一轮 + 最近 N 条明细。
+
+        为什么不用 `recent_runs(5)`：那是全表倒序 5 条，会被 sync_incremental 之类
+        挤满，取不到「上一轮巡检」；这里先按 kind 聚合，再各取最新一行。
+
+        - `unfinished`：`finished_at` 为空（进程被中断或仍在跑）——「没跑完」本身是信号；
+        - `dry_run`：试跑也写 runs（审计口径），视图必须区分，否则会当成上一轮实跑；
+        - `duration_s`：起止都为 ISO 时相减，坏串/空值给 None（前端显示「—」）；
+        - 同类同秒并列时按 `id` 倒序兜底，不依赖行序。
+        """
+        limit = max(1, min(int(recent), 100))
+        kinds: list[dict[str, Any]] = []
+        for r in self._conn.execute(
+            "SELECT kind, count(*) AS runs,"
+            " sum(CASE WHEN finished_at IS NULL THEN 1 ELSE 0 END) AS unfinished,"
+            " max(started_at) AS last_at"
+            " FROM runs GROUP BY kind ORDER BY last_at DESC"
+        ).fetchall():
+            last = self._conn.execute(
+                "SELECT id, kind, started_at, finished_at, stats FROM runs"
+                " WHERE kind=? ORDER BY started_at DESC, id DESC LIMIT 1",
+                (r["kind"],),
+            ).fetchone()
+            kinds.append({"kind": r["kind"], "runs": int(r["runs"]),
+                          "unfinished": int(r["unfinished"] or 0),
+                          "last": self._run_row(last) if last is not None else None})
+        rows = self._conn.execute(
+            "SELECT id, kind, started_at, finished_at, stats FROM runs"
+            " ORDER BY started_at DESC, id DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return {"kinds": kinds, "recent": [self._run_row(x) for x in rows],
+                "unfinished_total": sum(k["unfinished"] for k in kinds)}
 

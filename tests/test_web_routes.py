@@ -28,7 +28,7 @@ EXPECTED = frozenset({
     "GET /api/graph/topics", "GET /api/mcp/entry/{entry_id}", "GET /api/mcp/search",
     "GET /api/mcp/tree", "GET /api/not-knowledge", "GET /api/pending", "GET /api/rejected",
     "GET /api/search", "GET /api/session", "GET /api/sets/group", "GET /api/sources",
-    "GET /api/stats", "GET /api/threads", "GET /api/threads-lookup",
+    "GET /api/stats", "GET /api/tasks", "GET /api/threads", "GET /api/threads-lookup",
     "GET /api/threads/{thread_id}", "GET /api/timeline", "GET /api/token-hint", "GET /api/tree",
     "GET /api/uncategorized", "POST /api/categories", "POST /api/categories/{category_id}/merge",
     "POST /api/categories/{category_id}/move", "POST /api/categories/{category_id}/rename",

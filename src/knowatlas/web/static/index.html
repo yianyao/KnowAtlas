@@ -2139,14 +2139,72 @@ async function mgmtRejected() {
   });
 }
 
+// ---- 任务卡片（2026-10-28，工单《任务视图 API》）：上一轮巡检/老化的时间·耗时·条数·错误 ----
+// 数据来自 GET /api/tasks（runs 表按 kind 聚合）；试跑与未完成必须显式标记，
+// 否则「没跑完」和「只试了计划」都会被看成上一轮实跑的结果。
+const TASK_LABEL = {
+  kauto: "入库巡检", kaging: "老化", kpoints: "抽点", kinit: "建库", kadd: "收录",
+  kerrata: "勘误", expand: "扩展", kcheck: "体检", ktest: "回归",
+  sync_full: "全量同步", sync_incremental: "增量同步",
+};
+// 每类任务的「本轮条数」白名单（键名来自 runs.stats）；表外的 kind 退化为只显示错误数，
+// 后端新增任务类型时卡片不会空白。
+const TASK_COUNTS = {
+  kauto: [["激活", "activated"], ["拒绝", "rejected"], ["抓正文", "fetched"],
+          ["管道", "pipeline"], ["KPE", "kpe"], ["新点", "points_created"], ["跳过", "skipped"]],
+  kaging: [["候选", "candidates"], ["版本淘汰", "version_stale"], ["版本保留", "retired_keep"],
+           ["待判", "unjudged"]],
+  kpoints: [["处理", "processed"], ["分块", "chunked"], ["新点", "points_created"],
+            ["闸门", "gate_blocked"]],
+};
+
+function _taskTimeText(iso) {
+  return iso ? String(iso).replace("T", " ").slice(0, 16) : "—";
+}
+
+function _taskDurText(sec) {
+  if (sec === null || sec === undefined) return "—";
+  const s = Number(sec);
+  if (!Number.isFinite(s)) return "—";
+  if (s < 90) return `${Math.round(s)} 秒`;
+  if (s < 5400) return `${Math.round(s / 60)} 分`;
+  return `${(s / 3600).toFixed(1)} 小时`;
+}
+
+function _taskCard(data) {
+  const kinds = (data && data.kinds) || [];
+  if (!kinds.length) return "<small>还没有任务记录（跑一次 ksync / kauto 后可见）。</small>";
+  return kinds.map(k => {
+    const last = k.last || {};
+    const st = last.stats || {};
+    const nums = (TASK_COUNTS[k.kind] || [])
+      .filter(([, key]) => st[key] !== undefined && st[key] !== null)
+      .map(([label, key]) => `${label} ${st[key]}`);
+    const flags = [];
+    if (last.dry_run) flags.push(`<span class="badge" title="dry-run：只出计划，未写数据">试跑</span>`);
+    // 未完成按「该类历史上有几轮没跑完」计：最新一轮跑完了，旧的中断轮次也不能静默
+    if (k.unfinished) flags.push(`<span class="badge" title="finished_at 为空：进程被中断或仍在跑（含历史轮次）">未完成 ${k.unfinished}</span>`);
+    const errs = Number(st.errors || 0);
+    if (errs > 0) flags.push(`<span class="badge" title="本轮错误数（明细见日志与 task_log）">错误 ${errs}</span>`);
+    return `<div style="margin:3px 0">`
+      + `<b>${TASK_LABEL[k.kind] || k.kind}</b> `
+      + `<span class="badge" title="${String(last.started_at || "").replace(/"/g, "&quot;")}">${_taskTimeText(last.started_at)}</span> `
+      + `<span class="badge">耗时 ${_taskDurText(last.duration_s)}</span> `
+      + (nums.length ? `<span class="badge">${nums.join(" · ")}</span> ` : "")
+      + flags.join(" ")
+      + ` <small style="color:#888">共 ${k.runs} 轮</small></div>`;
+  }).join("");
+}
+
 async function mgmtData() {
   refreshCurrent = () => mgmtShow("data");
-  _mgmtDesc().textContent = "采集 / 清理入口与各源配置状态（改配置：config/knowatlas.toml）。";
+  _mgmtDesc().textContent = "采集 / 清理入口、各源配置状态与上一轮任务（改配置：config/knowatlas.toml）。";
   const body = _mgmtBody();
   body.innerHTML = "<small>载入中…</small>";
-  const [src, stats] = await Promise.all([
+  const [src, stats, tasks] = await Promise.all([
     fetch("/api/sources").then(r => r.json()).catch(() => ({ sources: [] })),
     fetch("/api/stats").then(r => r.json()).catch(() => ({})),
+    fetch("/api/tasks").then(r => r.json()).catch(() => ({})),
   ]);
   const bs = stats.by_source || {};
   let html = `<div style="margin:4px 0 14px"><button id="open-ingest" style="cursor:pointer;padding:6px 14px">＋ 收录网页</button>`
@@ -2159,12 +2217,8 @@ async function mgmtData() {
     + (stats.archived !== undefined ? ` <span class="badge">归档 ${stats.archived}</span>` : "")
     + (stats.contents !== undefined ? ` <span class="badge">正文块 ${stats.contents}</span>` : "")
     + `</div>`;
-  const runs = stats.recent_runs || [];
-  if (runs.length) {
-    html += `<div class="wb-channel">最近任务</div><div style="margin-bottom:12px">`
-      + runs.map(r => `<span class="badge" title="${(r.started_at || "").replace(/"/g, "&quot;")}">${r.kind || "?"}</span>`).join(" ")
-      + `</div>`;
-  }
+  html += `<div class="wb-channel">任务</div><div style="margin-bottom:12px">`
+    + _taskCard(tasks) + `</div>`;
   html += `<div class="wb-channel">源配置状态</div><div>`
     + (src.sources || []).map(s =>
         `<span class="badge" style="${s.configured ? "" : "opacity:.55"}" title="config [sources.${s.name}] ${s.configured ? "已配置" : "未配置"}">${s.label} ${s.configured ? "✓" : "—"}</span>`).join(" ")
