@@ -15,6 +15,7 @@ from knowatlas.pipeline.embed_index import (
     cluster_report, embed_entries, embed_points, group_hits, hybrid_search,
     search_points_hybrid,
 )
+from knowatlas.semantic import embed as embed_mod
 from knowatlas.semantic.base import TaskContext
 from knowatlas.semantic.embed import (
     blob_to_vec, cosine, normalize, top_similar, vec_to_blob,
@@ -519,8 +520,6 @@ def test_search_hybrid_endpoint_degrades_without_embedder(client, cfg, dl):
 
 
 def test_search_hybrid_endpoint_with_embedder(cfg, dl, registries, monkeypatch):
-    import knowatlas.web.api as wapi
-
     es = _seed(dl, 1)
     v = normalize([1.0, 0, 0, 0, 0, 0, 0, 0])
     dl.put_vectors([{"entry_id": es[0].id, "dim": 8, "model": "fake:test",
@@ -535,3 +534,54 @@ def test_search_hybrid_endpoint_with_embedder(cfg, dl, registries, monkeypatch):
     assert body["mode"] == "hybrid" and "note" not in body
     assert any(h["entry_id"] == es[0].id and "fts" in h["reasons"]
                for h in body["hits"])
+
+
+# ---- 嵌入后端故障时检索降级（2026-10-28 变更工单-检索降级与嵌入失败处理） ----
+
+class _BoomEmbedder:
+    """模拟硅基 402：encode 必抛（真库现场 11 s 后 500 的同一条路径）。"""
+
+    name = "boom:BAAI/bge-m3"
+    dim = 8
+
+    def encode(self, texts):
+        raise embed_mod.EmbedRejected(
+            "embedding 请求被拒绝（https://api.siliconflow.cn/v1/embeddings）："
+            "HTTP 402：{\"code\":30001,\"message\":\"Sorry, your account balance is insufficient\"}")
+
+
+def test_api_search_degrades_when_embedder_fails(cfg, dl, registries, monkeypatch):
+    """fts 模式：硬失败不得变成 500；点/条目通道照常，响应带降级原因。"""
+    es = _seed(dl, 1)
+    _seed_point(dl, es[0], "雪花写作法是一种结构化的小说创作方法")
+    monkeypatch.setattr("knowatlas.semantic.embed.from_config",
+                        lambda cfg: _BoomEmbedder())
+    app = create_app(cfg, dl, *registries)
+    r = TestClient(app, headers={"Host": "127.0.0.1:8420"}).get(
+        "/api/search", params={"q": "雪花"})
+    assert r.status_code == 200                     # 原先是 500
+    body = r.json()
+    assert body["effective_mode"] == "fts"
+    assert body["points"] and "雪花写作法" in body["points"][0]["text"]
+    assert "HTTP 402" in body["embed_note"]
+    assert "降级全文检索" in body["embed_note"]
+    # 条目区（点反查）同样不受影响
+    assert any(h["entry_id"] == es[0].id and h["via"] == "point"
+               for h in body["hits"])
+
+
+def test_api_search_hybrid_degrades_when_embedder_fails(cfg, dl, registries,
+                                                        monkeypatch):
+    """hybrid 模式：复用「无 embedder」的同一降级形状（effective_mode=fts + note）。"""
+    es = _seed(dl, 1)
+    _seed_point(dl, es[0], "雪花写作法是一种结构化的小说创作方法")
+    monkeypatch.setattr("knowatlas.semantic.embed.from_config",
+                        lambda cfg: _BoomEmbedder())
+    app = create_app(cfg, dl, *registries)
+    r = TestClient(app, headers={"Host": "127.0.0.1:8420"}).get(
+        "/api/search", params={"q": "雪花", "mode": "hybrid"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mode"] == "hybrid" and body["effective_mode"] == "fts"
+    assert body["note"] and "HTTP 402" in body["embed_note"]
+    assert body["points"]

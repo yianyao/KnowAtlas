@@ -101,6 +101,11 @@
   .sig-host { color: #8d5aa8; border-color: #8d5aa866; }
   .set-excerpt { font-size: 12px; color: #888; margin: 2px 0 8px; }
   .set-note { display: block; margin-bottom: 6px; }
+  /* 检索降级/故障提示条（2026-10-28 变更工单-检索降级与嵌入失败处理）：
+     语义通道不可用或接口非 2xx 时必须可见，不再静默丢结果 */
+  .wb-note { font-size: 12px; line-height: 1.6; color: var(--warning);
+             border-left: 3px solid var(--warning); background: #ffffff08;
+             padding: 4px 8px; margin: 0 0 8px; border-radius: 4px; }
   /* 分类浏览集分组切换条（批次 72 ①；R14 扩成三态模式条） */
   .cat-agg-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 6px;
                  flex-wrap: wrap; }
@@ -1302,7 +1307,8 @@ document.querySelectorAll("#view-tabs .vtab").forEach(b =>
 // 去重合并，三视图共享同一份结果：聚合结果（带关联解释；命中多时按知识集
 // 分组展示，第六十批）/ 线索（命中条目所属线索聚合） / 放射（焦点邻域持续下钻）。
 const wb = { q: "", merged: [], tab: "agg", focusId: null,
-             groups: null, singles: null, gmode: "", topics: null };
+             groups: null, singles: null, gmode: "", topics: null,
+             fails: [], embedNote: "" };
 
 function chLabel(ch) {
   if (ch.startsWith("cocategory:")) return "同分类:" + ch.slice(11);
@@ -1320,20 +1326,33 @@ async function doWorkbench(q) {
   wb.q = q; wb.focusId = null; wb.tab = "agg";
   wb.groups = null; wb.singles = null; wb.gmode = ""; wb.points = null;
   wb.topics = null;                       // R13：换关键词重新聚主题
+  wb.fails = []; wb.embedNote = "";
   const box = document.getElementById("hits");
   box.innerHTML = "<small>聚合中…</small>";
-  const [fts, rec, hyb] = await Promise.all([
-    fetch("/api/search?q=" + encodeURIComponent(q)).then(r => r.json())
-      .catch(() => ({ hits: [] })),
-    fetch("/api/recall", { method: "POST",
+  // 三通道各自兜底：非 2xx 记进 wb.fails（原先 r.json() 直接抛错被 catch 吞成
+  // 「无命中」，500 时用户看到的是「检索没结果」而不是「检索坏了」——2026-10-28 修）
+  const jfetch = async (url, opts) => {
+    try {
+      const r = await fetch(url, opts);
+      if (!r.ok) return { data: null, err: "HTTP " + r.status };
+      return { data: await r.json(), err: "" };
+    } catch (e) { return { data: null, err: "请求失败" }; }
+  };
+  const [ftsR, recR, hybR] = await Promise.all([
+    jfetch("/api/search?q=" + encodeURIComponent(q)),
+    jfetch("/api/recall", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: q, limit: 60 }) }).then(r => r.json())
-      .catch(() => ({ hits: [] })),
+        body: JSON.stringify({ topic: q, limit: 60 }) }),
     // sim 通道（第六十批）：混合检索的语义命中并入合并结果（向量侧
     // reasons=sim:<余弦>；embedding 未启用时该路响应降级 fts，无新信息）
-    fetch("/api/search?mode=hybrid&q=" + encodeURIComponent(q)).then(r => r.json())
-      .catch(() => ({ hits: [] })),
+    jfetch("/api/search?mode=hybrid&q=" + encodeURIComponent(q)),
   ]);
+  const fts = ftsR.data || { hits: [] }, rec = recR.data || { hits: [] },
+        hyb = hybR.data || { hits: [] };
+  if (ftsR.err) wb.fails.push("全文/知识点 " + ftsR.err);
+  if (hybR.err) wb.fails.push("语义 " + hybR.err);
+  if (recR.err) wb.fails.push("召回 " + recR.err);
+  wb.embedNote = (fts && fts.embed_note) || (hyb && hyb.embed_note) || "";
   const map = new Map();
   for (const h of (fts.hits || []))
     map.set(h.entry_id, { id: h.entry_id, title: h.title, locator: h.locator,
@@ -1651,13 +1670,25 @@ const SIG_TITLE = { word: "成员共享词（组内每条正文均可验证，�
                     category: "成员共享分类（组内每条都挂接）",
                     host: "成员共享站点（组内每条同源）" };
 
+// 检索降级/故障提示（2026-10-28）：语义通道不可用、某通道非 2xx 时置顶一条黄条。
+// 没有它，「500 → 空结果」与「真无命中」在界面上长得一模一样。
+function _wbNoticeHtml() {
+  const parts = [];
+  if (wb.embedNote) parts.push("⚠ " + _escHtml(wb.embedNote));
+  if (wb.fails && wb.fails.length)
+    parts.push("⚠ 检索接口异常：" + _escHtml(wb.fails.join("、")) + "（已用其余通道结果）");
+  return parts.length ? `<div class="wb-note">${parts.join("<br>")}</div>` : "";
+}
+
 function renderAggTab() {
   const body = document.getElementById("wb-body");
   if (!wb.merged.length && !(wb.points && wb.points.length)) {
-    body.innerHTML = "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 语义相似 ∪ 主题多路召回）。</small>";
+    body.innerHTML = _wbNoticeHtml() + (wb.fails && wb.fails.length
+      ? "<small>检索接口不可用，暂无可显示结果——稍后重试（服务端日志 temp/serve.err.log）。</small>"
+      : "<small>无命中——换个关键词试试（聚合 = 全文检索 ∪ 语义相似 ∪ 主题多路召回）。</small>");
     return;
   }
-  let html = "";
+  let html = _wbNoticeHtml();
   // 知识点主通道（批次 86，用户裁决「检索出来的应该是具体的知识点，而不是文件
   // 标题」）：点卡片置顶——点摘要 + 来源条目 chips（点击进预览面板溯源）；
   // 条目结果降为补充（文件维度找同观点全部出处时仍有用）。

@@ -136,6 +136,12 @@ def register(ctx: AppCtx) -> APIRouter:
 
     @router.get("/search")
     def search(q: str = "", mode: str = "fts"):
+        def _embed_fail_note(exc: Exception) -> str:
+            """降级原因串（前端黄条）：只带类型 + 首行，避免把整段栈/响应体塞进 UI。"""
+            msg = " ".join(str(exc).split())
+            if len(msg) > 120:
+                msg = msg[:120] + "…"
+            return f"语义通道不可用，已降级全文检索（{msg}）"
         # 知识点主通道（批次 86）+ 条目区从点反查（批次 92，裁决 #13：搜概念
         # 词应出该概念论述点非全文概要；条目区=命中点的溯源条目去重为主 +
         # 标题/路径直击保留——词越精确条目越少，正文级全文命中不再单独出条目卡）
@@ -143,6 +149,7 @@ def register(ctx: AppCtx) -> APIRouter:
         # 融合重排（语义词如「进销存」零字面命中也能召回），via_sim 标向量独有点
         pts_raw = dl.search_points(q)
         embedder = None
+        embed_note = ""
         try:
             from ...pipeline.embed_index import search_points_hybrid
             from ...semantic.embed import from_config as embedder_from_config
@@ -153,6 +160,13 @@ def register(ctx: AppCtx) -> APIRouter:
                  "sources": p.sources, "rank": p.rank}
                 for p in pts_raw]
         except ImportError:
+            pts = [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
+                    "sources": p.sources, "rank": p.rank}
+                   for p in pts_raw]
+        except Exception as exc:  # noqa: BLE001
+            # 语义通道是加成项：嵌入后端 402/401/超时/断网都不得让主通道 500
+            # （2026-10-28 用户报「搜雪花绝非预期」的直接成因，见变更工单）
+            embed_note = _embed_fail_note(exc)
             pts = [{"point_id": p.point_id, "text": p.text, "summary": p.summary,
                     "sources": p.sources, "rank": p.rank}
                    for p in pts_raw]
@@ -180,11 +194,16 @@ def register(ctx: AppCtx) -> APIRouter:
 
         if mode == "hybrid":
             # 混合检索（第五十六批，M4）：FTS + 向量余弦 RRF 融合，reasons 可解释；
-            # embedder 未启用（配置关/依赖缺）→ 降级 fts + note（探针钉住）
+            # embedder 未启用（配置关/依赖缺）→ 降级 fts + note（探针钉住）；
+            # 嵌入后端报错（402/超时…）→ 同一形状降级 + embed_note，不再 500
             from ...pipeline.embed_index import hybrid_search
             from ...semantic.embed import from_config as embedder_from_config
 
-            result = hybrid_search(dl, embedder_from_config(cfg), q)
+            result = None
+            try:
+                result = hybrid_search(dl, embedder_from_config(cfg), q)
+            except Exception as exc:  # noqa: BLE001
+                embed_note = embed_note or _embed_fail_note(exc)
             if result is not None:
                 result["points"] = pts
                 # 批次 92：条目区与 fts 同口径（点反查+直击为主），hybrid 的
@@ -199,14 +218,22 @@ def register(ctx: AppCtx) -> APIRouter:
                 merged += [h for h in result.get("hits", [])
                            if h["entry_id"] not in merged_ids]
                 result["hits"] = merged
+                if embed_note:
+                    result["embed_note"] = embed_note
                 return result
-            return {"mode": mode, "effective_mode": "fts", "note":
-                    "hybrid 依赖向量索引（ksync --embed，需 [embedding] enabled"
-                    " + requirements-optional），本次已降级 fts",
-                    "points": pts,
-                    "hits": _hits_from_points_then_direct()}
-        return {"mode": mode, "effective_mode": "fts", "points": pts,
-                "hits": _hits_from_points_then_direct()}
+            payload = {"mode": mode, "effective_mode": "fts", "note":
+                       "hybrid 依赖向量索引（ksync --embed，需 [embedding] enabled"
+                       " + requirements-optional），本次已降级 fts",
+                       "points": pts,
+                       "hits": _hits_from_points_then_direct()}
+            if embed_note:
+                payload["embed_note"] = embed_note
+            return payload
+        payload = {"mode": mode, "effective_mode": "fts", "points": pts,
+                   "hits": _hits_from_points_then_direct()}
+        if embed_note:
+            payload["embed_note"] = embed_note
+        return payload
 
     @router.get("/sets/group")
     def sets_group(ids: str = ""):

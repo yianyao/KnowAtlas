@@ -25,6 +25,37 @@ import os
 import time
 from typing import Any
 
+# 失败闸（2026-10-28 工单「检索降级与嵌入失败处理」）：远端后端刚失败过就冷却一段时间，
+# 冷却期内 encode 直接抛（不发 HTTP）。为什么必须：402/401 这类永久错误每次搜索都会
+# 重试 3 次 + 退避 ≈ 11 s，而搜索是高频交互路径；充值后冷却到期自动恢复，不用重启 serve。
+_FAIL_GATE: dict[tuple[str, str], tuple[float, str]] = {}
+_FAIL_GATE_TTL = 60.0
+
+
+class EmbedRejected(RuntimeError):
+    """4xx（除 429）——请求本身不可能成功（余额/鉴权/模型名），不重试、直接进冷却闸。"""
+
+
+def reset_failure_gate() -> None:
+    """清空失败闸（测试用；运维也可在进程内调用以立即重试）。"""
+    _FAIL_GATE.clear()
+
+
+def _gate_open(key: tuple[str, str]) -> str | None:
+    """冷却中返回失败原因，否则 None（到期即自动放行）。"""
+    hit = _FAIL_GATE.get(key)
+    if hit is None:
+        return None
+    until, reason = hit
+    if time.monotonic() >= until:
+        _FAIL_GATE.pop(key, None)
+        return None
+    return reason
+
+
+def _gate_close(key: tuple[str, str], reason: str) -> None:
+    _FAIL_GATE[key] = (time.monotonic() + _FAIL_GATE_TTL, reason)
+
 
 class LocalEmbedder:
     """sentence-transformers 惰性加载封装（首次 encode 才 import + 载模型）。"""
@@ -57,6 +88,10 @@ class RemoteEmbedder:
     契约与 LocalEmbedder 一致：encode(list[str]) → 已 L2 归一化向量，顺序对齐输入；
     失败抛 RuntimeError（由调用方决定中止还是降级）。dim 未配置时首批发回后自动填，
     换模型会改变维度，因此切模型必须 `ksync --embed --embed-force` 重建。
+
+    错误分类（2026-10-28）：4xx（除 429）是**永久**拒绝（余额不足/鉴权失败/模型名错），
+    立即抛 `EmbedRejected` 并把 `(url, model)` 关进失败闸 60 s；5xx/超时/返回条数不符才重试，
+    且**不开闸**（瞬时抖动下次请求应继续尝试）。
     """
 
     def __init__(self, base_url: str, model: str, api_key: str, *,
@@ -75,10 +110,23 @@ class RemoteEmbedder:
         """批量编码（按 batch_size 切片；空输入返回空列表）。"""
         if not texts:
             return []
+        gate = _gate_open(self._gate_key)
+        if gate is not None:
+            raise EmbedRejected(
+                f"embedding 后端冷却中（{self._url}，{_FAIL_GATE_TTL:.0f}s 内不再尝试）：{gate}")
         out: list[list[float]] = []
         for start in range(0, len(texts), self._batch):
             out.extend(self._encode_batch(texts[start:start + self._batch]))
         return out
+
+    @property
+    def _gate_key(self) -> tuple[str, str]:
+        return (self._url, self._model)
+
+    @staticmethod
+    def _is_permanent(status: int) -> bool:
+        """4xx 且非 429（限流可重试）→ 永久拒绝。"""
+        return 400 <= status < 500 and status != 429
 
     def _encode_batch(self, batch: list[str]) -> list[list[float]]:
         import httpx
@@ -93,7 +141,12 @@ class RemoteEmbedder:
                     timeout=self._timeout,
                 )
                 if resp.status_code >= 400:
-                    raise RuntimeError(f"HTTP {resp.status_code}：{resp.text[:200]}")
+                    detail = f"HTTP {resp.status_code}：{resp.text[:200]}"
+                    if self._is_permanent(resp.status_code):
+                        _gate_close(self._gate_key, detail)
+                        raise EmbedRejected(
+                            f"embedding 请求被拒绝（{self._url}）：{detail}")
+                    raise RuntimeError(detail)
                 data = resp.json().get("data") or []
                 vecs = [normalize([float(x) for x in (d.get("embedding") or [])])
                         for d in data]
@@ -102,9 +155,13 @@ class RemoteEmbedder:
                 if self.dim is None and vecs:
                     self.dim = len(vecs[0])
                 return vecs
+            except EmbedRejected:
+                raise
             except Exception as exc:  # noqa: BLE001 —— 网络/格式错误统一重试
                 last = exc
                 time.sleep(1.5 * (attempt + 1))
+        # 只为「永久性拒绝」开闸：瞬时故障（5xx/超时/条数不符）下次请求应当继续尝试，
+        # 否则一次抖动就把语义通道关掉一分钟，比 4.5 s 退避更糟。
         raise RuntimeError(f"embedding 请求失败（{self._url}）：{last}")
 
 

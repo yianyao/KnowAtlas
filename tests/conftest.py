@@ -24,6 +24,19 @@ from knowatlas.datalayer.db import DataLayer  # noqa: E402
 from knowatlas.registry.builtins import build_registries  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_embed_failure_gate():
+    """嵌入后端失败闸是模块级状态（2026-10-28 工单）：逐用例清空，避免互相污染。
+
+    真实症状是「一个用例把 402 关进闸 → 后续用例的 encode 直接抛冷却错误」。
+    """
+    from knowatlas.semantic.embed import reset_failure_gate
+
+    reset_failure_gate()
+    yield
+    reset_failure_gate()
+
+
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
     data = {

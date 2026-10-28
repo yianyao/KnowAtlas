@@ -3014,3 +3014,61 @@ python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例
 4. （可选）`docs/design/` 索引页 + 归档。
 
 <!-- HANDOFF {"at":"2026-10-28T20:52:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-200x204x-r26p1-kpe-实跑验收修-5-处缺陷547-点入库","draft":false,"goal":"P1 KPE 实跑验收完成：修 5 处缺陷（PDF 路由/原件解析/key 池/预算名额/后端 failover+产物绝对路径），真库 labuladong 93 块出 547 点（735 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① kpoints --triage 补 642 条新点 kind；② 重启 serve 载新代码（7680 是旧代码）；③ 超大书 >kpe_max_chars 策略裁决；④ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 735/1、canary、gen_docs --check；labuladong KPE 实跑（547 点已入库，幂等跳过）；三次 kauto 试跑（20:19:30/20:20:34/20:35:08）；temp/ 下 5 个探针与 kpe_chunks_labuladong","schema":1,"session":"session-30db2930-5cd3-40bb-819c-16e9531873e7","status":"HANDOFF","tokens":150000,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 735 passed, 1 skipped"} -->
+<!-- HANDOFF {"at":"2026-10-28T21:02:11.614782+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2102.md","draft":true,"goal":"上下文到 HANDOFF（86.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-db92b657-2c59-4c81-a1f9-e239c7103d33","status":"HANDOFF","tokens":127435,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-28 21:0x–21:2x R27：检索「搜雪花绝非预期」根因 = `/api/search` 500（嵌入 402 未降级）
+
+### 开场
+
+`session_check` → `NEW_SESSION`；`context_probe` → effective **11.5%**（16,873 / 147,059）。
+未重跑交接块「不要重跑」各项。
+
+### 诊断（现场复现，非算法问题）
+
+| # | 事实 | 证据 |
+|---|---|---|
+| 1 | `/api/search` 任意查询 500 / 10.89 s；`mode=hybrid` 同 | `?q=雪花` 与 `?mode=hybrid&q=雪花` 均 500 |
+| 2 | 栈顶 `web/routers/discovery.py:150` | `temp/serve.err.log`：`search_points_hybrid → embedder.encode` |
+| 3 | 根因硅基 402（余额不足） | `encode FAILED in 11.00s ... HTTP 402 code=30001` |
+| 4 | 402 被当可重试 | `RemoteEmbedder` 统一重试 3 次 + 退避 1.5/3 s ≈ 11 s |
+| 5 | 端点只吞 `ImportError` | `RuntimeError` 冒到 FastAPI → 500 |
+| 6 | 前端静默丢通道 | `r.json()` 对 500 文本抛错被 `.catch({hits:[]})` 吞掉 |
+| 7 | 检索层本身正常 | `search_points("雪花")` = **20 点**（雪花写作法 kpe）、条目直击 2 条 |
+| 8 | DeepSeek 无嵌入接口 | `/v1/embeddings` 与 `/embeddings` 均 **404**；同 key `/chat/completions` **200** |
+
+用户所见 = 只剩 `/api/recall` 的 `cocategory:技术开发` 扩展（AI-Agents 章节），零知识点。
+
+### 落地（工单 `docs/design/变更工单-2026-10-28-检索降级与嵌入失败处理.md`）
+
+- `semantic/embed.py`：4xx（除 429）→ `EmbedRejected` 立即抛、**不重试**；模块级失败闸
+  `(url, model)` 60 s 冷却（冷却期零 HTTP，到期自愈不依赖重启）；5xx/超时/条数不符仍重试且**不开闸**；
+  `reset_failure_gate()` 供测试。
+- `web/routers/discovery.py`：点融合与 `hybrid_search` 各包 `except Exception` → 降级纯 FTS，
+  响应追加可选 `embed_note`（截 120 字）。
+- `web/static/index.html`：三路 fetch 改 `jfetch`（查 `r.ok`）→ `wb.fails`；`_wbNoticeHtml()`
+  顶部黄条；「无命中」与「接口坏了」不再同形。
+- 测试 +5：4xx 单次 HTTP + 开闸、闸到期放行、429 仍重试、`/api/search` fts/hybrid 故障仍 200 且出点。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **740 passed / 1 skipped**；canary 1 passed；`gen_docs --check` 三份 OK。
+- serve 重启：PID **7680 → 23172**（载本轮代码）。
+- `GET /api/search?q=雪花` → **200** / 0.94 s / `points=20` / `hits=3` / `embed_note` 带 402；
+  60 s 闸内第二次 → 200 / **0.03 s**（零 HTTP）；`mode=hybrid` → 200 / `effective_mode=fts` + `note`。
+- UI（`temp/ui_search_xuehua_check.js`，headless Edge CDP）：`pointCards=20`、含「雪花写作法」、
+  顶部黄条「⚠ 语义通道不可用，已降级全文检索（…HTTP 402…）」；唯一 console 错误是既存 favicon 404。
+  截图 `temp/ui_search_xuehua_20261028.png`（128 KB）。
+
+### 未决前提
+
+硅基 SF1 余额 0 → 语义通道不可用（代码只保证不拖垮主通道）；向量 `api:BAAI/bge-m3 dim=1024`
+点 4,552 / 5,607、条目 29 / 76。恢复召回需用户裁决：充值 / 本地 bge-m3（同权重，torch + 2.2 GB）/ 接受纯 FTS。
+
+### 不要重跑
+
+- 全量 pytest 740/1、canary、`gen_docs --check`；
+- 真库 `/api/search` 三连冒烟（数字见上）、headless Edge 检索截图；
+- `temp/probe_search_xuehua_20261028.py`、`temp/probe_vectors_20261028.py`、`temp/ui_search_xuehua_check.js`。
+
+<!-- HANDOFF {"at":"2026-10-28T21:22:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-210x212x-r27检索搜雪花绝非预期根因-ap-isearch-500嵌入-402-未降级","draft":false,"goal":"R27 修检索 500：嵌入 402 不再拖垮 /api/search（740 passed），真库 搜雪花 恢复 20 点 + 降级黄条；serve PID 23172","host":"dsh","kind":"handoff","next":"① 裁决嵌入后端（充值硅基 / 本地 bge-m3 / 纯 FTS）；② 交接前序项的 kpoints --triage 补 642 条新点 kind；③ 超大书 >kpe_max_chars 策略；④ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 740/1；canary；gen_docs --check；真库 /api/search 三连冒烟；headless Edge 检索截图；三个 temp 探针","schema":1,"session":"session-db92b657-2c59-4c81-a1f9-e239c7103d33","status":"HANDOFF","tokens":126739,"verify":"uv run --with zstandard python tools/context_probe.py -> 86.2% HANDOFF"} -->
