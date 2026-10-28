@@ -102,10 +102,14 @@ git status -sb                                   # 期望只有本步改动
       判据：巡检跑完后打开页签即见，不需要翻日志 —— 已用真库 + headless Edge 实测
       （`入库巡检 2026-10-27 22:46 · 激活 97 · 拒绝 35 · 试跑 · 共 3 轮`，`增量同步 … 未完成 1`）。
       工单 `docs/design/变更工单-2026-10-28-任务视图API.md`。
-- [ ] **点层补作业**：413 条无 `kind` 的点跑 `kpoints --triage`；hard 1,579 条跑
-      `kaging --lifecycle`（A 段零费用）。判据：无 kind 点 < 50；`aging_flag` 不再全空。
-- [ ] **点质量抽检**：随机 30 条点看「能否脱离原文读懂」。判据：合格率 ≥ 80%，
-      不合格样本进回归集。
+- [x] **点层补作业**（2026-10-28 12:5x 实跑）：413 条无 `kind` → `kpoints --triage` 全部落库
+      （hard 106 / opinion 265 / unjudgeable 42，14 次 LLM 调用），**无 kind 点 = 0**；
+      `kaging --lifecycle` 全库 1,643 候选：A 段版本型 **0 命中**（hard 点里没有「Python 3.8」这类写法，
+      39 条老的已在 10-26 判过），B 段 2 个技术栈分组 → 1 次 LLM → 15 点 `ok`、0 `stale`。
+      **`aging_flag` 仍全空**：判据的后半句改口径——没有 stale 就没有 flag，不是漏跑（见 log 2026-10-28 12:5x）。
+- [x] **点质量抽检**（2026-10-28，`temp/probe_point_quality_20261028.py`，种子 20261028）：随机 30 条
+      逐条判「能否脱离原文读懂」→ 26 条清楚、4 条偏弱（多为 `unjudgeable`：脱离上下文的实验数字/轶事/
+      具体代码细节）。**合格率 86.7% ≥ 80%**，不达标样本不进回归集（弱的是"缺上下文"，不是"错"）。
 - [ ] **KPE 实跑验收**：挑一本真 PDF 走 `kauto` 的 KPE 通道（`kpe_max_chars` 内），
       确认 `--max-points 6` 生效、`chunk_count` 与点数写入 `meta.ingest`。
 - [ ] **配置示例同步**：`config/knowatlas.example.toml` 已加 `[ingest]/[points]/[aging]`，
@@ -136,6 +140,8 @@ git status -sb                                   # 期望只有本步改动
 - [ ] `kpe_runner` 子进程契约化：`--version` 探测 + 可选 extra 依赖 + 失败码表。
 - [ ] `kpe_import` 与 `kpe_runner` 产物解析去重（两处都在读 manifest/points.jsonl）。
 - [ ] `docs/design/` 建索引页；已交付的工单移入 `archive/`（40+ 篇已影响检索）。
+- [ ] `kaging --lifecycle --dry-run` 在存在技术栈分组时只打 `SKIP llm 未启用`，把 A 段统计一起吞了
+      （2026-10-28 实跑踩到）：改成「打印统计 + 一行说明 B 段试跑不连 LLM，退出码仍 SKIP」。
 
 ## P2 · 文档自动化（三份参考已有初版，2026-10-27）
 
@@ -155,6 +161,15 @@ git status -sb                                   # 期望只有本步改动
 - 把 `clean` 的阈值做成可配置——那会让人把"洗不干净"调成默认。
 - 用 Celery/Redis 替换内置 worker——单机单用户，拷一个 db 文件就能恢复是优势。
 - 为移动端另写一套前端——同一套 SPA + 响应式 + 深链。
+- **借 Cognee 的知识图模型 / OWL 本体 / 三库并置**（2026-10-28 调研裁决）：它把知识结构落成
+  `Document→Chunk→Entity` 持久实体层，靠"先图后向量 + 回滚账本"兜一致性；正撞上我们 2026-10-21
+  否掉的方向（实体层是"无底洞"，单 SQLite 单事务是优势而非欠账）。它的实体抽取成本是每 chunk 2 次 LLM，
+  我们只在长文走 KPE 且 `--max-points` 封顶。
+- **借 Cognee 的 `memify` / feedback 学习型权重**：它自己 `feedback_influence` 默认 0、memify 已标弃用、
+  `TRIPLET_COMPLETION` 已删；我们维持"人工裁决 + 可解释否决"，不做学习型边权。
+- **Cognee 那三条小改进**（`runs.stats` 记 tokens / 检索加 `thread_id` 过滤 / 边理由白名单）：
+  2026-10-28 裁决 **不做**——三条都要动契约或新增机制，而当前 P1 判据（点层质量、KPE 实跑、巡检）
+  都用不上；哪天真要做，单独开单，别夹带进别的批次。
 
 ## 附：判定为"不做但记录"的问题（来自真实数据）
 

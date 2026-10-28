@@ -2869,3 +2869,60 @@ C 字符串常量多重集与原件相等（SQL 逐字的最强证据）；D 公
 
 <!-- HANDOFF {"at":"2026-10-28T12:33:40+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-123x-r25回到功能面第一刀get-apitasks--管理页任务卡片","draft":false,"goal":"P1 任务视图已交付（13b25c1，727 passed）：GET /api/tasks + 管理页任务卡片；下一步 P1 点层补作业","host":"dsh","kind":"handoff","next":"① P1 点层补作业：kpoints --triage（413 条无 kind）+ kaging --lifecycle（hard 1579），先 dry-run；② P1 点质量抽检（30 条，≥80%）；③ P1 KPE 实跑验收；④ P0 kauto --limit 3（需导入 key、花钱、用户在场）；⑤ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 727/1；canary；gen_docs --check；真库 /api/tasks 冒烟（8443 已 kill，数字见 R25 节）；headless Edge 卡片实测；路由/方法两处快照；路线 A 四个拆包（454ff1b/8dc998e/1bc9f8d/adb544c+24be158）；pg 评估；kpe 克隆","schema":1,"session":"session-15885e97-fd23-461a-97ce-2addfeb87799","status":"HANDOFF","tokens":144000,"verify":"uv run python -m pytest -o addopts= -q -> 727 passed, 1 skipped"} -->
 
+## 2026-10-28 12:4x Cognee 借鉴项裁决（全部不借）+ serve 重启
+
+**背景**：上一会话（`session-15885e97`）子代理实查 Cognee（docs.cognee.ai core-concepts 全章、README v1.6.1、
+`add_data_points.py`），给出三条可落地建议。用户 2026-10-28 定调「性价比小就不用管」。
+
+**裁决**（已记入 `docs/TODO.md` P4）：
+
+1. **图模型 / OWL 本体 / 三库并置——不借**：它 `Document→Chunk→Entity` 持久实体层 + 先图后向量 + 回滚账本，
+   正是我们 2026-10-21 否掉的方向（实体层是无底洞；单 SQLite 单事务是优势）。它的幂等（content_hash +
+   `pipeline_status`）我们已有等价物（`ids.py` + `meta.ingest`），无需照搬。
+2. **memify / feedback 学习型权重——不借**：它自己 `feedback_influence` 默认 0、memify 已弃用、
+   `TRIPLET_COMPLETION` 已删。我们维持人工裁决 + 可解释否决。
+3. **三条小改进（`runs.stats` 记 tokens / 检索 `thread_id` 过滤 / `EDGE_REASONS` 白名单）——本轮不做**：
+   都要动契约或加机制，而当前 P1 判据（点层质量、KPE 实跑、巡检）不依赖它们；要做时单独开单。
+
+**serve 重启（12:42，现场数字）**：旧实例 2026-10-27 19:44 起的（`uv 16396 → .venv python 15440 →
+python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例 **`python 7680`**（10-28 12:42:16），
+`GET /api/tasks?recent=3` → **200** 并返回 `kauto/kaging/kpoints…`，首页 152,711 字节（新 HTML），
+`/api/stats` 200。日志 `temp/serve.out.log` / `temp/serve.err.log`。
+
+**坑（本机）**：低完整性 sandbox 下 `Get-NetTCPConnection`/`Get-Process python*` 返回空，会把"在跑"误判成"没在跑"
+（本轮先误判过）；`Start-Process` 起的子进程也写不进 `temp/`（cmd 测试 exit=1、无 marker）。切 danger-full-access 后一切正常。
+
+## 2026-10-28 12:5x P1 点层补作业 + 质量抽检（实跑）
+
+### 分诊 `kpoints --triage`（14 次 LLM，零成本误判先排除）
+
+- 先 `--limit 60` 试跑（2 调用）：hard 16 / opinion 41 / unjudgeable 3；
+- 再全量：`candidates=353` → **hard 90 / opinion 224 / unjudgeable 39**（12 调用）。两轮合计 413 条全部落 `kind`。
+- 现状（4,965 点）：**hard 1,685 / opinion 2,281 / unjudgeable 956 / dupe 43，无 `kind` = 0**。
+- 种子 `temp/errata_full_triage.json` 的 4,509 条仍在库里，但对这 413 条**零覆盖**（都是 10-25 之后新增），
+  所以 `--from-json` 帮不上；CLI 那句"可零 LLM 费导入"在纯新增点场景下会误导。
+
+### 老化 `kaging --lifecycle`（1,643 候选）
+
+- **A 段版本型 0 命中**：hard 点里没有「Python 3.8 / Node.js 18」这类写法；能命中的 39 条在 10-26 已判过
+  （37 条 retired 型 `ok`（LLM）+ 2 条 version 型 `ok`（EOL 表））。
+- **B 段 2 个技术栈分组 → 1 次 LLM → 15 点 `ok`、0 `stale`**；其余 1,628 条 `unjudged`（文本里没有技术栈名）。
+- 因此 **`aging_flag` 仍全空不是漏跑**，是"没有可判过时"；P1 判据后半句应读作「有 stale 才有 flag」。
+- 复现口径：`temp/probe_lifecycle_20261028*.py`（a=全量检测、b=候选集复现、c=已判 39 条分布、d=进程内 dry-run 统计）。
+
+### 质量抽检（30 条，`temp/probe_point_quality_20261028.py`，种子 20261028）
+
+- **26 条清楚、4 条偏弱**，合格率 **86.7% ≥ 80%**。偏弱集中在 `unjudgeable`：脱离上下文的实验数字、
+  轶事型对比、具体游戏代码细节（`set_interacting(true)`）。
+- 共性判断：弱的是「缺上下文」而不是「说错」，所以**不进回归集**——回归集只收"错"。
+
+### 附带发现（未改码，已记 TODO P3）
+
+- `kaging --lifecycle --dry-run` 在存在技术栈分组时只打 `SKIP llm 未启用`，把 A 段统计一起吞了：
+  试跑想看版本型结果看不到（本轮靠进程内直调 `run_lifecycle(dry_run=True)` 才拿到数字）。
+
+### 不要重跑
+
+- 413 条分诊（已落库，幂等重跑 = 0 候选）；lifecycle 两段（已判 54 点，重跑 = 0 新增）；
+- `temp/probe_point_state_20261028.py`、`probe_lifecycle_20261028{a,b,c,d}.py`、`probe_point_quality_20261028.py`。
+
