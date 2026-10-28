@@ -2814,3 +2814,58 @@ C 字符串常量多重集与原件相等（SQL 逐字的最强证据）；D 公
 
 <!-- HANDOFF {"at":"2026-10-28T02:12:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-020x-r24路线-a-收尾datalayerdbpy-拆-mixin-完成","draft":false,"goal":"路线 A 全部完成：db.py 拆 mixin 收尾（adb544c 锁修复 + 本提交拆分），全量 721/1","host":"dsh","kind":"handoff","next":"① 路线 A 已收尾，无需继续拆；② 候选：docs/design 索引页+归档、adapters/emmx.py 600 行评估、TODO P1 功能项（优先）","not_rerun":"全量 pytest 721/1；canary；gen_docs --check；三份参考；护栏三件；cli/sync/api/db 四个拆包（454ff1b/8dc998e/1bc9f8d/adb544c+本提交）；pg 评估；kpe 克隆；拆分器调试","schema":1,"session":"session-e61b3388-1a26-45e7-819a-fc3cfd2b6545","status":"HANDOFF","tokens":145779,"verify":"uv run python -m pytest -o addopts= -q -> 721 passed, 1 skipped"} -->
 
+<!-- HANDOFF {"at":"2026-10-28T12:28:11.177153+08:00","compactions":0,"doc":"docs/交接/2026-10-28-1228.md","draft":true,"goal":"上下文到 HANDOFF（85.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-15885e97-fd23-461a-97ce-2addfeb87799","status":"HANDOFF","tokens":126053,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-28T12:30:11.376791+08:00","compactions":0,"doc":"docs/交接/2026-10-28-1230.md","draft":true,"goal":"上下文到 CRITICAL（95.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-15885e97-fd23-461a-97ce-2addfeb87799","status":"CRITICAL","tokens":140954,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-28 12:3x R25：回到功能面第一刀（`GET /api/tasks` + 管理页任务卡片）
+
+### 落地（`13b25c1`，10 文件 +363/−20）
+
+| 层 | 改动 |
+|---|---|
+| 数据层 | `datalayer/ops.py`：新增只读 `task_overview(recent=10)`——按 kind 聚合取每类最新一轮 + 最近 N 条；投影 `{id,kind,started_at,finished_at,duration_s,unfinished,dry_run,stats}`；同秒按 `id` 倒序兜底；`_elapsed_seconds` 用 `_common._parse_iso`，坏串给 `None` |
+| 接口 | `web/routers/admin.py`：`GET /api/tasks?recent=N`（夹 1–100，缺省 10，只读、不需令牌）；`/api/stats` 的 `recent_runs` 保持原样（向后兼容） |
+| 前端 | `index.html::mgmtData()`：「最近任务」徽标 → 任务卡片（中文名 / 时间 / 耗时 / 本轮条数 / `试跑` / `未完成 N` / `错误 N` / `共 N 轮`）；`TASK_LABEL`+`TASK_COUNTS` 白名单，未知 kind 退化为只显示错误数 |
+| 契约 | 表/字段/scheme/`SOURCE_TYPES`/`STATUSES`/`CONFIG_SCHEMA_KEYS` 零变更；工单 `docs/design/变更工单-2026-10-28-任务视图API.md`；快照 路由 73→74、公开方法 127→128；`docs/参考-接口.md` 重生成（74 端点 / 26 组） |
+| 顺手修文档漂移 | `docs/模块地图.md`：`sync.py 782`→`pipeline/sync/` 6 文件、`cli.py 775`→`cli/` 8 文件、`web/api.py 1,799`→`routers/`+`api.py 97`、`ops 97`→143、pytest 715→727 |
+
+### 现场数字（已实测，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **727 passed / 1 skipped**（基线 721，新增 6 例：按 kind 取最新、recent 夹取、坏时间串、空库、端点形状+只读、recent 参数）；
+- `test_canary.py` 零漂移；`tools/gen_docs.py --check` 三份 OK；
+- 真库（`serve --port 8443`，已 kill）`GET /api/tasks` → `kauto(runs=3) kaging(7) kpoints(21) sync_incremental(18, unfinished=1) …`；
+  `kauto` 最新 = `2026-10-27T22:46:51` / `activated 97 / rejected 35 / errors 0 / dry_run=true`，与只读探针 `temp/probe_tasks_20261028.py` 完全一致；`unfinished_total=1`；
+- headless Edge（`temp/ui_tasks_check.js`，截图 `temp/ui_tasks_20261028.png`）→ 卡片文本
+  「入库巡检 2026-10-27 22:46 耗时 0 秒 激活 97 · 拒绝 35 … 试跑 共 3 轮」「增量同步 … 未完成 1 共 18 轮」，无 JS 异常；
+- 唯一 console 错误是 `/favicon.ico` 404（既存，非本轮引入）。
+
+### 设计取舍（下一轮别再翻）
+
+1. **新端点而不是塞进 `/api/stats`**：`/api/stats` 被首页多次轮询、且 `recent_runs(5)` 会被 sync 噪声挤满，取不到「上一轮巡检」。
+2. **未完成按该类历史轮次计数**（`k.unfinished`），不是只看最新一行——最新一轮跑完不代表旧的中断轮次可以静默（真库 `sync_incremental` 就有 1 条）。
+3. **试跑必须显式标**：真库最近 8 条 kauto/kaging/kpoints 全是 `dry_run=true`，不标就会把试跑当实跑。
+4. 测试直接插 `runs` 行（显式时间）而不是调 `start_run`：后者用 `_now()`，同秒无法断言「取最新」。
+
+### 下一步（按序，首步可直接执行）
+
+1. **P1 点层补作业**：413 条无 `kind` 的点跑 `kpoints --triage`；hard 1,579 条跑 `kaging --lifecycle`（A 段零费用）。判据：无 kind 点 < 50、`aging_flag` 不再全空。先 `--dry-run` 看计划。
+2. **P1 点质量抽检**：随机 30 条点看「能否脱离原文读懂」，合格率 ≥ 80%，不合格样本进回归集。
+3. **P1 KPE 实跑验收**：挑一本真 PDF 走 `kauto` 的 KPE 通道（`kpe_max_chars` 内），确认 `--max-points 6` 生效、`chunk_count`/点数写入 `meta.ingest`。
+4. **P0 真库实跑一轮巡检**（要花钱，需用户在场）：先按 `AGENTS.local.md` 导入三个用户级 key，再 `kauto --limit 3`，确认 `split>0`、`points_created>0`。
+5. **（可选）`docs/design/` 索引页 + 归档**。
+
+### 不要重跑
+
+- 全量 pytest 727/1、canary、`gen_docs --check`、三份参考；路由/公开方法两处快照更新；
+- 真库 `/api/tasks` 冒烟（8443 实例已 kill，数字已记在本节）；headless Edge 卡片实测（截图在 `temp/`）；
+- 路线 A 四个拆包（`454ff1b`/`8dc998e`/`1bc9f8d`/`adb544c`+`24be158`）；pg 评估；kpe 克隆。
+
+### 已知失败与处理
+
+1. **8443 实例是临时验收入口，已 kill**；8420 上仍在跑的是**旧代码**的 serve（本轮改动前启动），管理页看不到任务卡片——要看请重启 `serve`（GET 不需要重启浏览器，但要 Ctrl+F5 拿新 HTML）。
+2. 上下文本轮从 11.6% 冲到 **95%（CRITICAL）**：watcher 在 12:28 / 12:30 各写了一条 `draft:true` 的交接块，那是上下文事件、不是工作交接——读本节。
+3. `temp/ui_tasks_check.js` 里 Edge 路径是 **`C:\Program Files (x86)\...`**（Program Files 下没有），写死的 `--remote-debugging-port=9334` 与 `8443` 端口要一起改。
+
+<!-- HANDOFF {"at":"2026-10-28T12:33:40+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-123x-r25回到功能面第一刀get-apitasks--管理页任务卡片","draft":false,"goal":"P1 任务视图已交付（13b25c1，727 passed）：GET /api/tasks + 管理页任务卡片；下一步 P1 点层补作业","host":"dsh","kind":"handoff","next":"① P1 点层补作业：kpoints --triage（413 条无 kind）+ kaging --lifecycle（hard 1579），先 dry-run；② P1 点质量抽检（30 条，≥80%）；③ P1 KPE 实跑验收；④ P0 kauto --limit 3（需导入 key、花钱、用户在场）；⑤ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 727/1；canary；gen_docs --check；真库 /api/tasks 冒烟（8443 已 kill，数字见 R25 节）；headless Edge 卡片实测；路由/方法两处快照；路线 A 四个拆包（454ff1b/8dc998e/1bc9f8d/adb544c+24be158）；pg 评估；kpe 克隆","schema":1,"session":"session-15885e97-fd23-461a-97ce-2addfeb87799","status":"HANDOFF","tokens":144000,"verify":"uv run python -m pytest -o addopts= -q -> 727 passed, 1 skipped"} -->
+
