@@ -2926,3 +2926,5 @@ python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例
 - 413 条分诊（已落库，幂等重跑 = 0 候选）；lifecycle 两段（已判 54 点，重跑 = 0 新增）；
 - `temp/probe_point_state_20261028.py`、`probe_lifecycle_20261028{a,b,c,d}.py`、`probe_point_quality_20261028.py`。
 
+<!-- HANDOFF {"at":"2026-10-28T12:50:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-125x-p1-点层补作业--质量抽检实跑","draft":false,"goal":"Cognee 借鉴项全否（记 TODO P4）；serve 重启载新代码（PID 7680 载 a047a1a）；P1 点层补作业+质量抽检实跑完成（无 kind 点 0、抽检合格率 86.7%）","host":"dsh","kind":"handoff","next":"① P1 KPE 实跑验收：挑一本真 PDF 走 kauto 的 KPE 通道（kpe_max_chars 内），确认 --max-points 6 与 meta.ingest.chunk_count；② P0 kauto --limit 3（花钱，需用户在场）；③ 可选 docs/design 索引页+归档；④ 可选 TODO P3 的 lifecycle dry-run 提示","not_rerun":"413 条分诊（已落库，幂等重跑=0）；lifecycle 两段（54 点已判）；30 条质量抽检；Cognee 调研（结论已记 P4）；serve 重启（7680 已载新代码）；全量 pytest 727/1","schema":1,"session":"session-8f346c29-ca96-4f26-8da3-d2c072f446b4","status":"HANDOFF","tokens":121326,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；curl http://127.0.0.1:8420/api/tasks?recent=3 -> 200"} -->
+
