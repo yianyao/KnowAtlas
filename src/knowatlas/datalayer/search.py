@@ -79,8 +79,9 @@ class _SearchMixin:
         且近乎 0 CPU；再叠加 /api/recall 在事件循环同步执行，整个 serve
         冻结（UI「聚合中…」永转圈）。现拆两条计划安全的查询：
         ① entries 三列 LIKE（走 idx_entries_status，小库毫秒级）；
-        ② content_fts LIKE 子查询 → idx_entries_hash 回表（FTS 全扫上限
-        约百毫秒级，已实测）。语义与原 UNION 等价（Python 去重 + LIMIT）。
+        ② content_fts LIKE 子查询 → idx_entries_hash 回表（见 `_content_like_rows`：
+        2026-10-28 追加 `AS MATERIALIZED`，否则 planner 仍会选「entries 外层 ×
+        虚表全扫内层」，实测 1,540 ms → 21 ms）。语义与原 UNION 等价（Python 去重 + LIMIT）。
         """
         like = f"%{self._escape_like(q)}%"
         # title 显示走 display_name 覆盖层（批次 71 追修：检索/聚合视图曾显示旧名——
@@ -101,15 +102,7 @@ class _SearchMixin:
             (like, like, like, like, limit),
         ).fetchall()
         if len(rows) < limit:
-            rows += self._conn.execute(
-                f"{sel} FROM entries e"
-                " JOIN (SELECT content_hash FROM content_fts"
-                "        WHERE text LIKE ? ESCAPE '\\') c"
-                "   ON c.content_hash = e.content_hash"
-                " WHERE e.status='active'" + _consumable("e") +
-                " LIMIT ?",
-                (like, limit),
-            ).fetchall()
+            rows += self._content_like_rows(sel, like, limit)
         out: list[SearchHit] = []
         seen: set[str] = set()
         for r in rows:
@@ -121,6 +114,37 @@ class _SearchMixin:
             if len(out) >= limit:
                 break
         return out
+
+    def _content_like_rows(self, sel: str, like: str, limit: int) -> list[Any]:
+        """正文级 LIKE 段（`_search_like` 的第二条 SQL）：先物化正文命中再回表。
+
+        2026-10-28 现场实测（真库 368 条目 / content_fts 77 条正文，"雪花"）：
+        派生表写法 `JOIN (SELECT content_hash FROM content_fts WHERE text LIKE ?)`
+        被 SQLite 选成 `SCAN e USING idx_entries_status` 外层 × `SCAN content_fts
+        VIRTUAL TABLE` 内层（无 join 索引）——每条 active 条目重扫一遍 FTS 影子表，
+        **1,540–1,745 ms**（`search_fts("雪花")` 整体 3.0–3.4 s 的主因）。
+        加 `AS MATERIALIZED` 强制先物化命中集合（77 行）再走索引连接：
+        **21 ms**，结果集 id 逐一相同。`MATERIALIZED` 需 SQLite ≥ 3.35（本机 3.53.1）；
+        更老的版本触发 OperationalError → 退回原派生表写法（慢但不报错）。
+        """
+        sql = (f"WITH c AS MATERIALIZED (SELECT content_hash FROM content_fts"
+               "  WHERE text LIKE ? ESCAPE '\\')"
+               f" {sel} FROM entries e JOIN c ON c.content_hash = e.content_hash"
+               " WHERE e.status='active'" + _consumable("e") +
+               " LIMIT ?")
+        try:
+            return self._conn.execute(sql, (like, limit)).fetchall()
+        except sqlite3.OperationalError:
+            # 老 SQLite 不认 MATERIALIZED：退回派生表（计划可能灾难，但不失败）
+            return self._conn.execute(
+                f"{sel} FROM entries e"
+                " JOIN (SELECT content_hash FROM content_fts"
+                "        WHERE text LIKE ? ESCAPE '\\') c"
+                "   ON c.content_hash = e.content_hash"
+                " WHERE e.status='active'" + _consumable("e") +
+                " LIMIT ?",
+                (like, limit),
+            ).fetchall()
 
     def search_entries_direct(self, q: str, limit: int = 20) -> list[SearchHit]:
         """条目标题/路径直击（批次 92，裁决 #13：条目区=命中点溯源反查为主，

@@ -16,6 +16,8 @@
 加载失败 → from_config 返回 None，调用方据此跳过（检索降级 fts、sim 通道不出现）。
 向量入库时 L2 归一化（normalize_embeddings=True），库内余弦 = 点积
 （纯标准库 array 解码，不引 numpy 硬依赖——约两千条 × 1024 维毫秒~百毫秒级）。
+库内向量数学有 numpy 快路径（`top_similar` / `top_similar_blobs`，惰性导入、
+缺 numpy 或形状不齐回落纯 Python；2026-10-28 工单「检索热路径提速」）。
 """
 
 from __future__ import annotations
@@ -271,10 +273,119 @@ def cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
+def _rank_hits(ids: list[str], scores: Any, k: int,
+               threshold: float) -> list[tuple[str, float]]:
+    """统一收口：阈值过滤 → 降序 → top-k（numpy 与纯 Python 两条路径共用）。
+
+    纯 Python 路径原实现先过滤后排序（`scores.sort(key=lambda x: -x[1])`），
+    这里保持同一顺序语义（稳定排序 + 候选插入序），两条路径结果同序。
+    """
+    pairs = [(i, float(s)) for i, s in zip(ids, scores) if s >= threshold]
+    pairs.sort(key=lambda x: -x[1])
+    return pairs[:k]
+
+
+def _scores_python(query: list[float],
+                   tokens: list[list[float]]) -> list[float]:
+    return [cosine(query, v) for v in tokens]
+
+
+def _scores_numpy(query: list[float], matrix: Any, np: Any) -> Any | None:
+    """矩阵批量余弦（完整定义：逐行归一化，不假设调用方已归一化）。
+
+    浮点精度用 float32（与库内 BLOB 同精度；bge-m3 余弦在 1e-7 级差异内）。
+    返回 None = 该批数据不可向量化（query 空 / 全零模长），调用方回落纯 Python。
+    """
+    q = np.asarray(query, dtype=np.float32)
+    qn = float(np.linalg.norm(q))
+    if qn == 0.0:
+        return None
+    denom = np.linalg.norm(matrix, axis=1) * qn
+    denom[denom == 0.0] = 1.0          # 零模长候选 → 点积为 0 → 分数 0（与 cosine 同）
+    return (matrix @ q) / denom
+
+
+def _top_similar_rows(query: list[float], ids: list[str], tokens: Any,
+                      k: int, threshold: float,
+                      fallback: Any = None) -> list[tuple[str, float]]:
+    """list[float] 候选的 numpy 快路径；numpy 缺失或形状不齐 → 回落纯 Python。
+
+    真库实测（2026-10-28，5,607 点 × 1,024 维）：纯 Python 510 ms →
+    list 成矩阵 104 ms（`top_similar_blobs` 直吃 BLOB 再降到 7 ms）。
+    为什么不假设「已归一化」：`top_similar` 的契约是完整余弦（
+    `tests/test_embed.py::test_top_similar_threshold_and_order` 用未归一化向量钉住），
+    逐行归一化只多几毫秒，语义零偏移。
+    """
+    try:
+        import numpy as np  # noqa: PLC0415 惰性导入：缺 numpy 时回落纯 Python
+    except ImportError:
+        np = None
+    if np is not None:
+        try:
+            matrix = np.asarray(tokens, dtype=np.float32)
+            if matrix.ndim == 1:          # 单条候选 → asarray 退化成一维
+                matrix = matrix.reshape(1, -1)
+            scores = _scores_numpy(query, matrix, np)
+        except (ValueError, TypeError):
+            scores = None                 # 维度不齐等 → 回落
+        if scores is not None:
+            return _rank_hits(ids, scores, k, threshold)
+    if fallback is not None:
+        return fallback()
+    return _rank_hits(ids, _scores_python(query, tokens), k, threshold)
+
+
 def top_similar(query: list[float], candidates: dict[str, list[float]],
                 k: int = 30, threshold: float = 0.0) -> list[tuple[str, float]]:
-    """query 对候选向量的 top-k 相似（余弦 ≥ threshold，降序）。"""
-    scores = [(eid, cosine(query, vec)) for eid, vec in candidates.items()]
-    scores = [(eid, s) for eid, s in scores if s >= threshold]
-    scores.sort(key=lambda x: -x[1])
-    return scores[:k]
+    """query 对候选向量的 top-k 相似（余弦 ≥ threshold，降序）。
+
+    签名与语义不变；内部有 numpy 快路径（惰性导入 + 形状不齐回落纯 Python）。
+    """
+    if not candidates:
+        return []
+    ids = list(candidates)
+    tokens = [candidates[i] for i in ids]
+    return _top_similar_rows(query, ids, tokens, k, threshold)
+
+
+def top_similar_blobs(query: list[float], candidates: dict[str, bytes],
+                      k: int = 30, threshold: float = 0.0
+                      ) -> list[tuple[str, float]]:
+    """`top_similar` 的 BLOB 直连版：候选为 float32 小端 BLOB（库内存储形态）。
+
+    检索热路径刚用 `all_point_vectors()` / `all_vectors()` 拿到 BLOB 就要打分，
+    这里 `np.frombuffer(b"".join(...))` 一次成矩阵——省掉 `blob_to_vec` 逐条构造
+    Python float（真库 5,607 × 1,024 实测 89 ms）与逐条余弦（510 ms），
+    合计 7 ms。入库纪律保证 BLOB 是 L2 归一化后的向量（`embed_index` 均经
+    `normalize()` 再 `vec_to_blob()`），但仍按完整余弦算（行范数归一化），
+    不把「已归一化」当硬前提。
+
+    无 numpy / 行长不一致 / 非本机字节序可解析 → 回落 `blob_to_vec` + `top_similar`。
+    """
+    if not candidates:
+        return []
+    ids = list(candidates)
+    dim = len(query)
+
+    def _fallback() -> list[tuple[str, float]]:
+        return top_similar(query, {i: blob_to_vec(candidates[i]) for i in ids},
+                           k, threshold)
+
+    if dim == 0:
+        return _fallback()        # 空 query：与 list 版同口径（cosine 全 0）
+    try:
+        import numpy as np  # noqa: PLC0415 惰性导入：缺 numpy 时回落
+    except ImportError:
+        return _fallback()
+    width = dim * 4
+    if any(len(candidates[i]) != width for i in ids):
+        return _fallback()
+    try:
+        matrix = np.frombuffer(b"".join(candidates[i] for i in ids),
+                               dtype=np.float32).reshape(len(ids), dim)
+    except (ValueError, TypeError):
+        return _fallback()
+    scores = _scores_numpy(query, matrix, np)
+    if scores is None:
+        return []
+    return _rank_hits(ids, scores, k, threshold)

@@ -3156,3 +3156,93 @@ python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例
 baseline 147,059，effective **129.8%**（CRITICAL），2026-10-28T22:5x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-28T22:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-214x225x-r28本地-bge-m3-接管硅基-402-之后零-api-费用","draft":false,"goal":"本地 bge-m3 接管：torch2.7.1+sentence-transformers+ModelScope 权重，5,607 点/61 条目重嵌入（56 分钟），检索语义通道恢复（743 passed；UI 无黄条）；顺带复核撤销 5 对 dedupe 误并","host":"dsh","kind":"handoff","next":"① 待用户点头：top_similar numpy 快路径（纯 Python 余弦 0.7 s → 0.03 s，把 hybrid 5.5 s 压到 1 s 内）；② dedupe 模板同构误并修法（阈值 0.92 → 0.95 或加数字/否定词守卫，需裁决）；③ kpoints --triage 补 642 条新点 kind；④ 超大书 >kpe_max_chars 策略","not_rerun":"全量 pytest 743/1、canary、gen_docs --check；ksync --embed 全量重嵌入（56 分钟）；5 对 dedupe 误并撤销；temp 下 6 个探针 + UI 脚本","schema":1,"session":"session-a7bd358b-aa1c-4493-a6a2-18449835c2ef","status":"CRITICAL","tokens":190900,"verify":"uv run python -m pytest -o addopts= -q -> 743 passed, 1 skipped；curl http://127.0.0.1:8420/api/search?mode=hybrid&q=雪花 -> 200 无 embed_note"} -->
+<!-- HANDOFF {"at":"2026-10-28T23:28:12.667746+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2328.md","draft":true,"goal":"上下文到 HANDOFF（85.2%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-fcbe6423-62d8-4cc2-8631-36f2b98728e1","status":"HANDOFF","tokens":125341,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+
+## 2026-10-28 23:0x–23:3x R29：检索热路径提速（hybrid 4.9 s → 0.17 s）
+
+### 开场判据
+
+- `session_check` → `NEW_SESSION`（exit 0），上一交接 `session-a7bd358b` @ 22:58 `status=CRITICAL`；
+- `context_probe` → `effective_pct` **14.9%**（21,968 / 147,059，compactions=0）；
+- 交接「不要重跑」各项一条没碰（全量 pytest / `ksync --embed` / 6 个探针）。
+
+### 判据修正（本轮最重要的发现）
+
+交接「下一步 ①」写的是「top_similar numpy 快路径 → 把 hybrid 5.5 s 压到 1 s 内」，**这个判据是错的**。
+真库只读测量把 5.5 s 拆开（`temp/bench_top_similar_20261028.py`、`temp/profile_search_segments_20261028.py`、
+`temp/profile_where_slow_20261028.py`、`temp/profile_like_fallback_20261028.py`、
+`temp/profile_search_fts_detail_20261028.py`、`temp/profile_sql_b_plan_20261028.py`）：
+
+| 段 | 改造前 | 改造后 |
+|---|---|---|
+| `_search_like` 正文段（两字查询必走） | **1,540–1,745 ms** | **21 ms** |
+| `search_fts("雪花")` 整体 | 3.0–3.4 s | **24.5 ms** |
+| `top_similar` 纯 Python 余弦（5,607 × 1,024） | 510 ms | 104 ms（list）/ **7 ms**（BLOB 直连） |
+| `blob_to_vec` 全量 | 89 ms | 0（BLOB 直连省掉） |
+| 查询 encode（本地 bge-m3 短句） | 213–374 ms × **2 次** | × **1 次** |
+
+根因：正文段的派生表 `JOIN (SELECT content_hash FROM content_fts WHERE text LIKE ?)` 被 SQLite 选成
+「`entries` 外层（368 条 active）× `content_fts` 虚表全扫内层」——每条条目重扫一遍 FTS 影子表。
+（`EXPLAIN QUERY PLAN` 实证：`SCAN content_fts VIRTUAL TABLE INDEX 0:` 挂在 `SEARCH e USING INDEX` 下。）
+
+### 落地方案（工单 `docs/design/变更工单-2026-10-28-检索热路径提速.md`）
+
+1. `datalayer/search.py::_content_like_rows`（新增私有方法，`_search_like` 调用）：派生表加
+   `AS MATERIALIZED`，先物化 77 行正文命中再走索引连接；**结果集 id 逐一相同**；老 SQLite
+   （< 3.35）抛 `OperationalError` 时兜底回原写法（慢但不报错）。
+2. `semantic/embed.py`：`top_similar` 签名语义不变 + numpy 快路径（惰性导入；维度不齐 / float 形状异常
+   → 回落纯 Python）；新增 `top_similar_blobs`（`np.frombuffer` 直接吃库内 BLOB）。两条路径共用
+   `_rank_hits`（阈值 → 降序 → top-k，保持原「先过滤后稳定排序」语义）与 `_scores_numpy`（逐行归一化，
+   不假设调用方已归一化）。
+3. `pipeline/embed_index.py`：`search_points_hybrid` / `hybrid_search` 增**可选**关键字参数 `qvec=None`
+   （缺省行为与旧版逐字相同），点融合与条目融合改走 `top_similar_blobs`；`/api/search` 路由把
+   `normalize(embedder.encode([q])[0])` 算一次传给两者 → hybrid 每请求 encode **2 次 → 1 次**。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **752 passed / 1 skipped**（743 + 新增 9 例）；canary 1 passed；
+  `gen_docs --check` 三份 OK。
+- 新增 `tests/test_embed_top_similar.py` 9 例：numpy 与纯 Python 同序同分、单条候选、无 numpy 回落、
+  维度不齐回落、空候选（含「空 query → cosine 0」历史口径）、BLOB 版与 list 版等价、坏 BLOB 行长回落、
+  两个融合函数「传 `qvec` 则零 encode」。
+- 真库 HTTP（serve 重启：旧 launcher 20260 / worker 17272 → 新 **25476 / 25488**，独立进程，8420）：
+
+| 请求 | 改造前 | 改造后（热） |
+|---|---|---|
+| `/api/search?q=雪花`（fts） | 2,166 ms | **161 ms** |
+| `/api/search?mode=hybrid&q=雪花` | **4,907 ms** | **174–196 ms** |
+| `/api/search?mode=hybrid&q=智能体的组成` | 2,129 ms | **159–166 ms**，`via_sim=29` 保持 |
+
+  冷启首调 10.5 s（本地 bge-m3 模型载入，一次性）；`embed_note` / `note` 均为空。
+- UI（headless Edge CDP，`temp/ui_search_r29_check.js`）：搜「雪花」**20 点卡**、搜「智能体的组成」
+  **29 点卡**、**无降级黄条**；唯一 console 错误是既存 favicon 404；截图
+  `temp/ui_search_r29_20261028.png`（144 KB）。`RESULT: PASS`。
+- 结论回写：`AGENTS.md` §5 增两条坑（FTS5 虚表 JOIN 全扫 / 库内余弦别逐条 `list[float]`）。
+
+### 下一步（按序，首步可直接执行）
+
+1. `kpoints --triage` 补 642 条新点 `kind`（需 DeepSeek key；`kpoints` 报告须 `split>0`）。
+2. dedupe 模板同构误并修法（用户本轮裁决**不碰**，单独一轮）：数字/否定词守卫，或阈值 0.92 → 0.95
+   （会重标全库 72 条 dupe，需再复核）。
+3. 超大书 > `[ingest] kpe_max_chars` 策略。
+4. 可选：`docs/design/` 索引页 + 归档；`CHANGELOG.md` 本轮未追加（沿用 R27/R28 做法：性能改动只
+   落工单 + 本文件）。
+5. 未推提交：本轮提交后 `main` 会 ahead 3（R28 的 `7d94d6a` + R29），按 AGENTS.local 的推送流程推。
+
+### 不要重跑
+
+- 全量 pytest **752/1**、canary、`gen_docs --check`；
+- 真库 `/api/search` 三类查询计时（数字见上）与 headless Edge 检索截图；
+- `temp/bench_top_similar_20261028.py`、`profile_search_segments_20261028.py`、
+  `profile_where_slow_20261028.py`、`profile_like_fallback_20261028.py`、
+  `profile_search_fts_detail_20261028.py`、`profile_sql_b_plan_20261028.py`、`ui_search_r29_check.js`；
+- 5 对 dedupe 误并的撤销（R28 已落库）。
+
+### 会话指纹
+
+`session-fcbe6423-62d8-4cc2-8631-36f2b98728e1`，compactions=0，tokens≈124,340，
+baseline 147,059，effective **84.5%**（WARN），2026-10-28T23:3x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-28T23:40:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-230x233x-r29检索热路径提速hybrid-49-s--017-s","draft":false,"goal":"R29 检索热路径提速：_search_like 正文段 MATERIALIZED（3.1s→25ms）+ top_similar numpy/BLOB 快路径（510ms→7ms）+ qvec 复用（encode 2→1）；752 passed；真库 hybrid 4.9s→0.18s","host":"dsh","kind":"handoff","next":"① kpoints --triage 补 642 条新点 kind（需 DeepSeek key）；② dedupe 模板同构误并修法（用户裁决单独一轮：数字/否定词守卫 或 阈值 0.92→0.95）；③ 超大书 >[ingest] kpe_max_chars 策略；④ 可选 docs/design 索引页；⑤ 未推提交（main 将 ahead 3）","not_rerun":"全量 pytest 752/1；canary；gen_docs --check；真库 /api/search 三类查询计时 + headless Edge 截图；temp 下 6 个测量探针 + ui_search_r29_check.js；5 对 dedupe 误并撤销","schema":1,"session":"session-fcbe6423-62d8-4cc2-8631-36f2b98728e1","status":"WARN","tokens":124340,"verify":"uv run python -m pytest -o addopts= -q -> 752 passed, 1 skipped；curl http://127.0.0.1:8420/api/search?mode=hybrid&q=雪花 -> 200 且 <300ms 无 embed_note"} -->

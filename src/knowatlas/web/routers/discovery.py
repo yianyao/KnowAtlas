@@ -150,11 +150,18 @@ def register(ctx: AppCtx) -> APIRouter:
         pts_raw = dl.search_points(q)
         embedder = None
         embed_note = ""
+        qvec = None
         try:
             from ...pipeline.embed_index import search_points_hybrid
             from ...semantic.embed import from_config as embedder_from_config
+            from ...semantic.embed import normalize
             embedder = embedder_from_config(cfg)
-            fused = search_points_hybrid(dl, embedder, q) if embedder else None
+            # 查询向量只算一次：hybrid 模式下点融合与条目融合共用（2026-10-28
+            # 工单「检索热路径提速」；本地 bge-m3 短句一次 213–374 ms）
+            if embedder is not None and (q or "").strip():
+                qvec = normalize(embedder.encode([q.strip()])[0])
+            fused = search_points_hybrid(dl, embedder, q, qvec=qvec) \
+                if embedder else None
             pts = fused if fused is not None else [
                 {"point_id": p.point_id, "text": p.text, "summary": p.summary,
                  "sources": p.sources, "rank": p.rank}
@@ -201,7 +208,9 @@ def register(ctx: AppCtx) -> APIRouter:
 
             result = None
             try:
-                result = hybrid_search(dl, embedder_from_config(cfg), q)
+                # qvec 可用就复用（点融合已算过）；不可用则让 hybrid_search 自算，
+                # 失败仍走同一降级路径
+                result = hybrid_search(dl, embedder_from_config(cfg), q, qvec=qvec)
             except Exception as exc:  # noqa: BLE001
                 embed_note = embed_note or _embed_fail_note(exc)
             if result is not None:

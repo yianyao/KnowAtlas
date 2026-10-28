@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..semantic.embed import blob_to_vec, normalize, top_similar, vec_to_blob
+from ..semantic.embed import (blob_to_vec, normalize, top_similar_blobs,
+                              vec_to_blob)
 
 _TEXT_CAP = 4000          # 单条目送编码的正文截断（字符）
 _FTS_POOL = 30            # 混合检索 FTS 侧候选池
@@ -174,7 +175,8 @@ def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]
             "threshold": threshold}
 
 
-def search_points_hybrid(dl: Any, embedder: Any, q: str
+def search_points_hybrid(dl: Any, embedder: Any, q: str, *,
+                         qvec: list[float] | None = None
                          ) -> list[dict[str, Any]] | None:
     """点检索融合（批次 87）：FTS 点命中 + 点向量余弦 → RRF 重排。
 
@@ -182,6 +184,10 @@ def search_points_hybrid(dl: Any, embedder: Any, q: str
     RRF 分——数值越小越靠前的 bm25 语义不再成立，前端按数组序渲染，rank 仅
     作分数展示）；embedder=None 或查询空 → None（调用方沿用纯 FTS 结果）。
     向量独有点（FTS 零命中但语义相关）同样返回——语义词检索的关键增量。
+
+    `qvec`（2026-10-28 工单「检索热路径提速」）：调用方已算好的**已归一化**查询
+    向量；缺省 None 时内部自行 encode（旧行为逐字不变）。hybrid 模式下点融合与
+    条目融合共用同一句的向量，省掉一次本地编码（实测 213–374 ms）。
     """
     if embedder is None or not (q or "").strip():
         return None
@@ -189,9 +195,10 @@ def search_points_hybrid(dl: Any, embedder: Any, q: str
     fts_rank = {p.point_id: i + 1 for i, p in enumerate(fts_hits)}
     by_id = {p.point_id: p for p in fts_hits}
 
-    qvec = normalize(embedder.encode([q.strip()])[0])
-    cands = {pid: blob_to_vec(b) for pid, b in dl.all_point_vectors().items()}
-    sim_hits = top_similar(qvec, cands, k=_VEC_POOL, threshold=_SIM_THRESHOLD)
+    qvec = qvec if qvec is not None else normalize(embedder.encode([q.strip()])[0])
+    # BLOB 直连打分：省掉 5,607 × 1,024 的 list[float] 构造（工单「检索热路径提速」）
+    sim_hits = top_similar_blobs(qvec, dl.all_point_vectors(),
+                                 k=_VEC_POOL, threshold=_SIM_THRESHOLD)
 
     rrf: dict[str, float] = {}
     for pid, rank in fts_rank.items():
@@ -219,12 +226,15 @@ def search_points_hybrid(dl: Any, embedder: Any, q: str
     return out
 
 
-def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
-                  ) -> dict[str, Any] | None:
+def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20, *,
+                  qvec: list[float] | None = None) -> dict[str, Any] | None:
     """FTS + 向量 RRF 融合检索；embedder=None 返回 None（调用方降级 fts）。
 
     reasons 可解释：fts 命中记 "fts"，向量命中记 "sim:<余弦>"；最终序 =
     RRF 分（两路排名倒数和，常数 60）。纯 fts 命中条目 reasons=["fts"]。
+
+    `qvec`（2026-10-28 工单「检索热路径提速」）：同 `search_points_hybrid`——
+    调用方已算好的归一化查询向量；缺省 None 时内部自行 encode（旧行为不变）。
     """
     if embedder is None or not (q or "").strip():
         return None
@@ -232,9 +242,10 @@ def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
     fts_rank = {h.entry_id: i + 1 for i, h in enumerate(fts_hits)}
     snippets = {h.entry_id: (h.snippet or "") for h in fts_hits}
 
-    qvec = normalize(embedder.encode([q.strip()])[0])
-    cands = {eid: blob_to_vec(b) for eid, b in dl.all_vectors().items()}
-    sim_hits = top_similar(qvec, cands, k=_VEC_POOL, threshold=_SIM_THRESHOLD)
+    qvec = qvec if qvec is not None else normalize(embedder.encode([q.strip()])[0])
+    entry_vectors = dl.all_vectors()
+    sim_hits = top_similar_blobs(qvec, entry_vectors,
+                                 k=_VEC_POOL, threshold=_SIM_THRESHOLD)
 
     rrf: dict[str, float] = {}
     reasons: dict[str, list[str]] = {}
@@ -245,7 +256,8 @@ def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
         rrf[eid] = rrf.get(eid, 0.0) + 1.0 / (_RRF_K + i)
         reasons.setdefault(eid, []).append(f"sim:{score:.2f}")
     if not rrf:
-        return {"query": q, "hits": [], "mode": "hybrid", "vectors": len(cands)}
+        return {"query": q, "hits": [], "mode": "hybrid",
+                "vectors": len(entry_vectors)}
 
     entries = {e.id: e for e in dl.get_entries_by_ids(list(rrf))}
     hits: list[dict[str, Any]] = []
@@ -259,7 +271,7 @@ def hybrid_search(dl: Any, embedder: Any, q: str, limit: int = 20
                      "reasons": reasons.get(eid, [])})
     hits.sort(key=lambda h: -h["score"])
     return {"query": q, "hits": hits[:limit], "mode": "hybrid",
-            "vectors": len(cands)}
+            "vectors": len(entry_vectors)}
 
 
 _NUMPY_MIN = 64        # 小于此规模纯 Python 更快（省掉建簇心矩阵的开销）
