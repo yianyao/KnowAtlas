@@ -35,6 +35,22 @@ def test_pdf_goes_kpe_even_without_body():
     assert plan("file:///D:/docs/x.docx", body_chars=None).reason == "no_body"
 
 
+def test_pdf_root_relative_locator_also_routes_kpe():
+    """真数据形态：folder 适配器产出 `file://<根相对路径>`，裸文件名落在 netloc。
+
+    2026-10-28 前只取 urlsplit().path，`file://书.pdf` 的 path 为空 → 后缀判不出 →
+    12 本真 PDF 全部按字数分流（`pdf_book` 成死代码）。这里钉死两种写法都要走 KPE。
+    """
+    for locator in ("file://labuladong的算法秘籍V2.7.pdf",      # 裸文件名（netloc）
+                    "file://books/Hello-Agents.pdf",             # 子目录
+                    "file:///D:/books/x.pdf"):                   # 绝对 URL
+        r = plan(locator, body_chars=None)
+        assert (r.tool, r.reason) == ("kpe", "pdf_book"), locator
+    # 嵌套的相对路径后缀照旧能判，且非书类不受影响
+    assert plan("file://repo-main/chapters/Chapter 1.md",
+                body_chars=60001).reason == "too_large"
+
+
 def test_body_size_decides_pipeline_vs_kpe():
     assert plan("https://a.example/x", body_chars=1000).reason == "short"
     assert plan("https://a.example/x", body_chars=6000).reason == "short"

@@ -229,6 +229,16 @@ def run_ingest_pass(cfg: Any, dl: Any, semantics: Any = None,
                 dl.log_task(now_iso, TASK, "skip", e.id,
                             {"reason": route.reason, "detail": route.detail})
 
+        # 预算分配（**抓取之前**定）：KPE 单本贵且不可分割，先留 1 个名额，余量给管道
+        # （便宜、条数多）；0 = 不限。
+        # 2026-10-28 修：原先在抓取之后切分，而本轮新抓到的条目会追加进 `plan_.pipeline`，
+        # 于是「管道数 = 既有 + 本轮抓取 ≥ budget」→ `kpe[:max(0, budget - len(pipeline))]`
+        # 恒为空，KPE 在 kauto 里根本排不上队（真库实测 `--limit 1` 与 `--limit 6` 都是
+        # `kpe: 0`，只有 `--limit 0` 不限时才轮到书）。
+        if budget:
+            plan_.kpe = plan_.kpe[:1 if plan_.kpe else 0]
+            plan_.pipeline = plan_.pipeline[:max(0, budget - len(plan_.kpe))]
+
         # ---- 抓正文（只在该轮预算内）----
         fetch_budget = budget if budget else len(plan_.fetch)
         if dry_run:
@@ -268,11 +278,6 @@ def run_ingest_pass(cfg: Any, dl: Any, semantics: Any = None,
                                               "reason": route.reason,
                                               "detail": route.detail,
                                               "at": now_iso})
-
-        # 预算分配：管道优先（便宜、条数多），余量给 KPE（单本贵）。0 = 不限。
-        if budget:
-            plan_.pipeline = plan_.pipeline[:budget]
-            plan_.kpe = plan_.kpe[:max(0, budget - len(plan_.pipeline))]
 
         llm = llm if llm is not None else (
             LlmClient.from_config(cfg)

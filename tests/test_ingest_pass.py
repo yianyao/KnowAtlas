@@ -98,6 +98,28 @@ def test_pass_extracts_points_via_pipeline(cfg, dl):
     assert again["pipeline"] == 0 and again["points_created"] == 0
 
 
+def test_kpe_gets_a_budget_slot(cfg, dl, monkeypatch):
+    """预算再紧也要给 KPE 留 1 个名额（2026-10-28 修：抓取后切分导致 kpe 恒为 0）。"""
+    import knowatlas.pipeline.kpe_runner as kpe_runner
+
+    calls: list[str] = []
+
+    def fake_kpe(cfg_, dl_, entry, body, **kw):
+        calls.append(entry.id)
+        return {"status": "ok", "chunks": 3, "points": 2}
+
+    monkeypatch.setattr(kpe_runner, "run_kpe_for_entry", fake_kpe)
+    _entry(dl, "p", locator="https://blog.example.com/post/1", body=_BODY)
+    book = _entry(dl, "b", locator="file://book.pdf", body="长文" * 10)
+    stats = run_ingest_pass(cfg, dl, llm=FakeLlm([]), do_aging=False,
+                            activate=False, limit=1)
+    assert calls == [book]
+    assert stats["kpe"] == 1 and stats["pipeline"] == 0
+    assert stats["points_created"] == 2
+    ing = _meta(dl, book)["ingest"]
+    assert ing["route"] == "kpe" and ing["chunks"] == 3 and ing["points"] == 2
+
+
 def test_pass_skips_repo_and_video_with_reason(cfg, dl):
     repo = _entry(dl, "repo", locator="https://github.com/u/r", body=_BODY)
     video = _entry(dl, "v", locator="https://www.bilibili.com/video/BV1", body=_BODY)

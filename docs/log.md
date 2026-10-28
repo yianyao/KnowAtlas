@@ -2928,3 +2928,89 @@ python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例
 
 <!-- HANDOFF {"at":"2026-10-28T12:50:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-125x-p1-点层补作业--质量抽检实跑","draft":false,"goal":"Cognee 借鉴项全否（记 TODO P4）；serve 重启载新代码（PID 7680 载 a047a1a）；P1 点层补作业+质量抽检实跑完成（无 kind 点 0、抽检合格率 86.7%）","host":"dsh","kind":"handoff","next":"① P1 KPE 实跑验收：挑一本真 PDF 走 kauto 的 KPE 通道（kpe_max_chars 内），确认 --max-points 6 与 meta.ingest.chunk_count；② P0 kauto --limit 3（花钱，需用户在场）；③ 可选 docs/design 索引页+归档；④ 可选 TODO P3 的 lifecycle dry-run 提示","not_rerun":"413 条分诊（已落库，幂等重跑=0）；lifecycle 两段（54 点已判）；30 条质量抽检；Cognee 调研（结论已记 P4）；serve 重启（7680 已载新代码）；全量 pytest 727/1","schema":1,"session":"session-8f346c29-ca96-4f26-8da3-d2c072f446b4","status":"HANDOFF","tokens":121326,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；curl http://127.0.0.1:8420/api/tasks?recent=3 -> 200"} -->
 
+<!-- HANDOFF {"at":"2026-10-28T12:50:11.228944+08:00","compactions":0,"doc":"docs/交接/2026-10-28-1250.md","draft":true,"goal":"上下文到 HANDOFF（86.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-8f346c29-ca96-4f26-8da3-d2c072f446b4","status":"HANDOFF","tokens":126586,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-28T20:22:12.132643+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2022.md","draft":true,"goal":"上下文到 HANDOFF（90.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-30db2930-5cd3-40bb-819c-16e9531873e7","status":"HANDOFF","tokens":133356,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-28T20:28:11.751311+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2028.md","draft":true,"goal":"上下文到 CRITICAL（99.6%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-30db2930-5cd3-40bb-819c-16e9531873e7","status":"CRITICAL","tokens":146506,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-28 20:0x–20:4x R26：P1 KPE 实跑验收（修 5 处缺陷，547 点入库）
+
+> 上面 20:22 / 20:28 两条 `draft:true` 块是 watcher 写的**上下文事件**（本会话确实冲到 90%+），不是工作交接；本轮工作交接见本节末尾的块。
+
+**开场**：`session_check` → `NEW_SESSION`；`context_probe` → effective **11.9%**（17,489 / 147,059，baseline 未变）。
+**触发**：交接块下一步①「挑一本真 PDF 走 `kauto` 的 KPE 通道」——开工前的只读排查发现验收路径本身走不到 PDF 原件。
+
+### 诊断（5 处缺陷，按暴露顺序；证据全部现场复现）
+
+| # | 缺陷 | 现场证据 | 修法 |
+|---|---|---|---|
+| 1 | `ingest_router._suffix()` 只取 `urlsplit().path`，真库 12 本 PDF 的 locator 是 `file://<书名>.pdf`（裸文件名落在 **netloc**）→ 后缀恒为空 | `plan('file://labuladong…pdf')` 走 `too_large` 而非 `pdf_book`；`pdf_book` 分支是死代码 | 新增 `_file_rel()`，file scheme 时拼 `netloc + path` |
+| 2 | `kpe_runner._pdf_path()` 同样只看 path → **12/12 返回 None** | `_pdf_path('file://Hello-Agents-V1.0.3-20260717.pdf') -> None`；KPE 只能把正文 dump 成 `book.md`，丢 `section_path`/页码 | 改 `_pdf_path(cfg, locator)`：按 `sources.folders.roots` 逐根解析（口径同 `fetchers/file_reader`），绝对 `file:///C:/x.pdf` 兜底 |
+| 3 | `api_key_env = "SF1,SF2"`（key 池写法）被整串当变量名 `os.environ.get("A,B")` → 恒 None → KPE 每次报「LLM 未配置」 | 真配置下 `_llm_target()` 取不到 key；`LlmClient._keys_from_envs` 本身支持逗号 | 新增 `_pick_key_env()`：拆开取第一个有值的变量名 |
+| 4 | 预算切分在**抓取之后**，本轮新抓的条目追加进 `plan_.pipeline` → `管道数 ≥ budget` → `kpe[:max(0, budget-len(pipeline))]` 恒空 | `--limit 1`（20:19:30）`fetched 1/pipeline 1/kpe 0` 1 秒结束；`--limit 6`（20:20:34）`fetched 6/pipeline 6/kpe 0` 42 秒 | 切分前移到抓取前，且 KPE 有候选时**先留 1 个名额**（书贵、不可分割，不能被小条目永久饿死） |
+| 5 | KPE 硬绑第一个后端；硅基 key **余额不足（HTTP 402）** → 93/93 块全失败，token=0，22 秒 | `failed.jsonl`: `LLM HTTP 402 {"code":30001,"message":"Sorry, your account balance is insufficient"}`；同轮管道正常出点（`LlmClient` 会 failover） | 新增 `_llm_targets()` 按配置顺序展开候选并逐个尝试；成功记 `stats["llm"]`，全失败返回最后一次错误（`--retry-failed` 保证换后端不重复花钱） |
+| 5b | `data_dir = Path(cfg.db_path).parent`（相对路径）+ 子进程 cwd=`tools/kpe` → 产物写进 **git 子树** | `tools/kpe/data/kpe/<entry>/{chunks.jsonl,manifest.json,cache/}`；`git status -- tools/kpe` 变脏 | `Path(cfg.db_path).resolve()`；误写产物已移到 `temp/kpe_artifacts_relative_bug/`，子树复查 **0 行** |
+
+### 落地
+
+| 文件 | 改动 |
+|---|---|
+| `src/knowatlas/pipeline/ingest_router.py` | `_file_rel()` + `_suffix()` 对 `file` scheme 拼 netloc+path |
+| `src/knowatlas/pipeline/kpe_runner.py` | `_relative_part`/`_absolute_part`/`_pdf_path(cfg,…)`；`_pick_key_env`；`_llm_targets` + `_llm_target`（兼容壳）；`out`/`data_dir` 绝对化；extract 逐后端 failover |
+| `src/knowatlas/pipeline/ingest.py` | 预算切分移到抓取之前 + KPE 预留 1 个名额 |
+| `tests/test_kpe_runner.py`（新） | 5 例：roots 解析（含 URL 编码/绝对 URL）、非法路径 7 种、dry-run 源文件、key 池、failover 成功/全失败 |
+| `tests/test_ingest_router.py` / `tests/test_ingest_pass.py` | +1 例「真数据形态 3 种 PDF 写法都走 pdf_book」；+1 例「预算再紧也给 KPE 名额」 |
+| `docs/design/变更工单-2026-10-28-PDF原件解析与书目路由.md`（新） | 缺陷 1–5 的证据、改法、契约零变更、验收口径 |
+| `docs/TODO.md` | KPE 实跑验收勾选（带数字）+ 新增「PDF 目录识别（上游）」待办 |
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **735 passed / 1 skipped**（基线 727/1，+8 例）；canary 在套件内零漂移；
+  `tools/gen_docs.py --check` 三份 **OK**。
+- 真库路由复核：12/12 本 PDF `plan()` → `kpe/pdf_book` 且 `_pdf_path` 命中盘上原件。
+- **kauto 实跑（20:35:08–20:39:21，`--limit 1 --no-aging --no-activate`）**：
+  `kpe: 1`，`points_created: 555`（KPE 547 + 管道 8），`fetch 1`（本地 md，零费用），`errors: []`。
+- KPE `stats.json`：**93 块 / 93 完成 / 0 失败**，`max_points: 6`（`--max-points 6` 真传到了子进程），
+  547 点、`quote_ok 518/547`、`tokens_in 324,326 + tokens_out 38,824`、`elapsed_s 153.3`、`model deepseek-chat`。
+- `manifest.json`：**715 页 / chunk_count 93 / toc_entries 0**（该 PDF 目录解析不出来，`window_sections` 回退）。
+- 条目 `meta.ingest = {route: "kpe", reason: "pdf_book_or_large", chunks: 93, points: 547}`，
+  `meta.points_pending_kpe = None`（导入后已清）；点 meta 键 = `book / extractor=kpe / judge_reason / model /
+  page_start / page_end / quote / section_path`。
+- 全库点：**4,965 → 5,607**（+642 = 547 KPE + 95 管道）；带 `points_pending_kpe` 的条目 **0**。
+
+### 现场事故与处理
+
+1. 首次 `--limit 1`/`--limit 6` 都是 `kpe: 0` —— 不是 KPE 坏了，是预算被管道吃光（缺陷 4）。修完 `--limit 1` 就能推到书。
+2. 第一轮真跑 93 块全 402（缺陷 5）；换后端后 153 秒跑完（`deepseek-chat`），比硅基快得多。
+3. KPE 产物一度写进 `tools/kpe/data/`（缺陷 5b）：已移到 `temp/kpe_artifacts_relative_bug/`，
+   `git status --porcelain -- tools/kpe` 复查 0 行。
+4. `data/kpe/fa930958b6f65dce/book.md` 是 10-27 留下的 906 KB 正文 dump（当时解析不到 PDF），
+   修复后不再使用；留着无害。
+
+### 不要重跑
+
+- 全量 pytest（735/1）、canary、`gen_docs --check`；
+- labuladong 的 KPE 实跑（547 点已入库，幂等：`_plan` 按 `has_points` 跳过）；
+- 三次 kauto 试跑（20:19:30 / 20:20:34 / 20:35:08）的数字已记在本节；
+- `temp/probe_plan_20261028.py`、`probe_pdf_entries_20261028.py`、`probe_entries_20261028.py`、
+  `probe_kpe_state_20261028.py`、`probe_final_stats_20261028.py`、`temp/kpe_chunks_labuladong/`。
+
+### 已知问题（本轮未修）
+
+1. **新点 642 条没有 `kind`**（分诊是独立步骤）：下一步 `kpoints --triage`。
+2. **labuladong 目录识别 0 条**（715 页）→ 该书点 `page_start=0`、`section_path` 退化成书名；
+   属 `tools/kpe` 上游 `parse_toc` 能力，需改上游再 subtree pull。
+3. 硅基 key 余额不足：走 `LlmClient` 的调用会 failover 到 DeepSeek，但每轮 KPE 会多花 ~20 秒失败尝试；
+   要么充值，要么把 `[[llm.backends]]` 第一条换成 DeepSeek。
+
+### 下一步（按序，首步可直接执行）
+
+1. `kpoints --triage` 补 642 条新点的 `kind`（先 `--limit 60 --dry-run` 看计划）。
+2. 重启 `serve`（当前 7680 载的是 20:0x 之前的代码）：`Start-Process uv run python -m knowatlas serve`，然后 Ctrl+F5。
+3. 超大书策略裁决：Hello-Agents 674k / AI-Agents 1.05M / agentic-ai-guide 2.59M 都超 `kpe_max_chars`（600k），
+   现在因已有管道产出的点被幂等跳过；新来同类书会直接报错。要不要提高上限/分卷，需用户裁决。
+4. （可选）`docs/design/` 索引页 + 归档。
+
+<!-- HANDOFF {"at":"2026-10-28T20:52:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-200x204x-r26p1-kpe-实跑验收修-5-处缺陷547-点入库","draft":false,"goal":"P1 KPE 实跑验收完成：修 5 处缺陷（PDF 路由/原件解析/key 池/预算名额/后端 failover+产物绝对路径），真库 labuladong 93 块出 547 点（735 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① kpoints --triage 补 642 条新点 kind；② 重启 serve 载新代码（7680 是旧代码）；③ 超大书 >kpe_max_chars 策略裁决；④ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 735/1、canary、gen_docs --check；labuladong KPE 实跑（547 点已入库，幂等跳过）；三次 kauto 试跑（20:19:30/20:20:34/20:35:08）；temp/ 下 5 个探针与 kpe_chunks_labuladong","schema":1,"session":"session-30db2930-5cd3-40bb-819c-16e9531873e7","status":"HANDOFF","tokens":150000,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python -m pytest -o addopts= -q -> 735 passed, 1 skipped"} -->

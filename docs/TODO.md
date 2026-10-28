@@ -110,8 +110,17 @@ git status -sb                                   # 期望只有本步改动
 - [x] **点质量抽检**（2026-10-28，`temp/probe_point_quality_20261028.py`，种子 20261028）：随机 30 条
       逐条判「能否脱离原文读懂」→ 26 条清楚、4 条偏弱（多为 `unjudgeable`：脱离上下文的实验数字/轶事/
       具体代码细节）。**合格率 86.7% ≥ 80%**，不达标样本不进回归集（弱的是"缺上下文"，不是"错"）。
-- [ ] **KPE 实跑验收**：挑一本真 PDF 走 `kauto` 的 KPE 通道（`kpe_max_chars` 内），
-      确认 `--max-points 6` 生效、`chunk_count` 与点数写入 `meta.ingest`。
+- [x] **KPE 实跑验收**（2026-10-28 20:35–20:39 真库实跑）：`kauto --limit 1` 打 labuladong
+      （469,435 字 / 0 点）→ 吃 **PDF 原件**分块 **93 块 / 715 页**；`--max-points 6` 生效
+      （KPE `stats.json` 的 `max_points=6`，93 块出 547 点，≈5.9/块）；
+      **547 点入库**，`meta.ingest = {route: kpe, reason: pdf_book_or_large, chunks: 93, points: 547}`，
+      点 meta 带 `extractor=kpe` / `book` / `section_path` / `quote`（518/547 quote 命中）。
+      耗时 153 s、tokens 324k in + 39k out（`deepseek-chat`；硅基 key 余额 402 后 failover）。
+      过程修了 5 处缺陷：路由后缀 / 原件解析 / key 池 / 预算分配 / 后端 failover + 产物绝对路径，
+      见 `docs/design/变更工单-2026-10-28-PDF原件解析与书目路由.md`。
+- [ ] **PDF 目录识别（上游）**：labuladong 715 页解析出 **0 条目录** → 该书的点 `page_start=0`、
+      `section_path` 退化成书名。属 `tools/kpe` 上游 `parse_toc`/`window_sections` 能力，
+      本仓库不动子树；要做先改上游再 `git subtree pull`。
 - [ ] **配置示例同步**：`config/knowatlas.example.toml` 已加 `[ingest]/[points]/[aging]`，
       补一句「kauto 与 serve 巡检共用同一组键」到 SOP。
 

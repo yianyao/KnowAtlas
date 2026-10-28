@@ -62,28 +62,92 @@ def _supports_max_points() -> bool:
     return _MAX_POINTS_SUPPORTED
 
 
+def _pick_key_env(spec: str) -> str:
+    """`api_key_env` 可逗号分隔多个变量名（LlmClient 的 key 池口径）——取第一个**有值**的。
+
+    2026-10-28 修：此前把整串 `"A,KNOWATLAS_LLM_API_KEY_SF2"` 当成单个变量名去
+    `os.environ.get(...)`，真配置下必然取不到 → KPE 每次都报「LLM 未配置」。KPE 的
+    `--api-key-env` 只认单个变量名，所以这里先挑一个。
+    """
+    names = [s.strip() for s in str(spec or "").split(",") if s.strip()]
+    for name in names:
+        if os.environ.get(name):
+            return name
+    return names[0] if names else "KNOWATLAS_LLM_API_KEY"
+
+
+def _llm_targets(cfg: Any) -> list[tuple[str, str, str]]:
+    """按配置顺序展开 (base_url, model, api_key_env) 候选；KPE 一次只吃一个后端。
+
+    `LlmClient` 自己会在后端之间 failover（402/401 换个后端继续），但 KPE 是子进程，
+    只能由调用方逐个尝试——2026-10-28 实跑就是硅基 key 余额不足（HTTP 402），而
+    `_llm_target()` 只取第一个后端，导致 93/93 块全失败、管道却正常出点。
+    """
+    out: list[tuple[str, str, str]] = []
+    for b in (cfg.get("llm.backends", []) or []):
+        if not (isinstance(b, dict) and b.get("base_url") and b.get("model")):
+            continue
+        names = [s.strip() for s in str(b.get("api_key_env") or "").split(",") if s.strip()]
+        for name in (names or ["KNOWATLAS_LLM_API_KEY"]):
+            if os.environ.get(name):          # key 池里只展开真有值的变量
+                out.append((str(b["base_url"]), str(b["model"]), name))
+    if not out:                               # 旧配置（扁平 [llm]）兼容
+        spec = str(cfg.get("llm.api_key_env", "KNOWATLAS_LLM_API_KEY"))
+        out.append((str(cfg.get("llm.base_url", "")), str(cfg.get("llm.model", "")),
+                    _pick_key_env(spec)))
+    return out
+
+
 def _llm_target(cfg: Any) -> tuple[str, str, str]:
-    """(base_url, model, api_key_env)；多后端取第一个（与 LlmClient 的优先级同向）。"""
-    backends = cfg.get("llm.backends", []) or []
-    for b in backends:
-        if isinstance(b, dict) and b.get("base_url") and b.get("model"):
-            return (str(b["base_url"]), str(b["model"]),
-                    str(b.get("api_key_env") or "KNOWATLAS_LLM_API_KEY"))
-    return (str(cfg.get("llm.base_url", "")), str(cfg.get("llm.model", "")),
-            str(cfg.get("llm.api_key_env", "KNOWATLAS_LLM_API_KEY")))
+    """第一个候选（保持旧调用点语义）。"""
+    return _llm_targets(cfg)[0]
 
 
-def _pdf_path(locator: str) -> Path | None:
+def _relative_part(raw: str) -> str | None:
+    """根相对路径；含盘符/反斜杠/`..` 一律不合规（与 `fetchers/file_reader` 同口径）。"""
+    rel = raw.lstrip("/")
+    if not rel or "\\" in rel or ".." in Path(rel).parts:
+        return None
+    if len(rel) >= 2 and rel[1] == ":":
+        return None
+    return rel
+
+
+def _absolute_part(raw: str) -> Path | None:
+    """绝对 file URL（`file:///C:/x.pdf`、`file://C:/x.pdf`）→ Path；非绝对返回 None。"""
+    if len(raw) >= 3 and raw[0] == "/" and raw[2] == ":":
+        raw = raw.lstrip("/")
+    p = Path(raw)
+    return p if p.is_absolute() else None
+
+
+def _pdf_path(cfg: Any, locator: str) -> Path | None:
+    """locator 指向的 PDF 原件；解析不到或不是 PDF 返回 None。
+
+    真数据的 locator 是 `file://<根相对路径>`（folder 适配器禁绝对机器路径），裸文件名时
+    urlsplit 把名字放进 netloc、path 为空 —— 2026-10-28 前只看 path，真库 12 本 PDF **全部**
+    返回 None，于是 KPE 只能把正文 dump 成 `book.md` 再分块，丢掉 `section_path` / 页码
+    （KPE 的目录/页码分块正是 PDF 走 KPE 的理由）。现在按 `sources.folders.roots` 逐根解析。
+    """
     try:
-        parts = urlsplit(locator)
+        parts = urlsplit(str(locator or ""))
     except ValueError:
         return None
-    if parts.scheme != "file" or not parts.path:
+    if parts.scheme != "file":
         return None
-    p = Path(unquote(parts.path.lstrip("/")) if parts.netloc else unquote(parts.path))
-    if parts.netloc:   # file:///C:/x.pdf 在 Windows 上 netloc 为空、path 以 /C:/ 开头
-        p = Path(unquote(parts.path))
-    return p if p.suffix.lower() == ".pdf" and p.is_file() else None
+    raw = unquote(parts.netloc + (parts.path or ""))
+    rel = _relative_part(raw)
+    cand: Path | None = None
+    if rel:
+        for root in list(cfg.get("sources.folders.roots", []) or []):
+            if (Path(str(root)) / rel).is_file():
+                cand = Path(str(root)) / rel
+                break
+    if cand is None:                    # 非 folder 来源（手动 kadd 的绝对路径）兜底
+        cand = _absolute_part(raw)
+    if cand is None or cand.suffix.lower() != ".pdf" or not cand.is_file():
+        return None
+    return cand
 
 
 def _tail(text: str, limit: int = 300) -> str:
@@ -111,13 +175,14 @@ def run_kpe_for_entry(cfg: Any, dl: Any, entry: Any, body: str, *,
     chunk_chars = int(getattr(cfg, "points_chunk_chars", 6000))
     max_points = int(getattr(cfg, "points_max_per_chunk", 6))
 
-    data_dir = Path(cfg.db_path).parent
-    out = Path(out_root or (data_dir / "kpe" / entry.id))
+    # 绝对化：KPE 子进程的 cwd 是 `tools/kpe`，相对 db_path 会把产物写进子树（2026-10-28 修）。
+    data_dir = Path(cfg.db_path).resolve().parent
+    out = Path(out_root or (data_dir / "kpe" / entry.id)).resolve()
     out.mkdir(parents=True, exist_ok=True)
     stats["out"] = str(out)
 
     # 源文件：PDF 用原件（目录/页码）；其余正文 dump 成 md（保留标题层级当 section_path）。
-    src = _pdf_path(str(entry.locator or ""))
+    src = _pdf_path(cfg, str(entry.locator or ""))
     if src is None:
         src = out / "book.md"
         src.write_text(body, encoding="utf-8", newline="\n")
@@ -138,22 +203,31 @@ def run_kpe_for_entry(cfg: Any, dl: Any, entry: Any, body: str, *,
         return {**stats, "status": "error",
                 "error": f"chunks 失败（{res.returncode}）：{_tail(res.stderr or res.stdout)}"}
 
-    base_url, model, key_env = _llm_target(cfg)
-    if not (base_url and model and os.environ.get(key_env)):
+    usable = [t for t in _llm_targets(cfg) if t[0] and t[1] and os.environ.get(t[2])]
+    if not usable:
         return {**stats, "status": "error",
-                "error": f"LLM 未配置（base_url/model/{key_env}）——KPE 无法抽取"}
-    extract_args = ["extract", str(out), "--base-url", base_url, "--model", model,
-                    "--api-key-env", key_env, "--workers", "2",
-                    "--retry-failed"]
-    if _supports_max_points():
-        extract_args.extend(["--max-points", str(max_points)])
-    try:
-        res = _run(extract_args, _EXTRACT_TIMEOUT)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {**stats, "status": "error", "error": f"extract 启动失败：{exc}"}
-    if res.returncode != 0:
-        return {**stats, "status": "error",
-                "error": f"extract 失败（{res.returncode}）：{_tail(res.stderr or res.stdout)}"}
+                "error": "LLM 未配置（base_url/model/api_key_env）——KPE 无法抽取"}
+    last_error = ""
+    for base_url, model, key_env in usable:
+        extract_args = ["extract", str(out), "--base-url", base_url, "--model", model,
+                        "--api-key-env", key_env, "--workers", "2",
+                        "--retry-failed"]
+        if _supports_max_points():
+            extract_args.extend(["--max-points", str(max_points)])
+        try:
+            res = _run(extract_args, _EXTRACT_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            last_error = f"extract 启动失败（{model}@{base_url}）：{exc}"
+            continue
+        if res.returncode == 0:
+            stats["llm"] = f"{model}@{base_url}"
+            break
+        last_error = (f"extract 失败（{res.returncode}，{model}@{base_url}）："
+                      f"{_tail(res.stderr or res.stdout)}")
+        # 402/401/404 这类「这个后端不行」换个后端还有救；已成功的块在 cache 里，
+        # `--retry-failed` 只补失败块，不会重复花钱。
+    else:
+        return {**stats, "status": "error", "error": last_error}
 
     try:
         imported = import_kpe_dir(cfg, dl, out, entry_id=entry.id,

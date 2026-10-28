@@ -77,8 +77,22 @@ def _scheme(locator: str) -> str:
         return ""
 
 
+def _file_rel(locator: str) -> str:
+    """`file://<根相对路径>` 的相对路径：folder 适配器把裸文件名放在 netloc 里。"""
+    try:
+        parts = urlsplit(locator)
+    except ValueError:
+        return ""
+    return unquote(parts.netloc + (parts.path or ""))
+
+
 def _suffix(locator: str) -> str:
     p = _path(locator).rstrip("/")
+    if not p and _scheme(locator) == "file":
+        # 2026-10-28 修：真库 12 本 PDF 的 locator 都是 `file://<书名>.pdf`，urlsplit 会把
+        # 裸文件名塞进 netloc、path 为空 → 只取 path 永远判不出 .pdf，`pdf_book` 分支成了
+        # 死代码（PDF 一律按字数分流，绕过了目录/页码分块）。file scheme 必须拼 netloc+path。
+        p = _file_rel(locator).rstrip("/")
     return Path(p).suffix.lower() if p else ""
 
 
