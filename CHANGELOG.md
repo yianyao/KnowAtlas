@@ -4,6 +4,28 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 本地 bge-m3 接管嵌入后端（2026-10-28，R28）
+
+- **为什么**：硅基 SF1 余额 0（HTTP 402）→ 语义通道整体不可用（R27 只做到「挂了不拖垮主通道」）；
+  用户裁决换**本地 bge-m3**（同权重、同 1024 维、零 API 费用），不充值、不引第二个云依赖。
+- **依赖与权重**：`sentence-transformers 6.2 + transformers 5.21 + torch 2.7.1+cpu`
+  （PyPI 最新 2.14.1 在本机 `import torch` 报 `c10.dll WinError 1114`，锁 2.7.1）；
+  权重 `data/models/bge-m3`（2.17 GB，ModelScope 下载，`data/` 已 gitignore）。
+- **代码**（`semantic/embed.py`）：本地后端**进程内单例**（`_local_embedder` / `reset_local_cache`，
+  按 `model_path` 缓存 + 锁）——`from_config` 在 `/api/search` 每请求调用一次，不缓存会每次重载 2.2 GB；
+  `_LOCAL_MAX_TOKENS = 1024` 截长文（CPU 4000 字符实测 512→4.0 s / 1024→8.3 s / 2048→19.3 s / 8192→29.8 s）；
+  `dim` 取 ST 6.x 新名 `get_embedding_dimension`。点文本远低于上限，不受截断影响。
+- **配置**：`config/knowatlas.toml`（gitignore）`provider = "local"` + `model_path = "data/models/bge-m3"`；
+  远端四键留注释，充值后改回 + `ksync --embed --embed-force` 即可切回。
+- **契约**：表结构 / 字段 / locator scheme / `SOURCE_TYPES` / `STATUSES` / `CONFIG_SCHEMA_KEYS` /
+  能力注册表 / REST 接口**零变更**（canary 零漂移；`gen_docs --check` 三份 OK）。
+- **测试**：新增 `tests/test_embed_local.py` 3 例；全量 **743 passed / 1 skipped**（原 740）。
+- **实测**：`ksync --embed` **56 分钟** → 点 **5,607** / 条目 **61** 全量 `st:data/models/bge-m3`；
+  `/api/search` 热 **1.9 s**（fts）/ **5.5 s**（hybrid）、`embed_note` 为空；
+  「智能体的组成」FTS 0 命中 → `via_sim` **29 点**；UI（headless Edge）搜「雪花」**20 点卡**、**无降级黄条**。
+- **附（数据复核）**：dedupe 新增 34 个标记，逐对复核撤销 5 对「同模板但事实不同」的误并（43 → 72）；
+  失效模式与修法记 TODO（数字/否定词守卫或阈值 0.92 → 0.95）。
+
 ### 变更工单 · 入库即抽点与自动老化：`kauto` / serve 巡检 / KPE 自动通道（2026-10-27，R18）
 
 - **为什么**：R17 之后"入库 → 有知识点"仍要人记得敲 `ksync` → `kpoints` →（长文）`kpe` → `kpeimport`

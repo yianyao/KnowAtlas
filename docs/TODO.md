@@ -94,6 +94,10 @@ git status -sb                                   # 期望只有本步改动
 - [ ] **打开 serve 巡检**：`config/knowatlas.toml` 加 `[ingest] enabled = true`，
       `serve` 后确认日志「入库巡检启动：每 600s 一轮」。判据：跑满两轮无异常、无双写冲突。
 - [ ] **R17 界面验收**（一直挂着）：Ctrl+F5 后看「打开原文」与分类页「按主题」是否正常。
+- [ ] **dedupe「模板同构」误并**（2026-10-28 R28 实证）：`dedup_points` 阈值 0.92 对「同书同模板、
+      只差一个限定词/否定词」的句子会误并——本轮 34 个新标记里 5 对是 k=1 vs k=∞、碎了 vs 没碎、
+      `valid` 自增 vs 完成条件、数字视角 vs 桶视角（已撤销，43 → 72）。修法二选一：① 阈值提到 0.95；
+      ② 加守卫（两文本数字/否定词不一致则不并）。注意下次 `ksync --embed` 会按原阈值重新标回。
 
 ## P1 · 功能补全（两周内）
 
@@ -123,6 +127,10 @@ git status -sb                                   # 期望只有本步改动
       本仓库不动子树；要做先改上游再 `git subtree pull`。
 - [ ] **配置示例同步**：`config/knowatlas.example.toml` 已加 `[ingest]/[points]/[aging]`，
       补一句「kauto 与 serve 巡检共用同一组键」到 SOP。
+- [ ] **检索热路径 numpy 快路径**（2026-10-28 R28 实测）：`semantic/embed.py::top_similar` 是纯 Python
+      余弦，对 5,607×1024 每个候选算三遍模长；本地 bge-m3 接管后 `/api/search` 热 1.9 s（fts）/
+      5.5 s（hybrid），其中向量扫描占大头。改法：numpy 快路径（缺 numpy/维度不齐时回落纯 Python，
+      与 `_greedy_clusters` 同套路），预计 0.7 s → 0.03 s。**属业务代码，需先方案再改**。
 
 ## P2 · 服务化与多端（按架构文档 §7 推进）
 

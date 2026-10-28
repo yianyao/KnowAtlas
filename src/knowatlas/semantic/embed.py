@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 import time
 from typing import Any
 
@@ -30,6 +31,12 @@ from typing import Any
 # 重试 3 次 + 退避 ≈ 11 s，而搜索是高频交互路径；充值后冷却到期自动恢复，不用重启 serve。
 _FAIL_GATE: dict[tuple[str, str], tuple[float, str]] = {}
 _FAIL_GATE_TTL = 60.0
+
+# 本地编码的单条 token 上限（2026-10-28 R28 实测，i5-1240P/CPU/16 线程，4000 字符文本）：
+# 512→4.0s、1024→8.3s、2048→19.3s、8192→29.8s。bge-m3 支持 8192，但整篇 4000 字符
+# 编码 30 s/条，76 条条目就要 38 分钟；1024 token（≈700 中文字）留住标题+摘要级语义，
+# 代价 8 s/条。点文本（一两百字）远低于该上限，不受影响。
+_LOCAL_MAX_TOKENS = 1024
 
 
 class EmbedRejected(RuntimeError):
@@ -71,7 +78,13 @@ class LocalEmbedder:
             from sentence_transformers import SentenceTransformer  # optional 依赖
 
             self._model = SentenceTransformer(self._model_path)
-            self.dim = int(self._model.get_sentence_embedding_dimension())
+            # 长文截断到 _LOCAL_MAX_TOKENS：CPU 上 8192 的注意力开销是 1024 的 ~3.6 倍
+            # （8.3 s → 29.8 s/条，4000 字符），收益却在标题/摘要之外基本衰减。
+            self._model.max_seq_length = _LOCAL_MAX_TOKENS
+            # ST 6.x 把 get_sentence_embedding_dimension 改名 get_embedding_dimension（旧名仍可用但告警）
+            get_dim = (getattr(self._model, "get_embedding_dimension", None)
+                       or self._model.get_sentence_embedding_dimension)
+            self.dim = int(get_dim())
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         """批量编码（已 L2 归一化）；空输入返回空列表。"""
@@ -165,6 +178,33 @@ class RemoteEmbedder:
         raise RuntimeError(f"embedding 请求失败（{self._url}）：{last}")
 
 
+# 本地模型进程内单例（2026-10-28 切本地 bge-m3 时补）：from_config 在
+# web/routers/discovery.py 是**每次请求**调用一次，而 sentence-transformers
+# 载入 2.2 GB 权重要数秒、常驻内存 3 GB 上下——不缓存等于每次搜索都重载模型。
+# 键 = model_path（空串 = 默认 BAAI/bge-m3），值 = 惰性加载的封装实例。
+_LOCAL_CACHE: dict[str, "LocalEmbedder"] = {}
+_LOCAL_LOCK = threading.Lock()
+
+
+def reset_local_cache() -> None:
+    """清空本地模型缓存（测试用；换模型路径/释放显存时可调）。"""
+    with _LOCAL_LOCK:
+        _LOCAL_CACHE.clear()
+
+
+def _local_embedder(model_path: str) -> "LocalEmbedder":
+    """取（必要时创建）进程内共享的 LocalEmbedder；同路径并发首调只建一个。"""
+    key = (model_path or "").strip()
+    emb = _LOCAL_CACHE.get(key)
+    if emb is None:
+        with _LOCAL_LOCK:
+            emb = _LOCAL_CACHE.get(key)
+            if emb is None:
+                emb = LocalEmbedder(key)
+                _LOCAL_CACHE[key] = emb
+    return emb
+
+
 def from_config(cfg: Any) -> "LocalEmbedder | RemoteEmbedder | None":
     """按 [embedding] 配置构建；未启用/依赖缺失/key 未设/加载失败 → None（调用方降级）。"""
     if not cfg.get("embedding.enabled", False):
@@ -187,7 +227,8 @@ def from_config(cfg: Any) -> "LocalEmbedder | RemoteEmbedder | None":
     if provider != "local":
         return None  # 未知 provider 视同禁用（仅 local / openai 两实现）
     try:
-        return LocalEmbedder(str(cfg.get("embedding.model_path", "") or ""))
+        # 同一路径复用同一实例：模型只载一次（见 _local_embedder 注释）
+        return _local_embedder(str(cfg.get("embedding.model_path", "") or ""))
     except Exception:  # sentence-transformers 未装等——禁用该级，不阻断启动
         return None
 

@@ -3071,4 +3071,88 @@ python 8920`，跑 R20 之前的代码，管理页无任务卡片）；新实例
 - 真库 `/api/search` 三连冒烟（数字见上）、headless Edge 检索截图；
 - `temp/probe_search_xuehua_20261028.py`、`temp/probe_vectors_20261028.py`、`temp/ui_search_xuehua_check.js`。
 
-<!-- HANDOFF {"at":"2026-10-28T21:22:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-210x212x-r27检索搜雪花绝非预期根因-ap-isearch-500嵌入-402-未降级","draft":false,"goal":"R27 修检索 500：嵌入 402 不再拖垮 /api/search（740 passed），真库 搜雪花 恢复 20 点 + 降级黄条；serve PID 23172","host":"dsh","kind":"handoff","next":"① 裁决嵌入后端（充值硅基 / 本地 bge-m3 / 纯 FTS）；② 交接前序项的 kpoints --triage 补 642 条新点 kind；③ 超大书 >kpe_max_chars 策略；④ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 740/1；canary；gen_docs --check；真库 /api/search 三连冒烟；headless Edge 检索截图；三个 temp 探针","schema":1,"session":"session-db92b657-2c59-4c81-a1f9-e239c7103d33","status":"HANDOFF","tokens":126739,"verify":"uv run --with zstandard python tools/context_probe.py -> 86.2% HANDOFF"} -->
+<!-- HANDOFF {"at":"2026-10-28T21:22:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-210x212x-r27检索搜雪花绝非预期根因-ap-isearch-500嵌入-402-未降级","draft":false,"goal":"R27 修检索 500：嵌入 402 不再拖垮 /api/search（740 passed），真库 搜雪花 恢复 20 点 + 降级黄条；serve PID 23172","host":"dsh","kind":"handoff","next":"① 裁决嵌入后端（充值硅基 / 本地 bge-m3 / 纯 FTS）；② 交接前序项的 kpoints --triage 补 642 条新点 kind；③ 超大书 >kpe_max_chars 策略；④ 可选 docs/design 索引页+归档","not_rerun":"全量 pytest 740/1；canary；gen_docs --check；真库 /api/search 三连冒烟；headless Edge 检索截图；三个 temp 探针","schema":1,"session":"session-db92b657-2c59-4c81-a1f9-e239c7103d33","status":"HANDOFF","tokens":126739,"verify":"uv run --with zstandard python tools/context_probe.py -> 86.2% HANDOFF"} --><!-- HANDOFF {"at":"2026-10-28T21:14:11.282930+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2114.md","draft":true,"goal":"上下文到 CRITICAL（97.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-db92b657-2c59-4c81-a1f9-e239c7103d33","status":"CRITICAL","tokens":143946,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-28T22:18:13.213180+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2218.md","draft":true,"goal":"上下文到 HANDOFF（85.5%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-a7bd358b-aa1c-4493-a6a2-18449835c2ef","status":"HANDOFF","tokens":125731,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-28T22:24:13.645126+08:00","compactions":0,"doc":"docs/交接/2026-10-28-2224.md","draft":true,"goal":"上下文到 CRITICAL（102.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-a7bd358b-aa1c-4493-a6a2-18449835c2ef","status":"CRITICAL","tokens":151356,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-28 21:4x–22:5x R28：本地 bge-m3 接管（硅基 402 之后，零 API 费用）
+
+### 开场判据
+
+- `session_check` → `NEW_SESSION`（exit 0），上一交接 `session-db92b657` @ 21:22 `status=HANDOFF`；
+- `context_probe` → `effective_pct` **11.6%**（16,991 / 147,059，compactions=0）；
+- 未重跑交接块「不要重跑」各项（pytest 只在改码后重跑）。
+
+### 决策
+
+用户裁决「关于 bge-m3，按你的建议来」→ **本地 bge-m3**（同权重、同 1024 维、零 API 费用），
+替代余额为 0 的硅基远端；不充值、不引第二个云依赖。
+
+### 落地
+
+1. **依赖**：`sentence-transformers 6.2.0 + transformers 5.21.0 + torch 2.7.1+cpu`（阿里云镜像）。
+   坑：PyPI 最新 `torch==2.14.1` 在本机 `import torch` 报 `OSError [WinError 1114] c10.dll`（VC 运行时 14.32 太旧），
+   锁 **2.7.1** 即正常。
+2. **权重**：`data/models/bge-m3`（2.17 GB，gitignore 覆盖）。来源 **ModelScope**（4.6 MB/s）；
+   hf-mirror 走 Xet 存储报 401，加 `HF_HUB_DISABLE_XET=1` 能下但只有 0.7 MB/s。
+3. **代码**（`semantic/embed.py`，唯一一处业务改动 + 测试）：
+   - `_local_embedder()`：本地后端**进程内单例**（按 `model_path` 缓存 + 线程锁）、`reset_local_cache()`。
+     原因：`from_config` 在 `/api/search` 是**每请求调用一次**，本地后端不缓存 = 每次搜索重载 2.2 GB / ~7 s；
+   - `_LOCAL_MAX_TOKENS = 1024`：CPU 实测 4000 字符文本 512→4.0 s / 1024→8.3 s / 2048→19.3 s / 8192→29.8 s，
+     1024 留住标题+摘要级语义（点文本一两百字，远低于上限，不受影响）；
+   - `dim` 改取 ST 6.x 新名 `get_embedding_dimension`（旧名 FutureWarning 噪音）；
+   - `tests/test_embed_local.py` 3 例（同路径复用同一实例 / 默认路径 `st:BAAI/bge-m3` / reset 后新建）。
+4. **配置**（`config/knowatlas.toml`，gitignore）：`provider = "local"` + `model_path = "data/models/bge-m3"`；
+   远端四键留注释（充值后可一行切回 + `ksync --embed --embed-force`）。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **743 passed / 1 skipped**（740 + 3 例）；canary 1 passed；`gen_docs --check` 三份 OK。
+- `ksync --embed`（21:46–22:42，**56 分钟**）：条目 `embedded 61 / no_text 15`；点 `embedded 5607 / no_text 0`；
+  `dedup groups 31 / dupes 34 / vectors 5564`。
+- 向量标签：`point_vectors` **5,607 全 `st:data/models/bge-m3`**；`entry_vectors` 61 st + 2 条遗留 `api:`
+  （那 2 条无正文/非 active；同权重同维度，检索不受影响，未强删）。
+- 向量质量抽测：同句 1.000 / 改写 0.92、0.68 / 跨域 0.26–0.33（不是坏权重）。
+- `GET /api/search`：冷启首调 **18.2 s**（模型载入 + jieba 初始化），热 **1.9 s**（fts）/ **5.5 s**（hybrid）；
+  `embed_note` / `note` **均为空**；hybrid `reasons` 出现 `sim:0.50`、`sim:0.58`；
+  「智能体的组成」FTS 0 命中 → **via_sim 29 点**（语义通道真恢复）。
+- UI（headless Edge CDP，`temp/ui_search_local_check.js`）：搜「雪花」**20 点卡**、搜「智能体的组成」**29 点卡**、
+  **无降级黄条**；唯一 console 错误是既存 favicon 404；截图 `temp/ui_search_local_20261028.png`（144 KB）。
+- serve 换成**独立进程**常驻（`Start-Process`，8420；launcher PID 20260 / worker 17272，载本轮代码）。
+
+### 人工复核：dedupe 的副作用（本轮唯一数据风险点）
+
+`dedup_points`（阈值 0.92）在重嵌入后新增 **34** 个 dupe 标记。逐对复核：
+
+- **29 对确为同知识改写**（cos 0.92–0.996，如 MCP 定义、快速排序框架、鸡蛋掉落「碎了」两条）→ 保留；
+- **5 对是「同一句式里的不同事实」误并** → 已撤销（`temp/revert_false_dupes_20261028.py`，dupe 43 → **72**）：
+  k=1 化简 vs k=∞ 化简、k=2 保留维度 vs k=∞ 去维度、「没碎→[i+1..n]」vs「碎了→[1..i-1]」、
+  `valid` 自增规则 vs 完成条件、数字视角 vs 桶视角的复杂度上界。
+- 失效模式：**同书同模板、只差一个限定词/否定词**的句子余弦仍有 0.92–0.95。
+  下次 `ksync --embed` 会按原阈值重新标回 → 修法（数字/否定词守卫或提高阈值）要另开一轮，已记 TODO。
+
+### 下一步（按序，首步可直接执行）
+
+1. **检索热路径提速**（需用户点头，属业务代码）：`semantic/embed.py::top_similar` 是纯 Python 余弦，
+   对 5,607×1024 每个候选都算三遍模长；numpy 快路径（复用已装的 numpy，缺 numpy/维度不齐回落纯 Python）
+   预计 0.7 s → 0.03 s，把 fts 1.9 s / hybrid 5.5 s 压回 1 s 内。
+2. **dedupe 误并修法**：加「数字/否定词差异」守卫或把阈值提到 0.95 再跑（会动已标的 72 条，需裁决）。
+3. 交接前序项仍在：`kpoints --triage` 补 642 条新点 `kind`；超大书 > `kpe_max_chars` 策略。
+4. 可选：`docs/design/` 索引页 + 归档。
+
+### 不要重跑
+
+- 全量 pytest 743/1、canary、`gen_docs --check`；
+- `ksync --embed` 全量重嵌入（56 分钟，5,607 点 + 61 条目已完整落库）；
+- 5 对误并的撤销（已落库，见上）；
+- `temp/probe_local_embed_20261028.py`、`bench_threads.py`、`bench_seq.py`、`probe_local_hybrid_20261028.py`、
+  `probe_pairwise_sim.py`、`probe_api_local_20261028.py`、`ui_search_local_check.js`（数字已记本节）。
+
+### 会话指纹
+
+`session-a7bd358b-aa1c-4493-a6a2-18449835c2ef`，compactions=0，tokens≈190,900，
+baseline 147,059，effective **129.8%**（CRITICAL），2026-10-28T22:5x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-28T22:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-214x225x-r28本地-bge-m3-接管硅基-402-之后零-api-费用","draft":false,"goal":"本地 bge-m3 接管：torch2.7.1+sentence-transformers+ModelScope 权重，5,607 点/61 条目重嵌入（56 分钟），检索语义通道恢复（743 passed；UI 无黄条）；顺带复核撤销 5 对 dedupe 误并","host":"dsh","kind":"handoff","next":"① 待用户点头：top_similar numpy 快路径（纯 Python 余弦 0.7 s → 0.03 s，把 hybrid 5.5 s 压到 1 s 内）；② dedupe 模板同构误并修法（阈值 0.92 → 0.95 或加数字/否定词守卫，需裁决）；③ kpoints --triage 补 642 条新点 kind；④ 超大书 >kpe_max_chars 策略","not_rerun":"全量 pytest 743/1、canary、gen_docs --check；ksync --embed 全量重嵌入（56 分钟）；5 对 dedupe 误并撤销；temp 下 6 个探针 + UI 脚本","schema":1,"session":"session-a7bd358b-aa1c-4493-a6a2-18449835c2ef","status":"CRITICAL","tokens":190900,"verify":"uv run python -m pytest -o addopts= -q -> 743 passed, 1 skipped；curl http://127.0.0.1:8420/api/search?mode=hybrid&q=雪花 -> 200 无 embed_note"} -->
