@@ -19,6 +19,7 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
     try:
         if args.embed or args.embed_force:
             from ..semantic.embed import from_config as embedder_from_config
+            from ..semantic.llm import LlmClient
             from ..pipeline.embed_index import dedup_points, embed_entries, embed_points
 
             embedder = embedder_from_config(cfg)
@@ -28,7 +29,9 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                 return _EXIT_SKIP
             stats = embed_entries(dl, embedder, force=args.embed_force)
             pstats = embed_points(dl, embedder, force=args.embed_force)
-            dstats = dedup_points(dl)  # 批次 94：向量就绪后语义去重（可逆标记）
+            # 批次 94：向量就绪后语义去重（可逆标记）；R30：边界对交 LLM 裁定
+            # （llm=None 时边界对一律不并——宁漏勿误）
+            dstats = dedup_points(dl, llm=LlmClient.from_config(cfg))
             print(f"OK 向量索引完成：条目 {stats} | 点 {pstats} | 去重 {dstats}")
             return _EXIT_OK
         if args.cluster_report:

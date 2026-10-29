@@ -15,10 +15,12 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from ..semantic.embed import (blob_to_vec, normalize, top_similar_blobs,
                               vec_to_blob)
+from .dupe_guard import is_risky
 
 _TEXT_CAP = 4000          # 单条目送编码的正文截断（字符）
 _FTS_POOL = 30            # 混合检索 FTS 侧候选池
@@ -128,7 +130,43 @@ def _flush_points(dl: Any, embedder: Any, batch: list[dict[str, Any]]) -> int:
 _DEDUP_THRESHOLD = 0.92
 
 
-def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]:
+_JUDGE_BATCH = 20         # 边界对每批条数（对齐 point_triage 的 30 上限口径）
+
+
+def _merge_dupe(dl: Any, member: str, best: str, threshold: float,
+                why: str | None = None) -> None:
+    """标副点（可逆：清 meta.dupe_of 即恢复）。`why` 非空时追加裁定来源。"""
+    reason = f"点向量余弦≥{threshold} 同知识组（保留 {best}）"
+    if why:
+        reason += f"；裁定：{why}"
+    dl.merge_meta_of_point(member, {"dupe_of": best, "dupe_reason": reason})
+
+
+def _judge_pending(dl: Any, info: dict[str, dict[str, Any]],
+                   pending: list[tuple[str, str]], llm: Any) -> tuple[dict[str, bool], list[str]]:
+    """边界对交 `point_dupe_judge` 裁定；返回 ({pair_id: same}, errors)。"""
+    from ..semantic.base import TaskContext
+    from ..semantic.tasks import point_dupe_judge
+
+    verdicts: dict[str, bool] = {}
+    errors: list[str] = []
+    run_id = f"dedup-{uuid.uuid4().hex[:8]}"
+    for i in range(0, len(pending), _JUDGE_BATCH):
+        chunk = pending[i:i + _JUDGE_BATCH]
+        items = [{"pair_id": f"{m}|{b}",
+                  "a": str(info[m].get("text") or ""),
+                  "b": str(info[b].get("text") or "")} for m, b in chunk]
+        res = point_dupe_judge.run(items, TaskContext(run_id=run_id, llm=llm))
+        if res.get("error"):
+            errors.append(str(res["error"]))
+            continue
+        for pid, got in (res.get("verdicts") or {}).items():
+            verdicts[pid] = bool(got.get("same"))
+    return verdicts, errors
+
+
+def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD, *, llm: Any = None,
+                 dry_run: bool = False) -> dict[str, Any]:
     """点级语义去重：点向量余弦 ≥threshold 归同组，组内留最优，副点标 dupe_of。
 
     content_hash 精确去重（规范化文本相同才合并）拦不住改写措辞的同知识——
@@ -137,11 +175,23 @@ def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]
     面（search_points/get_point_hit/词云点面 SQL 守卫，批次 94）。**可逆**：
     清 meta.dupe_of 即恢复；溯源指针永不移动/删除，反悔零损失。幂等：已标
     dupe 与 stale 点不参与聚类，重跑结果稳定。
+
+    R30（2026-10-29 工单 `变更工单-2026-10-29-dedupe误并裁定.md`）：余弦分不开
+    「同模板不同事实」（真重复 0.9174 vs 误并 0.9607 区间重叠），故组内配对先生过
+    `pipeline/dupe_guard.py` 的风险信号；**不 risky 的照旧直接合并**，risky 的
+    交 `point_dupe_judge` 裁定：
+    - `llm=None`（LLM 未启用）或裁定失败 → 边界对**一律不并**（宁漏勿误，与阈值
+      注释口径一致），只计数；
+    - 判 `same=false` → 不并，并写一条 `task_log`（可审计「为什么没并」）；
+    - 判 `same=true` → 合并，`dupe_reason` 追加裁定来源。
+    `dry_run=True` 只算不写（`merge_meta_of_point` / `task_log` 都不落），用于真库彩排。
     """
     vecs_raw = dl.all_point_vectors()
     if len(vecs_raw) < 2:
         return {"groups": 0, "dupes": 0, "vectors": len(vecs_raw),
-                "threshold": threshold, "note": "点向量不足 2 条"}
+                "threshold": threshold, "note": "点向量不足 2 条",
+                "risky": 0, "judged": 0, "vetoed": 0, "vetoed_no_llm": 0,
+                "judge_errors": 0, "dry_run": dry_run}
     info: dict[str, dict[str, Any]] = {}
     for p in dl.list_points(limit=100000):
         if (p.get("meta") or {}).get("dupe_of"):
@@ -150,7 +200,8 @@ def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]
             continue                     # 已老化退出消费面：不参与
         info[p["id"]] = p
     vecs = {pid: blob_to_vec(b) for pid, b in vecs_raw.items() if pid in info}
-    groups = dupes = 0
+    groups = dupes = risky = 0
+    pending: list[tuple[str, str]] = []
     for c in _greedy_clusters(vecs, threshold):
         if len(c["ids"]) < 2:
             continue
@@ -162,17 +213,54 @@ def dedup_points(dl: Any, threshold: float = _DEDUP_THRESHOLD) -> dict[str, Any]
         for pid in members:
             if pid == best:
                 continue
-            dl.merge_meta_of_point(pid, {
-                "dupe_of": best,
-                "dupe_reason": f"点向量余弦≥{threshold} 同知识组（保留 {best}）"})
+            if is_risky(str(info[pid].get("text") or ""),
+                        str(info[best].get("text") or "")):
+                pending.append((pid, best))
+                risky += 1
+                continue
+            if not dry_run:
+                _merge_dupe(dl, pid, best, threshold)
             dupes += 1
-    if dupes:
+
+    judged = vetoed = vetoed_no_llm = 0
+    judge_errors: list[str] = []
+    vetoed_pairs: list[dict[str, str]] = []
+    if pending:
+        if llm is None:
+            vetoed_no_llm = len(pending)
+            vetoed_pairs = [{"member": m, "master": b, "why": "LLM 未启用，边界对不并"}
+                            for m, b in pending]
+        else:
+            verdicts, judge_errors = _judge_pending(dl, info, pending, llm)
+            judged = len(verdicts)
+            for m, b in pending:
+                same = verdicts.get(f"{m}|{b}")
+                if same is None:
+                    vetoed_pairs.append({"member": m, "master": b,
+                                         "why": "未获裁定（LLM 故障/漏判），保守不并"})
+                    continue
+                if same:
+                    if not dry_run:
+                        _merge_dupe(dl, m, b, threshold, "LLM 判为同一条知识")
+                    dupes += 1
+                else:
+                    vetoed += 1
+                    vetoed_pairs.append({"member": m, "master": b,
+                                         "why": "LLM 判为不同知识，不并"})
+    risk_counts = {"risky": risky, "judged": judged, "vetoed": vetoed,
+                   "vetoed_no_llm": vetoed_no_llm, "judge_errors": len(judge_errors),
+                   "dry_run": dry_run}
+    if not dry_run and (dupes or vetoed_pairs):
         from datetime import datetime
-        dl.log_task(datetime.now().astimezone().isoformat(timespec="seconds"),
-                    "dedup_points", "run", "points",
-                    {"groups": groups, "dupes": dupes, "threshold": threshold})
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        dl.log_task(now, "dedup_points", "run", "points",
+                    {"groups": groups, "dupes": dupes, "threshold": threshold,
+                     **risk_counts})
+        if vetoed_pairs:
+            dl.log_task(now, "dedup_points", "veto", "points",
+                        {"pairs": vetoed_pairs[:50], "total": len(vetoed_pairs)})
     return {"groups": groups, "dupes": dupes, "vectors": len(vecs),
-            "threshold": threshold}
+            "threshold": threshold, **risk_counts}
 
 
 def search_points_hybrid(dl: Any, embedder: Any, q: str, *,

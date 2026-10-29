@@ -35,10 +35,12 @@ def test_builtin_specs_present(registries):
     # point_triage：点分诊（P0，2026-10-25 裁决，变更工单-2026-10-25-点分诊.md）；
     # point_errata：点级勘误（P1，2026-10-25 裁决，变更工单-2026-10-25-P1点级勘误.md）；
     # point_lifecycle：点级老化两型（P2，2026-10-26，变更工单-2026-10-26-P2点级老化两型.md）；
+    # point_dupe_judge：去重边界对裁定（R30，2026-10-29，变更工单-2026-10-29-dedupe误并裁定.md）；
     # synthesize：知识梳理合成层（批次 69，§7.9 勾点生成方案，回灌+隔离+强制溯源）
     assert {"classify_coarse", "classify_deep", "tag_keywords", "topic_recall",
             "thread_suggest", "delta_summarize",
             "thread_digest", "point_extract", "aging_judge",
             "errata_check", "point_aging", "point_explain",
-            "point_triage", "point_errata", "point_lifecycle", "synthesize"} == {
+            "point_triage", "point_errata", "point_lifecycle",
+            "point_dupe_judge", "synthesize"} == {
                 s.name for s in semantics.specs()}

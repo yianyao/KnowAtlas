@@ -4,6 +4,32 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 点级去重误并修法：规则挑边界对 + LLM 裁定（2026-10-29，R30）
+
+- **为什么**：`dedup_points` 只看向量余弦（≥0.92），R28 人工复核已撤销 5 对「同模板不同事实」的误并；
+  R30 复测确认**下一次 `ksync --embed` 还会并 6 对同类**（labuladong 动态规划：`k=1` vs `k=2`、
+  `碎了` vs `没碎`、`O(k^n)` vs `O(k*2^n)`）。实测真重复最低 **0.9174**、误并最高 **0.9607** ——
+  区间重叠，**提阈值不是修法**；而「数字/否定词差异就拒绝」会误伤既有 72 对里的 **28 对真重复**。
+- **方案**：把「相似度」与「是否同一知识」拆开——向量只负责召回；新增
+  `pipeline/dupe_guard.py`（纯规则挑边界对：数字 token 差异 / 否定词差异 / 长度比 ≥1.5），
+  新增能力 `point_dupe_judge@1.0.0`（`semantic/tasks/point_dupe_judge.py`）只回答「是否同一条知识」。
+- **编排**（`pipeline/embed_index.py::dedup_points`）：不 risky 的对**照旧直接合并**；risky 的对按 ≤20 对/批
+  交裁定——`llm=None` 或裁定失败 → **一律不并**（宁漏勿误）；判 `same=false` → 不并并写 `task_log`
+  （可审计「为什么没并」）；判 `same=true` → 合并且 `dupe_reason` 追加裁定来源。新增可选关键字
+  `llm` / `dry_run`（默认 `None` / `False`，旧调用零改动）；统计键只增：`risky` / `judged` /
+  `vetoed` / `vetoed_no_llm` / `judge_errors` / `dry_run`。`ksync --embed` 注入
+  `LlmClient.from_config(cfg)`。
+- **契约**：表结构 / 字段 / `meta` 键 / locator scheme / `SOURCE_TYPES` / `STATUSES` /
+  `CONFIG_SCHEMA_KEYS` / REST 接口**零变化**；能力注册表**新增** `point_dupe_judge@1.0.0`
+  （canary `capabilities` 指纹 `5ebee129dd50`）。
+- **测试**：新增 `tests/test_dupe_guard.py`（7 例）与 `tests/test_dedup_judge.py`（10 例）；
+  全量 **769 passed / 1 skipped**（原 752）；canary 零漂移；`gen_docs --check` 三份 OK。
+- **真库彩排**（副本 `temp/kb-dedup-copy.db`，`dry_run`）：无 LLM → `risky 5 / dupes 0`；带 DeepSeek →
+  `judged 5 / vetoed 5 / dupes 0`（5 对全判「不同知识」，含 R28 撤销过的「碎了 vs 没碎」同一对）。
+- **真库实跑**：`ksync --embed`（向量 0 重算）→ `dupes 0 / risky 5 / judged 5 / vetoed 5`，
+  `dupe_of` 标记保持 **72** 条（未新增误并），`task_log(dedup_points, veto)` 留痕 5 对。
+- **已知遗留**：边界对判定不做缓存（当前仅 5 对 = 1 次 LLM 调用/轮）；存量 72 对不动（已人工核对）。
+
 ### 变更工单 · 本地 bge-m3 接管嵌入后端（2026-10-28，R28）
 
 - **为什么**：硅基 SF1 余额 0（HTTP 402）→ 语义通道整体不可用（R27 只做到「挂了不拖垮主通道」）；

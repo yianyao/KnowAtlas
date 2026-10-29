@@ -28,7 +28,9 @@ CANARY: dict[str, str] = {
     # （P2 老化两型，工单 变更工单-2026-10-26-P2点级老化两型.md）；
     # point_extract 2.1.0 → 2.2.0（max_points 可调，工单
     # 变更工单-2026-10-27-入库即抽点与自动老化.md）；其余指纹均未动。
-    "capabilities": "337563e0e735",
+    # point_dupe_judge@1.0.0 新增（R30 去重边界对裁定，工单
+    # 变更工单-2026-10-29-dedupe误并裁定.md）；其余指纹均未动。
+    "capabilities": "5ebee129dd50",
 }
 
 

@@ -3246,3 +3246,115 @@ baseline 147,059，effective **129.8%**（CRITICAL），2026-10-28T22:5x+08:00�
 baseline 147,059，effective **84.5%**（WARN），2026-10-28T23:3x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-28T23:40:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-28-230x233x-r29检索热路径提速hybrid-49-s--017-s","draft":false,"goal":"R29 检索热路径提速：_search_like 正文段 MATERIALIZED（3.1s→25ms）+ top_similar numpy/BLOB 快路径（510ms→7ms）+ qvec 复用（encode 2→1）；752 passed；真库 hybrid 4.9s→0.18s","host":"dsh","kind":"handoff","next":"① kpoints --triage 补 642 条新点 kind（需 DeepSeek key）；② dedupe 模板同构误并修法（用户裁决单独一轮：数字/否定词守卫 或 阈值 0.92→0.95）；③ 超大书 >[ingest] kpe_max_chars 策略；④ 可选 docs/design 索引页；⑤ 未推提交（main 将 ahead 3）","not_rerun":"全量 pytest 752/1；canary；gen_docs --check；真库 /api/search 三类查询计时 + headless Edge 截图；temp 下 6 个测量探针 + ui_search_r29_check.js；5 对 dedupe 误并撤销","schema":1,"session":"session-fcbe6423-62d8-4cc2-8631-36f2b98728e1","status":"WARN","tokens":124340,"verify":"uv run python -m pytest -o addopts= -q -> 752 passed, 1 skipped；curl http://127.0.0.1:8420/api/search?mode=hybrid&q=雪花 -> 200 且 <300ms 无 embed_note"} -->
+
+## 2026-10-28 23:4x R30：点分诊补全 + dedupe 误并现场复测（阈值方案被证伪）
+
+### 开场判据
+
+- `session_check` → `NEW_SESSION`（exit 0）；上轮交接 `session-fcbe6423` @ 23:40 `status=WARN`；
+- `context_probe` → `effective_pct` **18.6%**（27,413 / 147,059，compactions=0）；
+- `git rev-parse HEAD origin/main` 两者同为 **ce95ac4** → 交接「⑤ 未推提交（main 将 ahead 3）」已不成立：
+  上轮提交已在远端，本轮零推送动作。
+
+### ① 点分诊补全（handoff 下一步 ①，已完成）
+
+`kpoints --triage --from-json temp/errata_full_triage.json`（DeepSeek 后端，21 次 LLM 调用）：
+
+- candidates **642**（labuladong 算法秘籍 547 + 无 book 标记 95）→ dupe **22** + triaged **620**；
+- 新增分布：hard 478 / opinion 130 / unjudgeable 12；种子命中 0（这 642 条都是新点，种子里没有）。
+- 全库 kind 覆盖 **5,607 / 5,607**：hard 2,163 / opinion 2,411 / unjudgeable 968 / dupe 65。
+  探针 `temp/probe_triage_state_20261028.py` 复核 `missing kind: 0`。
+
+### ② dedupe 误并复测：阈值方案证伪（本轮关键判据）
+
+`temp/probe_point_sim_pairs_20261028.py`（5,535 点参与，跳过 72 条副点/老化；float32 归一化后全量
+`mat @ mat.T`）与 `temp/probe_existing_dupe_pairs_20261028.py`：
+
+| 事实 | 数字 |
+|---|---|
+| 唯一对余弦 ≥0.90 / ≥0.92 / ≥0.95 / ≥0.97 | 65 / **6** / 1 / 0 |
+| 这 6 对是否误并 | **6/6 全是误并**（labuladong 动态规划：k=1 vs k=2、碎了 vs 没碎、o(k^n) vs o(k*2^n)） |
+| 既有真重复的最低余弦 | **0.9174**（快速排序「代码框架」vs「递归框架」） |
+| 误并候选的最高余弦 | **0.9607**（两种穷举角度） |
+| 既有 72 对合并里带「数字/否定词差异」的 | **28**（多为真重复：dp[i] 初始值、不仅…也、[1..i-1]） |
+
+三条结论：
+
+1. **下一次 `ksync --embed`（内联 `dedup_points`）会把上面 6 对全并掉**——它们只是还没被跑到；
+2. **提阈值不是修法**：真重复最低 0.9174 与误并最高 0.9607 区间重叠，0.92→0.95 仍并掉 0.9607 那对，
+   而 0.97 会把全库去重彻底废掉（≥0.97 唯一对 = 0）；
+3. **「数字/否定词差异就拒绝」也不行**：一刀切会误伤既有 72 对里的 28 对（都是真重复）。
+
+→ 需要「确定性规则只负责挑出边界对 + LLM/人工裁定」，方案待用户裁决（属业务代码，按 §1 先批后改）。
+
+### ③ 超大书（handoff 下一步 ③）现场数字
+
+`content_store` 77 行；正文 > `[ingest] kpe_max_chars`（600,000）的条目 **3 条**，且都已有点：
+
+| 条目 | 正文字数 | 现有 KPE 点 |
+|---|---|---|
+| agentic-ai-guide-zh-v1.1.0 `83717cc1e9` | 2,587,917 | 1,373 |
+| AI-Agents-in-Depth-zh-CN `9f118bf8f0` | 1,045,082 | 571 |
+| Hello-Agents-V1.0.3-20260717 `a44288e0dc` | 674,468 | 820 |
+
+`pipeline/kpe_runner.py::run_kpe_for_entry` 对这三条**只会硬报错**（`正文 x 字超过 KPE 上限`），
+即重抽/换模型重跑这条路现在是堵死的；策略（分卷 / 提上限 / 断点续跑）待裁决。
+
+### 不要重跑
+
+- 本轮 `kpoints --triage`（幂等，已 0 候选；重跑 = 零写入零费用，但没必要）；
+- `temp/probe_triage_state_20261028.py`（missing kind: 0）、`probe_point_sim_pairs_20261028.py`、
+  `probe_existing_dupe_pairs_20261028.py`、`probe_kpe_oversize_20261028.py`（数字已记本节）。
+
+## 2026-10-29 12:2x–12:4x R30 实施：dedupe 误并修法（规则挑边界对 + LLM 裁定）
+
+用户裁决：② 走「规则挑边界对 + LLM 裁定」；③ 超大书走「C1 分卷摄取」（**下一轮**，本轮未动）。
+
+### 落地（工单 `docs/design/变更工单-2026-10-29-dedupe误并裁定.md`）
+
+1. 新增 `pipeline/dupe_guard.py`：纯规则挑边界对（数字 token 差异 / 否定词差异 / 长度比 ≥1.5），
+   零 IO 零 LLM；**不做合并决定**。
+2. 新增能力 `point_dupe_judge@1.0.0`（`semantic/tasks/point_dupe_judge.py`）：只回答「两条是否
+   同一条知识」；`ctx.llm=None` → `llm_used=false` 不抛；LLM 故障 → 返回 `error` 整批不写。
+3. `pipeline/embed_index.py::dedup_points` 增**可选**关键字 `llm=None` / `dry_run=False`：
+   不 risky 的对照旧直接合并；risky 的对 ≤20 对/批交裁定——无 LLM/故障 → **一律不并**，
+   判不同 → 不并并写 `task_log(dedup_points, veto)`，判同 → 合并且 `dupe_reason` 追「裁定」来源。
+4. `cli/cmd_sync.py`：`ksync --embed` 注入 `LlmClient.from_config(cfg)`。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **769 passed / 1 skipped**（752 + 17：`test_dupe_guard.py` 7 例、
+  `test_dedup_judge.py` 10 例）；canary 零漂移（`capabilities` 指纹 → `5ebee129dd50`）；
+  `gen_docs --check` 三份 OK。
+- 真库彩排（副本 `temp/kb-dedup-copy.db`，`temp/verify_dedup_guard_20261029.py`，dry_run）：
+  无 LLM → `groups 4 / risky 5 / dupes 0 / vetoed_no_llm 5`；带 DeepSeek →
+  `judged 5 / vetoed 5 / dupes 0`（5 对全判「不同知识」；含 R28 撤销过的「碎了 vs 没碎」同一对）。
+- 真库实跑 `ksync --embed`（向量 0 重算）→ `dupes 0 / risky 5 / judged 5 / vetoed 5`；
+  `meta.dupe_of` 仍 **72** 条（无新增误并）；`task_log(dedup_points, veto)` 记 5 对，
+  `at=2026-10-29T12:30:26+08:00`。
+- 坑：PowerShell `Get-Content | Set-Content -Encoding utf8` 会把 UTF-8 源码按 GBK 读坏并加 BOM
+  （本轮真的写坏过 `tests/test_dedup_judge.py`，用 `write` 重写才修好）；改源码一律用 `write`/`edit`。
+
+### 下一步（按序，首步可直接执行）
+
+1. **③ 超大书分卷摄取（C1）**：`kpe_runner` 在 `len(body) > [ingest] kpe_max_chars` 时按 `section_path`
+   装箱成 ≤ 上限的多卷，逐卷 `chunks|extract` 落 `data/kpe/<entry>/v001…`，同一条目累加导入；
+   已完成的卷跳过（断点续跑）。真库 3 条待覆盖：agentic-ai-guide 2,587,917 / AI-Agents-in-Depth
+   1,045,082 / Hello-Agents 674,468 字（均已有 1373 / 571 / 820 点，重跑别再花全量费用）。
+2. dedupe 边界对缓存：仅当边界对涨到百级时再做（`meta.dupe_veto` + 点文本变更失效守卫）。
+3. 存量 72 对 dupe 的复核（28 对带数字/否定词标记，已抽检为真重复；如需全量复核另立项）。
+
+### 不要重跑
+
+- 全量 pytest **769/1**、canary、`gen_docs --check`；
+- `ksync --embed` 全量重嵌入（56 分钟；本轮是 0 重算的跳过路径）；
+- `temp/verify_dedup_guard_20261029.py`（彩排数字已记本节）、`temp/probe_*_2026102[89].py` 四个探针；
+- 本轮 `kpoints --triage`（幂等、0 候选）。
+
+### 会话指纹
+
+`session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08`，compactions=0，tokens≈144,900，
+baseline 147,059，effective **98.6%**（CRITICAL），2026-10-29T12:4x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T12:45:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-122x124x-r30-实施dedupe-误并修法规则挑边界对--llm-裁定","draft":false,"goal":"R30：①点分诊补全 642 条（全库 kind 5,607/5,607）；②dedupe 误并修法落地——dupe_guard 规则挑边界对 + point_dupe_judge@1.0.0 裁定，真库实跑 dupes 0 / vetoed 5（6 对误并全拦住），769 passed","host":"dsh","kind":"handoff","next":"① 超大书分卷摄取（C1，用户已裁决）：kpe_runner 按 section_path 装箱 ≤kpe_max_chars 多卷、逐卷跑、断点续跑；真库 3 条待覆盖（2.59M/1.05M/674k 字）；② 边界对缓存仅在涨到百级时做；③ 存量 72 对 dupe 全量复核（如需另立项）","not_rerun":"全量 pytest 769/1；canary；gen_docs --check；ksync --embed 全量重嵌入（56 分钟）；temp 下 4 个探针 + verify_dedup_guard_20261029.py 彩排；kpoints --triage（幂等 0 候选）","schema":1,"session":"session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08","status":"CRITICAL","tokens":144900,"verify":"uv run python -m pytest -o addopts= -q -> 769 passed, 1 skipped；uv run python -m knowatlas ksync --embed -> 去重 dupes 0 / risky 5 / vetoed 5"} --><!-- HANDOFF {"at":"2026-10-29T12:26:12.248360+08:00","compactions":0,"doc":"docs/交接/2026-10-29-1226.md","draft":true,"goal":"上下文到 HANDOFF（85.4%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08","status":"HANDOFF","tokens":125543,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
