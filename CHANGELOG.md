@@ -4,6 +4,27 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 邮件 furniture 剔除 + inline 脱敏 + 剥离率告警（2026-10-29，批 97c / 8.9）
+
+- **为什么**：`adapters/maildir.py` 把 `quote_strip` 的结果直接当 `inline_content`——**只有引用剥离，
+  没有 furniture、没有脱敏**；而 `_store_bodies` 只清 content_store 那份，所以邮件里的手机号/邮箱/
+  `sk-…` 原样进检索面、条目页与导出件，签名块/页脚/手机标语/保密免责四类噪声进正文与点抽取。
+- **方案**：`pipeline/mail_threads.py` 新增 `strip_furniture()`（RFC 3676 `--` 签名块 / 列表页脚 /
+  手机标语 / 免责声明），inline 链路改为 `quote_strip → strip_furniture → clean.redact`；
+  仍然**不用全量正文重建 inline**（97a 的「增量摘要」口径不变）。
+- **防误杀三闸门**：只扫最后 30 个非空行（页脚/免责还要求后 50%）、``` / ~~~ 围栏内的 `--` 不切、
+  删空则原样返回（只有签名的邮件不产出空正文）。
+- **口径更正（「剥离率 >90% 告警」）**：字面「单封 >90%」在真实邮件里是常态（一行回复 + 长引用），
+  落成 `strip_over90`（只计数不告警）+ `strip_near_empty`（原文 ≥200 字且剥后 <20 字 → 源级 WARN，
+  `ksync` 打印）；`meta.mail_clean` 记 `furniture_lines` / `redacted` / `strip_ratio`。
+- **契约**：表结构 / 字段 / locator scheme / `STATUSES` / REST / `CONFIG_SCHEMA_KEYS` / DataLayer 公开方法集
+  **全无变化**（复用既有 `clean.enabled`、`clean.redact_enabled`；新增的是适配器 stats 键与源自有
+  `meta.mail_clean`）。
+- **测试**：新增 `tests/test_mail_furniture.py` 14 例 + `tests/test_maildir.py` 1 例；全量
+  **804 passed / 1 skipped**（原 789）；canary 零漂移；`gen_docs --check` 三份 OK。
+- **未完成**：真实 maildir 验收（本机无数据源，`[sources.mail] enabled=false`）——用户给目录后
+  跑一次真库剥离前后对比，TODO 8.9 保持 `[~]`。
+
 ### 变更工单 · 词云签名缓存：进程内 TTL + 数据签名换键（2026-10-29，R32）
 
 - **为什么**：词云是「来回看」的浏览动作，但 `/api/cloud` 每次全量重算——真库 72 条样本 + ≤800 个点

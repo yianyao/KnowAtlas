@@ -50,7 +50,9 @@ def _cfg(tmp_path: Path, root: Path, enabled: bool = True):
         _data = {"sources": {"mail": {
             "enabled": enabled, "accounts": {"work": {"path": str(root)}}}}}
 
-        def get(self, key):
+        def get(self, key, default=None):
+            if key == "clean.redact_enabled":
+                return True
             assert key == "sources.mail"
             return self._data["sources"]["mail"]
     return Cfg()
@@ -277,3 +279,31 @@ def test_sync_mails_end_to_end(cfg, dl, registries, tmp_path):
     src2 = stats2["sources"]["mail"]
     assert src2["created"] == 0 and src2["threads_built"] == 0
     assert len(dl.list_threads(thread_type="source")) == 1
+
+
+def test_sync_mail_inline_furniture_and_redact(cfg, dl, registries, tmp_path):
+    """批 97c 全链路：inline 去签名 + 脱敏，meta.mail_clean 保留，近空告警进源 stats。"""
+    long_quote = "原始讨论正文。" * 40
+    root = _make_maildir(tmp_path, {
+        tmp_path / "new" / "m1": _eml(
+            "u1@x", "报价确认",
+            "报价按 12 万执行，联系人 13800138000。\n\n"
+            "-- \n王五\n销售部\n021-88886666\n\n"
+            "在 2026年10月19日 10:00，老李 写道：\n" + long_quote),
+    })
+    cfg._data["sources"]["mail"] = {
+        "enabled": True, "accounts": {"work": {"path": str(root)}}}
+    locators, semantics = registries
+
+    stats = run_sync(cfg, dl, locators, semantics, full=True)
+    src = stats["sources"]["mail"]
+    e = dl.list_entries(status="active", limit=10)[0]
+    assert e.inline_content.strip() == "报价按 12 万执行，联系人 [手机]。"
+    assert "021-88886666" not in e.inline_content
+    assert e.meta["mail_clean"]["furniture_lines"] >= 3
+    assert e.meta["mail_clean"]["redacted"] == 1
+    # 全量正文那份的清洗统计仍在（meta.clean 由 _store_bodies 写，与 mail_clean 并存）
+    assert "abandoned" in e.meta["clean"]
+    # 剥离率只计数（长引用 + 一行回复是常态，不告警）；剥后不近空 → 无 WARN
+    assert src["strip_over90"] == 1
+    assert src["strip_near_empty"] == 0 and src["warnings"] == []

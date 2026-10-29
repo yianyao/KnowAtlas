@@ -120,6 +120,101 @@ def _fallback_strip(text: str) -> str:
     return "\n".join(out).strip()
 
 
+# ---- furniture 剔除（批 97c，清洗层方案 §3.5）----
+#
+# 邮件尾部噪声四类：签名块 / 列表页脚 / 手机标语 / 法律免责。规则只在**尾部窗口**
+# 里生效（正文中间讨论「怎么退订」不该被切），并跳过围栏代码块（``` 里的 `--`
+# 是 markdown 分隔线，不是签名分隔线）。
+
+_TAIL_LINES = 30            # 只在最后这么多非空行里找签名/标语
+_TRAIL_FRACTION = 0.5       # 页脚/免责还要求在后 50% 非空行（防正文中段误切）
+
+_SIG_DELIM_RE = re.compile(r"^--\s*$")   # RFC 3676：行内仅 "--" 或 "-- "
+_MOBILE_RE = re.compile(
+    r"^\s*(?:发自我的?\s*(?:iPhone|iPad|iPod)"
+    r"|发送自\s*(?:iPhone|iPad)"
+    r"|从我的\s*(?:iPhone|iPad)\s*发送"
+    r"|Sent from my\s+(?:iPhone|iPad|iPod)"
+    r"|Get Outlook for\s+(?:iOS|Android)"
+    r"|发自\s*(?:网易邮箱大师|QQ\s*邮箱|Foxmail|钉钉|WPS)"
+    r"|来自\s*(?:华为|小米|vivo|OPPO|荣耀)\s*手机)\s*$",
+    re.IGNORECASE)
+_FOOTER_RE = re.compile(
+    r"^\s*(?:unsubscribe|退订|取消订阅|您收到(?:此|这)(?:封)?邮件"
+    r"|You (?:received|are receiving) this"
+    r"|(?:此|本|本次)(?:邮|电)件由.{0,60}发送)",
+    re.IGNORECASE)
+_DISCLAIMER_RE = re.compile(
+    r"(?:本(?:邮件|电邮)(?:及其附件)?[^\n]{0,40}(?:保密|机密|泄露|任何形式)"
+    r"|This (?:email|message) and any attachments)",
+    re.IGNORECASE)
+
+
+def _fence_mask(lines: list[str]) -> list[bool]:
+    """围栏代码块标记（``` / ~~~ 成对翻转），与开头/结尾标记行一起跳过。"""
+    mask = [False] * len(lines)
+    fence = False
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("```") or s.startswith("~~~"):
+            mask[i] = True
+            fence = not fence
+            continue
+        mask[i] = fence
+    return mask
+
+
+def strip_furniture(text: str) -> tuple[str, dict[str, int]]:
+    """剔邮件尾部家具，返回 (清洗后文本, 计数)。
+
+    计数键：signature / list_footer / mobile / disclaimer / lines（删掉的非空行数）。
+    删完为空则**原样返回**（只有签名的邮件不产出空正文）。
+    """
+    removed = {"signature": 0, "list_footer": 0, "mobile": 0,
+               "disclaimer": 0, "lines": 0}
+    if not (text or "").strip():
+        return text, removed
+    lines = text.splitlines()
+    mask = _fence_mask(lines)
+    nonempty = [i for i, line in enumerate(lines) if line.strip()]
+    if not nonempty:
+        return text, removed
+    tail_from = nonempty[max(0, len(nonempty) - _TAIL_LINES)]
+    trail_from = nonempty[max(0, int(len(nonempty) * _TRAIL_FRACTION))]
+
+    cut_at: int | None = None      # 从这一行切到尾（取最早命中）
+    drop: set[int] = set()         # 只删单行（手机标语）
+    for i in range(tail_from, len(lines)):
+        if mask[i]:
+            continue
+        s = lines[i].strip()
+        if not s:
+            continue
+        if cut_at is not None and i >= cut_at:
+            break                  # 更靠后的命中已被切掉，不再计数
+        if _SIG_DELIM_RE.match(s):
+            cut_at, removed["signature"] = i, removed["signature"] + 1
+        elif i >= trail_from and _FOOTER_RE.match(s):
+            cut_at, removed["list_footer"] = i, removed["list_footer"] + 1
+        elif i >= trail_from and _DISCLAIMER_RE.search(s):
+            cut_at, removed["disclaimer"] = i, removed["disclaimer"] + 1
+        elif _MOBILE_RE.match(s):
+            drop.add(i)
+            removed["mobile"] += 1
+
+    if cut_at is None and not drop:
+        return text, removed
+    limit = cut_at if cut_at is not None else len(lines)
+    keep = [ln for i, ln in enumerate(lines) if i < limit and i not in drop]
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(keep)).strip()
+    if not out:
+        return text, {k: 0 for k in removed}   # 删空兜底：整封都是家具
+    kept_nonempty = sum(1 for i in range(limit)
+                        if i not in drop and lines[i].strip())
+    removed["lines"] = len(nonempty) - kept_nonempty
+    return out, removed
+
+
 # ---- 线程还原 ----
 
 def _hash_msgid(raw: bytes) -> str:

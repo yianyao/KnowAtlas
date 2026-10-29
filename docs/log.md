@@ -3606,3 +3606,73 @@ baseline 147,059，effective≈53%（OK），2026-10-29T20:1x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-29T21:06:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-205x210x-r32-词云签名缓存用户裁决按你的建议来","draft":false,"goal":"R32 词云签名缓存已交付并真库验收：进程内 TTL 300 s + 数据签名换键，1.94 s → 19–30 ms（≈70×，响应逐字不变）；789 passed；132 条待审按用户裁决未动（仍 pending）","host":"dsh","kind":"handoff","next":"① 8.9 邮件 97c：furniture 清单 + inline redact + 剥离率告警（需用户给 maildir 目录才能真实验收）；② 8.8 AI 会话 97d：思考块剔除 + 轮次清洗 + inline redact + pending（需 harvester exports 目录）；③ 待审 132 条等用户发话（写库，判据 pending→0；代价：未分类 0→97）","not_rerun":"全量 pytest 789/1；canary；gen_docs --check；真库 /api/cloud 计时（1,937→27 ms）；serve 重启（PID 15172）；temp/probe_cloud_cache_20261029.py；maildir/session 现状排查结论（见本节「下一轮已核实的现状」）","schema":1,"session":"session-06304648-f2e6-48d0-8f00-9febfff78b1d","status":"CRITICAL","tokens":178374,"verify":"uv run python -m pytest -o addopts= -q -> 789 passed, 1 skipped；curl http://127.0.0.1:8420/api/cloud?limit=60 三连 -> 首调≈3.9 s（jieba 载入）/ 后续 19–30 ms；git status -sb"} -->
 
+
+## 2026-10-29 21:1x–21:3x R33 实施：批 97c 邮件 furniture + inline 脱敏
+
+**开场三步**（新会话 `session-9ff3bbec`）：`session_check` → `NEW_SESSION`（exit 0），取
+`at=2026-10-29T21:06:00` 交接块（R32，status=CRITICAL）；`context_probe` → effective **12.5%**
+（18,334 / 147,059，OK）。`git status -sb` = `main...origin/main`（R32 的 `2972614` 已在远端，无待推送）。
+用户批「按方案实施」，并选「暂不提供 maildir，用合成 .eml 验收」。
+
+### 只读排查定下的缺口（三处）
+
+1. `adapters/maildir.py` 把 `quote_strip` 结果**直接**当 inline：无 furniture、无 redact；
+2. `_store_bodies` 只清 content_store 那份 → **inline 里的手机号/邮箱/`sk-…` 原样进检索面**
+   （真实泄漏点，不是理论风险）；
+3. `quote_strip` 没有任何剥离率观测，规则过激时无信号。
+
+### 落地（工单 `docs/design/变更工单-2026-10-29-邮件furniture与inline脱敏.md`）
+
+1. `pipeline/mail_threads.py::strip_furniture`（+95 行）：四类规则——RFC 3676 `--` 签名块 /
+   列表页脚（unsubscribe、退订、您收到此邮件、You received this…、此邮件由…发送）/
+   手机标语（发自我的 iPhone、Sent from my iPhone、Get Outlook、发自网易邮箱大师…）/
+   免责声明（本邮件…保密/机密/泄露、This email and any attachments）。
+   **三条防误杀闸门**：只在最后 30 个非空行找 + 页脚/免责要求后 50% + ``` 围栏内不切；
+   删空则原样返回（只有签名的邮件不产出空正文）。
+2. `adapters/maildir.py`：inline 链路改 `quote_strip → strip_furniture → clean.redact`
+   （`redact` 复用 `pipeline/clean.py`，受 `[clean].redact_enabled` 控制）；stats 记
+   `furniture_lines` / `inline_redacted` / `strip_over90` / `strip_near_empty` / `warnings`；
+   `meta.mail_clean` 记三个审计数（与 `_store_bodies` 写的 `meta.clean` 分键并存）。
+3. `cli/cmd_sync.py`：把源级 `warnings` 打成 `WARN [源名] …`（此前只塞进 stats dict）。
+4. 文档：新工单；`知识索引工具-清洗层方案.md` §3.5/§6 标注已落与口径更正；
+   `需求实现对比表` H30/I4 与 §9 结论回勾；`docs/design/README.md` 索引；`CHANGELOG.md`；TODO 8.9 改 `[~]`。
+
+### 口径更正（重要，别按字面实现）
+
+原方案「单封剥离率 >90% 告警」在真实邮件里是**常态**（一行回复 + 十行引用），照字面会天天告警。
+落成两个指标：`strip_over90`（≥90%，**只计数不告警**，观测用）+ `strip_near_empty`
+（原文 ≥200 字且剥后 <20 字，**>0 才 WARN**，规则过激的真实信号）。见工单 §2.3。
+
+### 验收（现场数字，别重跑）
+
+- 新增 `tests/test_mail_furniture.py` **14 例** + `tests/test_maildir.py` **+1 例**（端到端 ksync：
+  inline 只剩「报价按 12 万执行，联系人 [手机]。」，`meta.mail_clean` 与 `meta.clean` 并存，
+  `strip_over90=1` 但 `warnings=[]`）。
+- 定向 `pytest tests/test_mail_furniture.py tests/test_maildir.py tests/test_clean.py` → **61 passed**（0.80 s）。
+- 全量 `pytest -o addopts= -q` → **804 passed / 1 skipped**（原 789，+15）。
+- canary **1 passed**（无新能力，指纹零漂移）；`gen_docs --check` 三份 OK。
+- 零 LLM、零网络：全部走 `run_sync` + dummy registries 的夹具链路。
+
+### 下一步（按序，首步可直接执行）
+
+1. **真实 maildir 验收**（本单唯一未完项，需用户给目录）：`ksync --source mail --full` 后对比
+   条目 inline 前后 diff（签名块消失、PII 变掩码），并看 `strip_near_empty` / `warnings` 分布。
+   重同步会重算 inline（content_hash 未变但 inline 变了 → 判 updated），已入库条目会自动洗一遍。
+2. **8.8 AI 会话 97d**：思考块剔除（` thinking` / Claude `type:"thinking"` / 豆包 `[think]`）+
+   轮次清洗（工具残留/寒暄/悬空意图句）+ inline redact + pending 缓冲；本机仍无 harvester exports。
+3. **emmx 剪枝**（97c 的另一半）：`adapters/emmx.py::parse_tree` 后接剪枝规则，未开始。
+4. 之后仍开放：待审 132 条（写库，需裁决）、边界对缓存（百级再做）、存量 72 对 dupe 复核。
+
+### 不要重跑
+
+- 全量 pytest **804/1**、定向 61 passed、canary、`gen_docs --check`；
+- 上一轮四项只读排查结论（maildir/session 现状、真实数据缺失）——本轮已核对仍成立；
+- R32 的真库 `/api/cloud` 计时与 serve 重启（PID 15172）；
+- `temp/probe_cloud_cache_20261029.py` 与四个 PDF 口径探针（数字见前两节）。
+
+### 会话指纹
+
+`session-9ff3bbec-23f2-4ae8-b202-4c9d6441c67a`，compactions=0，tokens≈107,550，
+baseline 147,059，effective **73.1%**（OK，但按 80% 收尾阈值本轮到此为止），2026-10-29T21:3x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T21:35:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-21:1x213x-r33-实施批-97c-邮件-furniture--inline-脱敏","draft":false,"goal":"R33：批 97c 邮件段落地——strip_furniture 四类规则 + inline 脱敏 + 剥后近空源级 WARN；804 passed（原 789）；真实 maildir 验收待用户给目录","host":"dsh","kind":"handoff","next":"① 真实 maildir 验收（需用户给目录）：ksync --source mail --full 后比 inline diff 与 warnings 分布；② 8.8 AI 会话 97d（思考块/轮次清洗/inline redact/pending，本机无 exports）；③ emmx 剪枝（97c 另一半）；④ 待审 132 条等裁决（写库）","not_rerun":"全量 pytest 804/1；定向 61 passed；canary；gen_docs --check；R32 的 /api/cloud 计时与 serve 重启；temp/probe_cloud_cache_20261029.py 与四个 PDF 口径探针","schema":1,"session":"session-9ff3bbec-23f2-4ae8-b202-4c9d6441c67a","status":"WARN","tokens":107550,"verify":"uv run python -m pytest -o addopts= -q -> 804 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_mail_furniture.py tests/test_maildir.py tests/test_clean.py -> 61 passed"} -->

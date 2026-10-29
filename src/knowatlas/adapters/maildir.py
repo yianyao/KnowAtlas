@@ -15,9 +15,10 @@ locator = `mail://{account}/{message_id}`（mail scheme 契约既有预留，浏
 
 会话头（message_id/in_reply_to/references/subject_norm/sent_at）入 meta，
 sync 层据此落 conv_messages 并还原 source 线程（pipeline/mail_threads.py）。
-正文双轨（K1 语义的邮件版）：适配器产出全量正文；引用剥离（quote_strip）后的
-增量正文由 sync 组装进 inline_content（检索摘要干净）；全量正文进 content_store
-（FTS 全文完整）。清洗函数在 pipeline（适配器纪律：只翻译），此处仅 import 使用。
+正文双轨（K1 语义的邮件版）：适配器产出全量正文；引用剥离（quote_strip）+ 尾部家具
+剔除（strip_furniture）+ 脱敏（clean.redact，批 97c）后的增量正文由 sync 组装进
+inline_content（检索摘要干净、不含签名/手机号）；全量正文进 content_store（FTS 全文完整）。
+清洗函数在 pipeline（适配器纪律：只翻译），此处仅 import 使用。
 """
 
 from __future__ import annotations
@@ -35,13 +36,17 @@ from typing import Any
 from ..errors import AdapterError
 from ..ids import content_hash
 from ..models import Entry
+from ..pipeline.clean import redact as redact_text
 from ..pipeline.mail_threads import (
-    _hash_msgid, normalize_msgid, quote_strip, subject_norm,
+    _hash_msgid, normalize_msgid, quote_strip, strip_furniture, subject_norm,
 )
 from .base import AdapterOutput
 
 _MAX_MESSAGES = 5000  # 单源邮件上限（防失控）
 _MAILDIR_SUBDIRS = ("cur", "new", "tmp")
+_STRIP_OVER_RATIO = 0.90     # 「剥离率 ≥ 90%」只计数不告警（一行回复+长引用是常态）
+_NEAR_EMPTY_BODY = 200       # 告警判据：原文至少 200 字
+_NEAR_EMPTY_DELTA = 20       # 且清洗后不足 20 字 = 规则过激的真实信号
 
 
 def _decode_date(raw: str | None) -> str | None:
@@ -143,7 +148,11 @@ def collect_maildirs(cfg: Any) -> AdapterOutput:
             hint="在 config/knowatlas.toml 配置 [sources.mail] accounts.<账号名>.path"
                  " = maildir 根目录（外部 IMAP 同步工具落盘，如 offlineimap）")
 
-    stats: dict[str, Any] = {"_full_bodies": {}, "messages": 0, "skipped_parse": 0}
+    stats: dict[str, Any] = {"_full_bodies": {}, "messages": 0, "skipped_parse": 0,
+                             "furniture_lines": 0, "inline_redacted": 0,
+                             "strip_over90": 0, "strip_near_empty": 0,
+                             "warnings": []}
+    redact_on = bool(cfg.get("clean.redact_enabled", True))
     entries: list[Entry] = []
     convs: list[dict[str, Any]] = []   # 会话头（sync 层落 conv_messages 还原线程）
 
@@ -188,6 +197,18 @@ def collect_maildirs(cfg: Any) -> AdapterOutput:
                     continue
                 fhash = content_hash(full_body)
                 delta = quote_strip(full_body)
+                # 批 97c：尾部家具 → 脱敏（inline 是检索/UI 消费面，必须在这里清）
+                delta, furniture = strip_furniture(delta)
+                redacted = 0
+                if redact_on:
+                    delta, redacted = redact_text(delta)
+                ratio = (1.0 - len(delta) / len(full_body)) if full_body else 0.0
+                if ratio >= _STRIP_OVER_RATIO:
+                    stats["strip_over90"] += 1
+                if len(full_body) >= _NEAR_EMPTY_BODY and len(delta) < _NEAR_EMPTY_DELTA:
+                    stats["strip_near_empty"] += 1
+                stats["furniture_lines"] += furniture.get("lines", 0)
+                stats["inline_redacted"] += redacted
                 source_key = f"{account}:{msgid}"
                 entry = Entry.build(
                     source_type="mail",
@@ -203,7 +224,10 @@ def collect_maildirs(cfg: Any) -> AdapterOutput:
                           "to": parseaddr(str(msg.get("To") or ""))[1],
                           "date": date_iso, "message_id": msgid,
                           "in_reply_to": irt, "references": refs,
-                          "subject_norm": subject_norm(subject)},
+                          "subject_norm": subject_norm(subject),
+                          "mail_clean": {"furniture_lines": furniture.get("lines", 0),
+                                         "redacted": redacted,
+                                         "strip_ratio": round(ratio, 3)}},
                     created_at=date_iso,
                 )
                 entries.append(entry)
@@ -218,6 +242,12 @@ def collect_maildirs(cfg: Any) -> AdapterOutput:
                 break
         if stats["messages"] >= _MAX_MESSAGES:
             break
+
+    if stats.get("strip_near_empty"):
+        stats["warnings"].append(
+            f"quote_strip 剥后近空 {stats['strip_near_empty']}/{stats['messages']} 封"
+            f"（原文 ≥{_NEAR_EMPTY_BODY} 字、清洗后 <{_NEAR_EMPTY_DELTA} 字）"
+            "——检查引用剥离/furniture 规则是否过激")
 
     stats["conv_messages"] = convs   # sync 层 pop 出去做线程还原
     return AdapterOutput(entries, stats)

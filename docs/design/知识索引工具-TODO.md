@@ -416,7 +416,11 @@ reader: 执行者（人与 agent）
         **剩余**：层级还原（A2 时间盒）仍未做，故本项保持 `[~]`。
 - [ ] 8.8 AI 会话（97d：`sources.session.harvester_dirs` + 分支主干 + 平台思考块剔除 + redact）
       - 探针：真实导出会话清洗前后对比；条目含 title/session_id/turns 摘要
-- [ ] 8.9 邮件（97c：furniture 补丁 + redact + 线程还原）
+- [~] 8.9 邮件（97c：furniture 补丁 + redact + 线程还原）
+      - **代码已落 2026-10-29**：`strip_furniture` 四类规则（签名块/列表页脚/手机标语/免责声明）+
+        inline 脱敏（复用 `clean.redact`）+ 剥后近空源级 WARN；线程还原（第三十九批）早已可用。
+        全量 804 passed / 1 skipped。**剩余**：真实 maildir 验收（本机无数据源）→ 给目录后跑
+        真库剥离前后对比，故保持 `[~]`。
       - 探针：真实签名邮件剥离前后对比；线索库 thread_type=source 正常
 - [ ] 8.10 微信聊天记录（97e：媒体处置 + 四类剔除 + 按日线程 + pending 缓冲；等导出产物）
       - 探针：垃圾轮次（寒暄/表情/系统消息）零入库

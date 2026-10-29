@@ -70,5 +70,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                          purge_reason=args.purge_reason)
     finally:
         dl.close()
+    for name, src_stats in (stats.get("sources") or {}).items():
+        for warning in (src_stats.get("warnings") or []):
+            print(f"WARN [{name}] {warning}")
     print(f"OK 同步完成：{stats}")
     return _EXIT_OK
