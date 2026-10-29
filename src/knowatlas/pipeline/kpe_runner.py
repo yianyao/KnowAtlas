@@ -11,7 +11,8 @@
 
 超大书（工单 2026-10-29《超大书分卷摄取》C1）：
 - **先切块、再决定单卷/多卷**。上限量的是「真正喂给 LLM 的 chunks 字符数」，不是正文字数
-  （真库 agentic-ai-guide 正文 2.59M、PDF 通道只有 776k；旧代码按正文判上限，直接堵死）；
+  （真库 agentic-ai-guide 正文 2.59M 里 74% 是表格填充字符，实字只有 672k；PDF 通道归一化后
+  671k，两者实字相同——见 `docs/design/调研-2026-10-29-PDF取文口径.md`。旧代码按正文判上限，直接堵死）；
 - `Σ块.chars <= [ingest] kpe_max_chars` → 单卷，行为与旧版逐字相同；
 - 超过 → `kpe_volumes.pack_volumes()` 按章装箱成 `v001..`，逐卷 `extract` + 逐卷导入；
   卷内靠 `done.jsonl`、卷间靠 `volume_complete()` 断点续跑（全完成时不需要 LLM key）。

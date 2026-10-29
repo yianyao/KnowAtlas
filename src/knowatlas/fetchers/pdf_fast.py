@@ -28,9 +28,13 @@ BUDGET_SECONDS = 120.0            # 单文件解析预算（实测 882 页 1.2 s
 
 # `auto` 策略（工单 §2 方案 A，2026-10-24 实测后收窄）：
 # 只有"markitdown 跑不动"的大文件才走快速通道。阈值不能按页数算——
-# 实测 `agentic-ai-guide`（8.4 MB）PDFium 只取到 markitdown 的 30% 字符、
+# 实测 `agentic-ai-guide`（8.4 MB）PDFium 只有 markitdown 的 30% 字符、
 # `AI-Agents-in-Depth`（11.1 MB）只有 43%，而 markitdown 处理这两个只要 88 s / 40 s，
 # 完全等得起。真正跑不动的是百 MB 级：98 MB 要 25 分钟。
+# 2026-10-29 复核：那 30%/43% 是**字符口径**差——markitdown 正文 74% 是表格填充（空白/`|`/`---`），
+# 去格式后的实字 PDFium 反而是正文的 108%/104%，切块后逐块比对也**没有整段缺失**。
+# 阈值「只给百 MB 级走快通道」的结论不变（等的是耗时，不是质量），见
+# `docs/design/调研-2026-10-29-PDF取文口径.md`。
 AUTO_MAX_BYTES = 30 * 1024 * 1024
 AUTO_MAX_PAGES = 1500
 
