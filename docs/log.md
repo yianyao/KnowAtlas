@@ -3484,3 +3484,62 @@ baseline 147,059，effective≈29%（OK），2026-10-29T19:5x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-29T19:55:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-192x195x-推送-r31--pdf-取文偏少-34-核实口径误判不改代码","draft":false,"goal":"R31 已推送（b4b6a21）；「PDF 取文偏少 34%」核实为字符口径误判——正文 74% 是表格填充，实字口径 PDF 108%/104%，PDF 通道不丢内容；新增调研文档，零代码改动","host":"dsh","kind":"handoff","next":"① 等用户裁决两处文字更正（kpe_runner.py 文档字符串、97b 工单 §2.1）；② 真库 3 本重抽建议：agentic / AI-Agents-in-Depth 不重抽（同源、覆盖完整），Hello-Agents 需先做按页段替换；③ 边界对缓存（百级再做）/ 存量 72 对 dupe 复核","not_rerun":"四个只读探针 probe_pdf_vs_body_v2 / probe_pdf_gap_3books / probe_points_gap / probe_points_origin（数字已记本轮）；推送 02d926a..b4b6a21；全量 pytest 785/1","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"WARN","tokens":43000,"verify":"uv run python temp/probe_pdf_gap_3books_20261029.py -> agentic 726,378 vs 672,263（108.0%）；git status -sb -> main...origin/main"} -->
 
+## 2026-10-29 20:0x 用户裁决落地：三处口径更正 + 不重抽 + docs/design 索引
+
+用户回复：「1、文字要更正，真库 3 本不要重抽了；2、继续」。本轮把 ①③ 收口，并把文档导航补上。
+
+### 已完成
+
+1. **三处口径更正**（用户已批，均只改注释/文档，零行为改动）：
+   - `src/knowatlas/pipeline/kpe_runner.py` 模块 docstring：正文 2.59M 里 74% 是表格填充，实字 672k
+     ≈ PDF 通道 671k（原文「PDF 通道只有 776k」误导）；
+   - `src/knowatlas/fetchers/pdf_fast.py` 模块注释：30%/43% 的复核说明（阈值结论不变）；
+   - `docs/design/变更工单-2026-10-24-97b-PDF解析.md` §2.1：加「2026-10-29 更正」引用块——
+     原判「pdfium 丢了部分文本」不成立，实字口径 108%/104%。
+2. **裁决记录**：`调研-2026-10-29-PDF取文口径.md` §5 写入「**真库 3 本都不重抽**」及理由；
+   Hello-Agents 的页码缺口改成已知遗留（要精确到页需另立项「按页段替换旧点」）。
+3. **新增 `docs/design/README.md`（47 份文档的索引）**：读法（按角色）→ 总体设计 → 30 份变更工单
+   （带已落地/未落地状态）→ 调研/方案/架构/ADR → 交接记录 → 维护约定（状态三态、不写死数字）。
+4. **`docs/TODO.md` 回勾三处已过期条目**：R29 检索热路径（4.9 s → 0.18 s）、R30 dedupe 误并
+   （规则挑对 + LLM 裁定，dupes 0/vetoed 5）、新增 R31 超大书分卷；开头注明 10-29 回勾。
+
+### 现场核对
+
+- 真库：`active 76 / archived 82 / pending 132 / rejected 78`，points **5,607**，`regress_cases 0`。
+  → TODO P0「待审 132 条落定」**仍然有效**（数字未变）；R6 回归集仍受阻于「需用户逐条点 ✓」。
+- 测试：本轮只改注释与文档，跑触及模块 `test_kpe_runner/test_kpe_volumes/test_pdf_fast/test_canary`
+  → **34 passed**（0.66 s）。全量 785/1 的基线未受影响，未重跑。
+
+### 下一步（按序，首步可直接执行）
+
+1. **等用户裁决下一件事**（都属业务代码，按 §1 先方案后改），候选：
+   - ①`docs/TODO.md` P0「待审 132 条落定」：`kauto --activate-only --dry-run` 复核 97 激活 / 35 拒绝名单
+     → 再实跑；判据 pending 归零。**要写库，需点头。**
+   - ② 8.9 邮件（97c）：furniture 补丁 + redact + 线程还原；`adapters/maildir.py` 已有骨架。
+   - ③ 8.8 AI 会话（97d）：`sources.session.harvester_dirs` + 分支主干 + 思考块剔除。
+   - ④ 词云签名缓存（并行待办里的性能项，最小改动）。
+2. 之后仍开放：边界对缓存（百级再做）/ 存量 72 对 dupe 全量复核（如需）。
+
+### 不要重跑
+
+- 本轮三处更正与索引（提交内容即证据）；`temp/probe_todo_state_20261029.py`（库状态已记本节）；
+- 四个 PDF 口径探针（数字见上一节）；全量 pytest 785/1（未改代码逻辑）。
+
+### 验证命令
+
+```powershell
+uv run python -m pytest -o addopts= -q tests/test_kpe_runner.py tests/test_kpe_volumes.py tests/test_pdf_fast.py tests/test_canary.py   # 34 passed
+git log --oneline -3    # 口径更正 + 索引 + TODO 回勾
+```
+
+### 会话指纹
+
+`session-c66f78f6-fe77-4525-a374-e1d7772d84f8`，compactions=0，tokens≈78,000，
+baseline 147,059，effective≈53%（OK），2026-10-29T20:1x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T20:15:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-200x-用户裁决落地三处口径更正--不重抽--docsdesign-索引","draft":false,"goal":"用户裁决已落地：kpe_runner/pdf_fast/97b 工单三处口径更正（PDF 通道不丢内容）、真库 3 本不重抽、新增 docs/design/README 索引、docs/TODO 回勾 R29/R30/R31；零行为改动，34 passed","host":"dsh","kind":"handoff","next":"① 等用户挑下一件事（待审 132 条落定[要写库] / 8.9 邮件 97c / 8.8 AI 会话 97d / 词云签名缓存）；② 边界对缓存（百级再做）；③ 存量 72 对 dupe 复核（如需）","not_rerun":"四个 PDF 口径探针；probe_todo_state_20261029.py；全量 pytest 785/1（本轮仅注释与文档）；已推送 c0bd2ae","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"WARN","tokens":78000,"verify":"uv run python -m pytest -o addopts= -q tests/test_kpe_runner.py tests/test_kpe_volumes.py tests/test_pdf_fast.py tests/test_canary.py -> 34 passed"} -->
+
+<!-- HANDOFF {"at":"2026-10-29T20:06:10.823923+08:00","compactions":0,"doc":"docs/交接/2026-10-29-2006.md","draft":true,"goal":"上下文到 HANDOFF（85.3%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"HANDOFF","tokens":125471,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+<!-- HANDOFF {"at":"2026-10-29T20:20:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-200x-用户裁决落地三处口径更正--不重抽--docsdesign-索引","draft":false,"goal":"用户裁决已落地：kpe_runner/pdf_fast/97b 工单三处口径更正（PDF 通道不丢内容）、真库 3 本不重抽、新增 docs/design/README 索引、docs/TODO 回勾 R29/R30/R31；零行为改动，34 passed","host":"dsh","kind":"handoff","next":"① 等用户挑下一件事：待审 132 条落定（要写库，需点头）/ 8.9 邮件 97c / 8.8 AI 会话 97d / 词云签名缓存；② 边界对缓存（百级再做）；③ 存量 72 对 dupe 复核（如需）","not_rerun":"四个 PDF 口径探针；probe_todo_state_20261029.py；全量 pytest 785/1（本轮仅注释与文档）","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"HANDOFF","tokens":126445,"verify":"uv run python -m pytest -o addopts= -q tests/test_kpe_runner.py tests/test_kpe_volumes.py tests/test_pdf_fast.py tests/test_canary.py -> 34 passed；git status -sb -> main...origin/main"} -->
