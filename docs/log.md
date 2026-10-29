@@ -3854,3 +3854,102 @@ baseline 147,059，effective **81.1%**（WARN：开始收尾），2026-10-29T22:
 
 <!-- HANDOFF {"at":"2026-10-29T23:02:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-29-223x224x-局域网访问白名单p1-服务端半边用户裁决只做白名单","draft":false,"goal":"P1 局域网访问服务端半边：Host/Origin 白名单按绑定地址派生（枚举本机网卡地址，不放内网段）+ serve 打印局域网 URL；838 passed（原 831）；实测 LAN Host 200 / 陌生 Host 403 / 外站 Origin 403 / 直连内网 IP 200；无契约变更","host":"dsh","kind":"handoff","next":"⓿ 先补推本地未推送的提交（GitHub 直连 22:47-22:56 全断，推送命令见本节「推送状态」；批 98 的 62a2af0 已在远端）；① 局域网写权限收紧（契约变更，先写工单：web.allow_lan_writes + /api/session 按来源决定是否种写 Cookie）——现状 LAN 可写是用户明示接受的取舍；② 用户在真机验：8420 需先 serve --host 0.0.0.0 重启；③ 真实 maildir 验收（需目录）；④ 8.8 AI 会话 97d；⑤ emmx 剪枝；⑥ 待审 132 条等裁决（写库）；⑦ P2 反向代理 TLS（手机离线 PWA 前置）","not_rerun":"全量 pytest 838/1；tests/test_lan_access.py 7；canary；gen_docs --check；8499 临时实例的三组 curl（Host=LAN/陌生 Host/外站 Origin/直连内网 IP/Cookie 写）；批 98 的 UI+SW 验证脚本与两轮只读审计","schema":1,"session":"session-6c4a73e7-63da-44b4-872d-d1a493f6390e","status":"WARN","tokens":124643,"verify":"uv run python -m pytest -o addopts= -q -> 838 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_lan_access.py -> 7 passed；uv run python tools/gen_docs.py --check -> 三份 OK"} -->
 
+<!-- HANDOFF {"at":"2026-10-29T23:16:11.669995+08:00","compactions":0,"doc":"docs/交接/2026-10-29-2316.md","draft":true,"goal":"上下文到 HANDOFF（92.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-2677aa3b-ad4f-4047-8861-47e81081cce6","status":"HANDOFF","tokens":135468,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-29T23:20:11.661632+08:00","compactions":0,"doc":"docs/交接/2026-10-29-2320.md","draft":true,"goal":"上下文到 CRITICAL（100.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-2677aa3b-ad4f-4047-8861-47e81081cce6","status":"CRITICAL","tokens":148370,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+
+## 2026-10-29 23:0x–23:3x 局域网写权限收紧（P1 收尾，契约变更）+ 补推成功
+
+**开场三步**（新会话 `session-2677aa3b`）：`session_check` → `NEW_SESSION`（exit 0），取
+`at=2026-10-29T23:02:00` 交接块（status=WARN）；`context_probe` → effective **12.4%**
+（18,295 / 147,059，compactions=0，OK）。`git status -sb` = `main...origin/main [ahead 1]`
+（`110c55c` 未推）。用户「继续」→ 按交接块执行 ⓿ 补推 + ① 写权限收紧。
+§1 规则：先报四件事（文件 / 逻辑 / 步骤 / 契约 + 验证），用户裁决 **「全做（后端+前端+测试+文档）」**。
+
+### ⓿ 补推（已完成）
+
+GitHub 直连 23:00–23:17 连续 18 次 `curl -4` 000；后台重试脚本 `temp/push_retry_20261029.ps1`
+（20 轮 × 45 s，finally 里恢复 insteadOf + origin）在第 **19** 次（23:17:42）拿到 200 →
+`62a2af0..110c55c  main -> main`，`ls-remote` 核对一致。**经验：直连时断时通，写成循环比单次判死靠谱。**
+
+### ① 局域网写权限收紧（工单 `docs/design/变更工单-2026-10-29-局域网写权限收紧.md`）
+
+- **判据**：写权限按**客户端地址**判来源（`request.client.host`；`client` 缺失回落 Host；判不出即
+  按非本机 fail-closed），**不按 Host**——Host 已被白名单保证合法，但它只说明「你用哪个名字访问」。
+- **`/api/session`**：`write_allowed = allow_lan_writes or is_loopback_client`；只有 true 且令牌存在才种
+  HttpOnly/SameSite=Strict Cookie；响应 +1 字段 `write_allowed`（`configured`/`fingerprint`/`cookie` 语义不变）。
+- **写守卫**：LAN 无凭据 → 403 **`FORBIDDEN_READONLY`**（文案给三条出路）；令牌填错仍是原 `FORBIDDEN`。
+- **前端**：`index.html` / `thread.html` 顶栏「只读」徽标 + 写操作前短路到令牌弹窗（存 localStorage，
+  走既有 `X-KnowAtlas-Token`），**取消则不发请求**；`components.css` 加 `.readonly-badge`。
+- **安全开关 fail-closed**：`_as_bool()` 只认 `true/1/yes/on`。环境变量覆盖会把布尔写成字符串，
+  `KNOWATLAS_WEB_ALLOW_LAN_WRITES=false` 时 `bool("false")` 是 True——那等于把只读误开成可写。
+- **serve 提示改口径**：`cli/cmd_ops.py` 按 `lan_writes_enabled(cfg)` 分两支打印（原句「同网段设备自动
+  获得写凭据」只在 true 时成立）。
+- **顺手修的真 bug**：`ui.js` 的 `#ka-cancel` 不分 mode 一律 `finish(false)`，而 `ka.prompt` 约定
+  `null=取消` → 调用方 `.trim()` 抛 `TypeError`（headless 实测 `t.trim is not a function`）。
+  改成 prompt→null / confirm·alert→false，调用方补 `typeof t !== "string"`。
+- **契约**：`CONFIG_SCHEMA_KEYS` +1、`/api/session` 响应 +1 字段、错误码 +1；表结构/`Entry` 字段/
+  locator scheme/`SOURCE_TYPES`/`STATUSES`/能力注册表/路由 74 条**零变更**；canary `config_keys`
+  重录 `e130e64ada80`（其余五项指纹未动）。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **846 passed / 1 skipped**（原 838，+6 后端写权限 +2 前端静态探针）；
+  `tests/test_lan_access.py` **15 passed**；canary 1 passed；`gen_docs --check` 三份 OK
+  （`参考-配置.md` 150 行；`参考-接口.md` 的 `/api/session` 描述随 docstring 更新）。
+- 临时 `serve --host 0.0.0.0 --port 8499`（空库沙箱 `temp/ka-lan/`，验完已关；**8420 全程在听**）：
+
+  | 请求 | 结果 |
+  |---|---|
+  | loopback `/api/session` | 200 + `Set-Cookie: knowatlas_write=…; HttpOnly; SameSite=strict`，`write_allowed=true` |
+  | `http://192.168.1.242:8499/api/session` | 200，`write_allowed=false`，**无 Set-Cookie** |
+  | LAN 无凭据 `POST /api/entries/999999/reject` | **403 `FORBIDDEN_READONLY`** |
+  | LAN + 正确令牌 / loopback Cookie 写 | 404（过了守卫，条目不存在） |
+  | `KNOWATLAS_WEB_ALLOW_LAN_WRITES=false`（字符串） | 仍 403（fail-closed 生效） |
+  | `…=true` | LAN 种 Cookie + 写 404（回落今日行为） |
+- headless Edge（CDP，脚本 `temp/verify_lan_readonly_20261029.mjs`）：LAN 页面徽标「只读」
+  `hidden=false`、写操作弹令牌框、点取消 → `{__aborted:true}`、**发出请求数 0**、console 0 错误；
+  loopback 页面徽标 `hidden=true`、`write_allowed=true`。
+
+### 提交与推送
+
+`c192221` feat(web) 局域网写权限收紧（21 文件）；`docs/log.md` 本节的提交在其后（见 `git log`）。
+
+### 下一步（按序，首步可直接执行）
+
+1. **用户真机验**：手机同网段开 `http://<内网IP>:8420` —— **8420 现在仍绑 127.0.0.1**，
+   要先 `serve --host 0.0.0.0` 重启（或改 `config/knowatlas.toml` 的 `server_host`）。
+   预期：手机**只能看**，顶栏有「只读」徽标，点写按钮先弹令牌框。
+2. **P2 反向代理 TLS**（手机离线 PWA 的前置）：同时解决本单已知限制——反代下客户端地址是反代自身
+   （loopback），按真实来源收紧要读 `X-Forwarded-For`（仅可信代理）。
+3. 后端队列（未变）：① 真实 maildir 验收（需目录）；② 8.8 AI 会话 97d；③ emmx 剪枝；
+   ④ 待审 132 条等裁决（写库，需点头）。
+4. 仍开放：边界对缓存（百级再做）/ 存量 72 对 dupe 复核（如需）。
+
+### 不要重跑
+
+- 全量 pytest **846/1**、`test_lan_access.py` 15、canary、`gen_docs --check`；
+- 8499 沙箱的五组 curl 与 env 两态（结果在上表）；沙箱配置 `temp/ka-lan/config.toml`（空库，可清）；
+- `temp/verify_lan_readonly_20261029.mjs`（headless Edge，含徽标/弹窗/0 请求三判据）；
+- 补推脚本 `temp/push_retry_20261029.ps1`（已成功，别再跑）；
+- 批 98 与上一批的 UI/SW/白名单验证（数字见前两节）。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py          # 新会话应 NEW_SESSION
+uv run python -m pytest -o addopts= -q                          # 846 passed, 1 skipped
+uv run python -m pytest -o addopts= -q tests/test_lan_access.py # 15 passed
+uv run python tools/gen_docs.py --check                         # 三份 OK
+git status -sb                                                  # main...origin/main（无 ahead）
+```
+
+### 会话指纹
+
+`session-2677aa3b-ad4f-4047-8861-47e81081cce6`，compactions=0，tokens≈151,500，
+baseline 147,059，effective **103.0%**（CRITICAL，watcher 23:16/23:20 已两次推交接），
+2026-10-29T23:2x+08:00。本轮 token 主要花在「读码定方案 + 后端/前端实现 + 三态实测 + 文档」，
+**按 85% 阈值本该更早换会话**。
+
+<!-- HANDOFF {"at":"2026-10-29T23:26:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-230x233x-局域网写权限收紧p1-收尾契约变更--补推成功","draft":false,"goal":"局域网写权限收紧已交付（c192221）：web.allow_lan_writes + /api/session 按客户端地址种 Cookie + 403 FORBIDDEN_READONLY + 只读徽标/令牌兜底；846 passed（原 838）；实测 LAN 只读 403 / loopback Cookie 写 404 / env=false 仍只读 / env=true 恢复 / headless Edge 徽标+弹窗 0 请求","host":"dsh","kind":"handoff","next":"① 用户在真机验（8420 仍绑 127.0.0.1，需 serve --host 0.0.0.0 重启；预期手机只读 + 顶栏徽标 + 写前弹令牌）；② P2 反向代理 TLS（含 X-Forwarded-For 真实来源，解决本单已知限制）；③ 真实 maildir 验收（需目录）；④ 8.8 AI 会话 97d；⑤ emmx 剪枝；⑥ 待审 132 条等裁决（写库）；⑦ 边界对缓存（百级）/ 存量 72 对 dupe 复核","not_rerun":"全量 pytest 846/1；tests/test_lan_access.py 15；canary；gen_docs --check；8499 沙箱五组 curl 与 env 两态；temp/verify_lan_readonly_20261029.mjs；temp/push_retry_20261029.ps1（已成功）；批 98 与上批的 UI/SW/白名单验证","schema":1,"session":"session-2677aa3b-ad4f-4047-8861-47e81081cce6","status":"CRITICAL","tokens":151500,"verify":"uv run python -m pytest -o addopts= -q -> 846 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_lan_access.py -> 15 passed；uv run python tools/gen_docs.py --check -> 三份 OK；git status -sb -> 无 ahead（若仍 ahead，跑 temp/push_retry_20261029.ps1 补推）"} -->
