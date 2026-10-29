@@ -3953,3 +3953,34 @@ baseline 147,059，effective **103.0%**（CRITICAL，watcher 23:16/23:20 已两�
 **按 85% 阈值本该更早换会话**。
 
 <!-- HANDOFF {"at":"2026-10-29T23:26:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-230x233x-局域网写权限收紧p1-收尾契约变更--补推成功","draft":false,"goal":"局域网写权限收紧已交付（c192221）：web.allow_lan_writes + /api/session 按客户端地址种 Cookie + 403 FORBIDDEN_READONLY + 只读徽标/令牌兜底；846 passed（原 838）；实测 LAN 只读 403 / loopback Cookie 写 404 / env=false 仍只读 / env=true 恢复 / headless Edge 徽标+弹窗 0 请求","host":"dsh","kind":"handoff","next":"① 用户在真机验（8420 仍绑 127.0.0.1，需 serve --host 0.0.0.0 重启；预期手机只读 + 顶栏徽标 + 写前弹令牌）；② P2 反向代理 TLS（含 X-Forwarded-For 真实来源，解决本单已知限制）；③ 真实 maildir 验收（需目录）；④ 8.8 AI 会话 97d；⑤ emmx 剪枝；⑥ 待审 132 条等裁决（写库）；⑦ 边界对缓存（百级）/ 存量 72 对 dupe 复核","not_rerun":"全量 pytest 846/1；tests/test_lan_access.py 15；canary；gen_docs --check；8499 沙箱五组 curl 与 env 两态；temp/verify_lan_readonly_20261029.mjs；temp/push_retry_20261029.ps1（已成功）；批 98 与上批的 UI/SW/白名单验证","schema":1,"session":"session-2677aa3b-ad4f-4047-8861-47e81081cce6","status":"CRITICAL","tokens":151500,"verify":"uv run python -m pytest -o addopts= -q -> 846 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_lan_access.py -> 15 passed；uv run python tools/gen_docs.py --check -> 三份 OK；git status -sb -> 无 ahead（若仍 ahead，跑 temp/push_retry_20261029.ps1 补推）"} -->
+
+## 2026-10-30 01:0x 服务以 0.0.0.0 重启（手机只读真机验收前置）
+
+触发：用户「继续，并且重启服务？serve --host 0.0.0.0」= 交接块「下一步 ①」。
+
+做法与坑：
+
+- **不动 config**：`config/knowatlas.toml` 的 `server_host` 仍是 `127.0.0.1`，靠 `serve --host 0.0.0.0`
+  的 CLI 覆盖（`cli/_shared.py::_apply_serve_overrides` 把实际 host/port 回写进 cfg），
+  Host 白名单因此自动追加本机网卡地址；下次不带参数重启会回到只听本机。
+- **固定令牌**：先导入用户级 `KNOWATLAS_WEB_TOKEN`（22 位）再启动 → 指纹 **2ad28785**，重启不再换令牌。
+- **必须 `PYTHONUNBUFFERED=1`**：stdout 重定向到文件时 Python 会缓冲 `print`，不设的话启动横幅
+  （局域网 URL + 令牌指纹）完全看不到，只剩 stderr 的结构化日志——本轮第一次重启就踩到了。
+- 进程：`Start-Process` 隐藏窗口、不挂本会话，日志 `~/.knowatlas/serve-8420.out.log|.err.log`；
+  监听 PID 24380（父 23628 = `.venv\Scripts\python.exe -m knowatlas serve --host 0.0.0.0`）。
+- 防火墙：WLAN 是 **Public**，已有两条 Public 入站 Allow（程序 = uv 的 `python.exe`，TCP/UDP Any），
+  无需新增规则；手机打不开先查这两条还在不在。
+
+实测（01:06，判据同交接块）：
+
+| 请求 | 结果 |
+|---|---|
+| `127.0.0.1:8420/api/session` | 200 + `Set-Cookie: knowatlas_write=…; HttpOnly; SameSite=strict`，`write_allowed=true` |
+| `192.168.1.242:8420/api/session` | 200，**无 Set-Cookie**，`write_allowed=false` |
+| LAN 无令牌 `POST /api/entries/999999/reject` | **403 `FORBIDDEN_READONLY`**（消息带指纹 2ad28785） |
+| `http://192.168.1.242:8420/` 页面 | 200，`text/html`，158,542 B |
+| 监听地址 | `0.0.0.0:8420`（原 127.0.0.1） |
+
+手机验收：同网段开 `http://192.168.1.242:8420`，预期只读 + 顶栏「只读」徽标 + 写操作先弹令牌。
+要手机可写：`[web] allow_lan_writes = true` 后重启（等同放开写库，公共网络别开）。
+机器重启后**不会自启**（只有 watcher 计划任务，没有 serve 的），需重跑同一条命令。
