@@ -20,7 +20,9 @@ CANARY: dict[str, str] = {
     "source_types": "6b64be2ddfef",
     "schemes": "021aa146daa7",
     "entry_fields": "1a9d42828612",
-    "config_keys": "066e696a6766",
+    "config_keys": "e130e64ada80",
+    # config_keys 变更：web.allow_lan_writes 新增（工单
+    # 变更工单-2026-10-29-局域网写权限收紧.md）；其余五项指纹未动。
     # capabilities：point_extract 2.0.0 → 2.1.0（自洽性纪律 + 允许空点，
     # 工单 变更工单-2026-10-24-8.5自洽性闸门.md）；point_triage@1.0.0（P0 点分诊）
     # 与 point_errata@1.0.0（P1 点级勘误）新增（工单 变更工单-2026-10-25-点分诊.md

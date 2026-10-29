@@ -137,17 +137,24 @@ def test_token_hint_fingerprint(cfg, dl, registries):
 
 def test_session_cookie_auto_auth(cfg, dl, registries):
     """同源自动写凭据：/api/session 种 HttpOnly+SameSite=Strict Cookie，带 cookie 的写操作
-    通过守卫——用户零手工填令牌（浏览器自动携带）。"""
+    通过守卫——用户零手工填令牌（浏览器自动携带）。
+
+    `client=("127.0.0.1", 0)` 是必须的：写权限按**来源地址**判本机
+    （工单 变更工单-2026-10-29-局域网写权限收紧.md），TestClient 默认来源是
+    `("testclient", 50000)`，会被当成局域网来源而不种 Cookie。
+    """
     from fastapi.testclient import TestClient
     from knowatlas.web.app import create_app
     tok = "unit-test-token-2"
     os.environ["KNOWATLAS_TEST_TOKEN"] = tok
     try:
         app = create_app(cfg, dl, *registries)
-        c = TestClient(app, headers={"Host": f"127.0.0.1:{cfg.get('general.server_port', 8420)}"})
+        c = TestClient(app, headers={"Host": f"127.0.0.1:{cfg.get('general.server_port', 8420)}"},
+                       client=("127.0.0.1", 0))
         r = c.get("/api/session")
         assert r.status_code == 200
         assert tok not in r.text                       # 明文不回传到 JS
+        assert r.json()["write_allowed"] is True
         set_cookie = r.headers.get("set-cookie", "")
         assert "knowatlas_write=" in set_cookie
         assert "HttpOnly" in set_cookie and "SameSite=strict" in set_cookie.replace("Strict", "strict")

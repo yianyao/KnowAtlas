@@ -153,10 +153,15 @@ git status -sb                                   # 期望只有本步改动
       `Host: evil.example.com` 403 / 外站 Origin 403。固定 token 与「页面不用手填」早就有
       （`/api/session` 种 HttpOnly+SameSite=Strict Cookie）。
       **判据里的「写操作仍被 token 拦」本轮没做**（用户裁决「只做白名单」）→ 见下一条。
-- [ ] **局域网写权限收紧**：加 `web.allow_lan_writes`（默认 false），`/api/session` 只对
-      loopback（或显式开启时）种写 Cookie；否则写操作回落到令牌。现状是挂 `0.0.0.0` 时
-      同网段设备打开页面即可写（已知取舍，已写进 CHANGELOG 与 `config/*.example.toml` 注释）。
-      判据：`allow_lan_writes=false` 时 LAN 上写端点回 401/403，`true` 时回落到今日行为。
+- [x] **局域网写权限收紧**：加 `web.allow_lan_writes`（默认 false），`/api/session` 只对
+      loopback（或显式开启时）种写 Cookie；否则写操作回落到令牌。
+      **2026-10-29 21:3x 落地**（`变更工单-2026-10-29-局域网写权限收紧.md`）：判据按**客户端地址**
+      （`request.client.host`，缺失时回落 Host；判不出本机即按非本机），不按 Host；新增 403
+      `FORBIDDEN_READONLY` 与 `/api/session` 的 `write_allowed` 字段；前端加「只读」徽标 + 令牌兜底
+      弹窗（取消不发请求）。实测：LAN 无凭据写 403 READONLY、loopback Cookie 写 404（过守卫）、
+      `allow_lan_writes=true` 恢复旧行为；`KNOWATLAS_WEB_ALLOW_LAN_WRITES=false` 仍是只读（字符串
+      fail-closed）。全量 **846 passed / 1 skipped**。**已知限制**：反代下客户端地址是反代自身，
+      按真实来源收紧要读 `X-Forwarded-For`，随 P2 反向代理一起做。
 - [ ] **P2 远程访问**：反向代理 TLS + 只读/可写两种 token + 限来源网段。
       判据：外网 HTTPS 可读；无 token 写操作 403。**这条也是手机离线 PWA 的前置（TLS 才有 SW）。**
 - [x] **PWA 壳**：manifest + 图标 + 离线只读缓存。判据：手机主屏启动，断网能看上次的内容。

@@ -88,6 +88,72 @@ def lan_urls(port: int) -> list[str]:
     return out
 
 
+def _host_only(value: str) -> str:
+    """从 Host 头取主机名：`[::1]:8420` → `::1`，`127.0.0.1:8420` → `127.0.0.1`。"""
+    host = (value or "").strip()
+    if host.startswith("["):
+        return host[1:].split("]", 1)[0]
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def is_loopback_client(request: Request) -> bool:
+    """请求是否**来自本机**（桌面壳 / 本机浏览器）。
+
+    先看连接对端地址（`request.client.host`）——它才是「谁在请求」；Host 头只说明
+    「你用哪个名字访问」，已被白名单保证合法，但不代表来源。`request.client` 缺失时
+    （部分 ASGI 传输不填，如 starlette TestClient 默认 `("testclient", 50000)`）
+    回落看 Host 头；两者都判不出本机就按「非本机」处理——fail-closed：宁可让局域网只读，
+    也不要误发写 Cookie（这与「Host 白名单只管合法性」是同一条思路）。
+    """
+    client = getattr(request, "client", None)
+    addr = (getattr(client, "host", "") or "").strip()
+    if addr:
+        return addr in _LOOPBACK
+    return _host_only(request.headers.get("host", "")) in _LOOPBACK
+
+
+def _as_bool(value: Any) -> bool:
+    """把配置值判成布尔，**只认明确的真值**。
+
+    为什么不能直接 `bool(v)`：`config.py::_apply_env_overrides` 会把环境变量覆盖写成
+    字符串，`KNOWATLAS_WEB_ALLOW_LAN_WRITES=false` 时 `bool("false")` 是 **True**——
+    对「安全开关」来说这是把只读误开成可写。这里 fail-closed：认不出真值就按关处理。
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def lan_writes_enabled(cfg: Any) -> bool:
+    """`[web] allow_lan_writes` 是否打开（serve 启动提示与 `/api/session` 共用同一口径）。"""
+    return _as_bool(cfg.get("web.allow_lan_writes", False))
+
+
+def write_cookie_allowed(cfg: Any, request: Request) -> bool:
+    """要不要给这次会话种写 Cookie：本机恒可；局域网看 `[web] allow_lan_writes`（默认 false）。
+
+    为什么默认 false：`serve --host 0.0.0.0` 之后 `/api/session` 原本对任何来访者种 Cookie，
+    同网段设备打开页面即可写库（2026-10-29 实测：LAN 上 `POST /api/entries/…/reject`
+    → 404，即已过守卫）。默认只读把「能看」与「能改」分开，写仍有三条出路（见
+    `_readonly_message`）。
+    """
+    if lan_writes_enabled(cfg):
+        return True
+    return is_loopback_client(request)
+
+
+def _readonly_message(cfg: Any, request: Request, fingerprint: str) -> str:
+    port = _port_of(cfg)
+    host = _host_only(request.headers.get("host", "")) or "127.0.0.1"
+    return (f"局域网只读：本服务只为「本机」种写凭据（当前来源 {host} 不是本机）。三条出路："
+            f"① 回本机操作 http://127.0.0.1:{port}；"
+            "② 在 config 的 [web] 设 allow_lan_writes = true（同网段设备随即可写，需重启 serve）；"
+            f"③ 在页面输入写令牌（服务端当前令牌指纹={fingerprint}，见 serve 启动日志）。"
+            "读操作不受影响。")
+
+
 def check_write_access(request: Request, cfg: Any) -> JSONResponse | None:
     """写操作守卫：Host/Origin 已由中间件校验，这里查 token 与 content-type。"""
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
@@ -108,6 +174,14 @@ def check_write_access(request: Request, cfg: Any) -> JSONResponse | None:
                 or request.cookies.get(_WRITE_COOKIE, "")
                 or request.query_params.get("token", ""))
     if supplied != expected:
+        if not supplied and not write_cookie_allowed(cfg, request):
+            # 局域网只读：既没带凭据、来源又不是本机 —— 与「令牌填错」分开报，
+            # 否则用户只会看到「写操作需 token 头」而无从下手（本机用户仍走原文案）。
+            return JSONResponse(
+                {"error": {"code": "FORBIDDEN_READONLY",
+                           "message": _readonly_message(cfg, request, token_fingerprint(expected))}},
+                status_code=403,
+            )
         return JSONResponse(
             {"error": {"code": "FORBIDDEN",
                        "message": (f"写操作需 {_TOKEN_HEADER} 头（或 ?token=，bookmarklet 用）；"

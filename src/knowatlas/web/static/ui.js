@@ -75,7 +75,13 @@
     dlg.querySelector("#ka-ok").onclick = function () {
       finish(pending && pending.mode === "prompt" ? dlg.querySelector("#ka-input").value : true);
     };
-    dlg.querySelector("#ka-cancel").onclick = function () { finish(false); };
+    // 取消语义按 mode 分：prompt → null（约定「null=取消」，调用方直接 .trim()），
+    // confirm/alert → false。原先不分 mode 一律 false，prompt 的调用方 `t.trim()`
+    // 会 TypeError（2026-10-29 局域网只读令牌弹窗实测暴露，见工单
+    // 变更工单-2026-10-29-局域网写权限收紧.md）。
+    dlg.querySelector("#ka-cancel").onclick = function () {
+      finish(pending && pending.mode === "prompt" ? null : false);
+    };
     dlg.querySelector("#ka-input").addEventListener("keydown", function (e) {
       if (e.key === "Enter") { e.preventDefault(); dlg.querySelector("#ka-ok").click(); }
       e.stopPropagation();  // 防全局快捷键（如 Ctrl+K）在输入时误触

@@ -4,6 +4,51 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 局域网写权限收紧（2026-10-29，`web.allow_lan_writes`）
+
+- **为什么**：上一批（`110c55c`）放开白名单后，`/api/session` 仍对**任何来访者**种写 Cookie——
+  同网段设备打开页面即可改库（实测 `POST /api/entries/…/reject` 回 404，即已过守卫）。
+  用户裁决「全做（后端+前端+测试+文档）」。
+- **口径**：写权限按**客户端地址**判来源，不按 Host（Host 已被白名单保证合法，但它只说明
+  「你用哪个名字访问」，不说明「你从哪儿来」）。`is_loopback_client()` 先看 `request.client.host`，
+  `client` 缺失时回落 Host 头，两者都判不出本机 → 按非本机（fail-closed）。
+- **`/api/session`**：`write_allowed = allow_lan_writes or is_loopback_client`；只有 true 且令牌存在才
+  种 HttpOnly/SameSite=Strict Cookie；响应新增 `write_allowed`（既有 `configured`/`fingerprint`/`cookie`
+  语义不变）。
+- **写守卫**：新增 403 `FORBIDDEN_READONLY`（LAN 无凭据时），文案给三条出路（回本机 / 开
+  `allow_lan_writes` / 页面填令牌）；令牌填错仍是原 `FORBIDDEN`，Host/Origin/content-type/token
+  四条约束全部原样。
+- **前端**（`index.html` / `thread.html`）：`write_allowed=false` 且本地无令牌 → 顶栏「只读」徽标；
+  首次写操作短路到令牌弹窗（存 localStorage，走既有 `X-KnowAtlas-Token` 头），取消则中止、**不发请求**。
+- **顺手修的真 bug**：`ui.js` 的 `#ka-cancel` 不分 mode 一律 `finish(false)`，而 `ka.prompt` 的约定是
+  `null=取消`——调用方 `.trim()` 直接 `TypeError`（headless 实测报文 `t.trim is not a function`）。
+  改成 prompt → null / confirm·alert → false，并给两条调用方加 `typeof t !== "string"` 中止。
+- **安全开关 fail-closed**：`_as_bool()` 只认 `true/1/yes/on`。环境变量覆盖会把布尔写成字符串
+  （`KNOWATLAS_WEB_ALLOW_LAN_WRITES=false`），`bool("false")` 是 **True**——对安全开关等于把只读
+  误开成可写，必须显式解析。
+- **契约**：`CONFIG_SCHEMA_KEYS` **+1**（`web.allow_lan_writes`，默认 false）；`/api/session` 响应 **+1 字段**；
+  错误码 **+1**（`FORBIDDEN_READONLY`）。表结构 / `Entry` 字段 / locator scheme / `SOURCE_TYPES` /
+  `STATUSES` / 能力注册表 / 路由集合（74 条快照）零变更。canary `config_keys` 重录为 `e130e64ada80`。
+- **测试**：`tests/test_lan_access.py` 7 → **15 例**（+6 写权限含字符串 fail-closed、+2 前端静态探针）；
+  `test_web_api.py::test_session_cookie_auto_auth` 补 `client=("127.0.0.1", 0)`；全量
+  **846 passed / 1 skipped**（原 838）；canary 1 passed；`gen_docs --check` 三份 OK
+  （`参考-配置.md` 150 行、`参考-接口.md` 的 `/api/session` 描述随 docstring 更新）。
+- **实测**（临时 `serve --host 0.0.0.0 --port 8499` + 空库沙箱 `temp/ka-lan/`，验完已关，未动 8420）：
+
+  | 场景 | 结果 |
+  |---|---|
+  | loopback `GET /api/session` | 200，`write_allowed=true`，`Set-Cookie: knowatlas_write=…; HttpOnly; SameSite=strict` |
+  | `http://192.168.1.242:8499/api/session` | 200，`write_allowed=false`，**无 Set-Cookie** |
+  | LAN 无凭据 `POST …/reject` | **403 `FORBIDDEN_READONLY`** |
+  | LAN + 正确令牌 / loopback Cookie | 404（过了守卫，条目不存在） |
+  | `KNOWATLAS_WEB_ALLOW_LAN_WRITES=false`（字符串） | 仍只读（fail-closed 生效） |
+  | `…=true` | 恢复旧行为：LAN 种 Cookie + 写通过守卫 |
+  | headless Edge（LAN 页面） | 徽标「只读」可见、写操作弹令牌框、取消 → `{__aborted:true}`、**发出请求数 0**、console 0 错误 |
+  | headless Edge（loopback 页面） | 徽标隐藏、`write_allowed=true` |
+
+- **已知限制**：反代（P2 TLS）下客户端地址是反代自身（loopback），仍会种 Cookie；按真实来源收紧要读
+  `X-Forwarded-For`（仅可信代理），属 P2 单独立项。`write_allowed` 只在页面加载时取一次。
+
 ### 变更工单 · 局域网访问：Host/Origin 白名单按绑定地址派生（2026-10-29，P1）
 
 - **为什么**：白名单原来写死 `127.0.0.1:port` / `localhost:port`，`serve --host 0.0.0.0` 后

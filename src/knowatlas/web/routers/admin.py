@@ -30,7 +30,7 @@ def register(ctx: AppCtx) -> APIRouter:
     router = APIRouter()
     cfg, dl, locators, semantics = ctx.cfg, ctx.dl, ctx.locators, ctx.semantics
     # 安全/令牌助手仍归 api.py（函数内导入，避免 api↔routers 循环）
-    from ..api import _WRITE_COOKIE, check_write_access, token_fingerprint
+    from ..api import _WRITE_COOKIE, check_write_access, token_fingerprint, write_cookie_allowed
 
     # 各知识源配置状态（第五十九批：管理页「数据管理」用）——键集与 config.py
     # 的 CONFIG_KEY 白名单同源；只报已配置与否，不回传任何路径/凭证明文。
@@ -68,20 +68,27 @@ def register(ctx: AppCtx) -> APIRouter:
                 "configured": bool(tok)}
 
     @router.get("/session")
-    def session(response: Response) -> dict:
-        """页面打开时调用一次：服务端把写令牌种进 HttpOnly Cookie，之后浏览器的
+    def session(request: Request, response: Response) -> dict:
+        """页面打开时调用一次：**本机**访问时服务端把写令牌种进 HttpOnly Cookie，之后浏览器的
         同源请求自动携带——**用户不需要手工填任何令牌**（0.2.0 第十七批）。
 
         防护不降级：cookie 是 HttpOnly（JS 读不到明文）+ SameSite=Strict（跨站请求
         不携带）+ 绑定 127.0.0.1 域（别的站点拿不到），Host/Origin 校验照旧。
+
+        局域网来源默认**不种**（`[web] allow_lan_writes=false`，2026-10-29 工单
+        `变更工单-2026-10-29-局域网写权限收紧.md`）：车库里那句「能看 ≠ 能改」。
+        `write_allowed` 回给前端决定「只读徽标」与要不要弹令牌输入；
+        带正确 `X-KnowAtlas-Token` 的写操作仍可过守卫（令牌通道不因只读模式关闭）。
         """
         env_name = str(cfg.get("web.token_env", "KNOWATLAS_WEB_TOKEN"))
         tok = os.environ.get(env_name, "")
-        if tok:
+        write_allowed = write_cookie_allowed(cfg, request)
+        if tok and write_allowed:
             response.set_cookie(_WRITE_COOKIE, tok, httponly=True,
                                 samesite="strict", path="/")
         return {"env_name": env_name, "fingerprint": token_fingerprint(tok),
-                "configured": bool(tok), "cookie": _WRITE_COOKIE if tok else ""}
+                "configured": bool(tok), "cookie": _WRITE_COOKIE if tok else "",
+                "write_allowed": write_allowed}
 
     # ---- MCP 只读查询端点（第四十六批）----
     # v0 形态 = REST 只读投影（/api/mcp/ 命名空间），供 agent 调用；

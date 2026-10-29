@@ -260,6 +260,7 @@
   </details>
   <span class="tb-drag tb-spacer pywebview-drag-region"></span>
   <span id="offline-badge" class="offline-badge" hidden title="离线：可读已缓存内容，写操作需要联网">离线只读</span>
+  <span id="readonly-badge" class="readonly-badge" hidden title="局域网只读：服务端只为本机种写凭据；写操作需输入写令牌，或回本机操作">只读</span>
   <span class="win-ctrls" id="win-ctrls" hidden>
     <button class="wc-btn" id="wc-min" title="最小化">
       <svg width="11" height="11" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1"/></svg>
@@ -421,7 +422,7 @@
     <button type="button" id="add-url-btn">收录</button>
   </div>
 </dialog>
-<script src="/ui.js?v=20261026"></script>
+<script src="/ui.js?v=20261029"></script>
 <script src="/vendor/echarts.min.js"></script>
 <script>
 // 原文链接口径（2026-10-26 P4 后置项 B，实现见 ui.js）：file:// 走站内代理
@@ -447,13 +448,31 @@ function token() { return localStorage.getItem("knowatlas_token") || ""; }
 let sessionInfo = {};
 async function ensureSession() {
   try { sessionInfo = await (await fetch("/api/session")).json(); } catch { sessionInfo = {}; }
+  syncReadonlyBadge();
   return sessionInfo;
 }
+// 局域网只读徽标（2026-10-29 工单）：write_allowed=false = 服务端没给这台设备种写 Cookie
+//（默认只为本机种）。只做提示，不改行为——写仍可走「填令牌」那条路（见 writeJSON）。
+function syncReadonlyBadge() {
+  const badge = document.getElementById("readonly-badge");
+  if (!badge) return;
+  badge.hidden = !(sessionInfo && sessionInfo.write_allowed === false);
+}
 async function writeJSON(url, body) {
+  // 局域网只读：先要令牌，别发注定 403 的请求（令牌走既有 X-KnowAtlas-Token 头，
+  // 只存本浏览器 localStorage，服务端配置不变）。
+  if (sessionInfo && sessionInfo.write_allowed === false && !token()) {
+    const t = await ka.prompt("这台设备是经局域网访问的，服务端默认只读。\n"
+      + "输入写令牌可临时开启（本机浏览器不用填；令牌见 serve 启动日志，指纹 "
+      + (sessionInfo.fingerprint || "—") + "）。", "", "局域网只读");
+    if (t === null) return { __aborted: true };
+    if (typeof t !== "string") return { __aborted: true };   // 取消/异常一律不写
+    if (t.trim()) localStorage.setItem("knowatlas_token", t.trim());
+  }
   // 兜底：仅当服务端未配置令牌（理论上 serve 启动即自动生成，实践中不会发生）
   if (sessionInfo && sessionInfo.configured === false) {
     const t = await ka.prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
-    if (t === null) return { __aborted: true };
+    if (typeof t !== "string") return { __aborted: true };
     localStorage.setItem("knowatlas_token", t.trim());
   }
   const r = await fetch(url, { method: "POST",

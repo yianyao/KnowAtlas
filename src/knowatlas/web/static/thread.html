@@ -18,6 +18,11 @@
           padding: 12px; background: var(--bg-1); }
   main { flex: 1; overflow: auto; padding: 16px; }
   h1 { font-size: 18px; margin: 0 0 4px; font-weight: 500; }
+  /* 局域网只读徽标（工单 变更工单-2026-10-29-局域网写权限收紧.md）：本页不引 components.css，单独定义 */
+  .ro-badge { display: inline-block; font-size: 11px; color: #8FB4E8;
+              background: rgba(143, 180, 232, 0.12); border: 1px solid rgba(143, 180, 232, 0.4);
+              border-radius: 10px; padding: 1px 8px; margin: 2px 0 8px; }
+  .ro-badge[hidden] { display: none; }
   small { color: var(--text-3); }
   .btn { cursor: pointer; border: 1px solid var(--border-2);
          border-radius: var(--radius-ctrl);
@@ -101,6 +106,7 @@
 <aside>
   <div style="margin-bottom:8px"><a href="/index.html" style="color:var(--accent-text);font-size:13px">← 返回工作台</a></div>
   <h1>🧵 线索库</h1>
+  <span id="readonly-badge" class="ro-badge" hidden title="局域网只读：服务端只为本机种写凭据；写操作需输入写令牌，或回本机操作">局域网只读</span>
   <small>主题聚合召回 + 线索串联（完整方案 §9.4）。跨源散落的知识，按主题串成可复用的阅读路径。</small>
   <button id="new-thread" class="btn primary">＋ 新建线索</button>
   <div id="thread-list"><small>加载中…</small></div>
@@ -156,12 +162,28 @@ function esc(s) {
 function token() { return localStorage.getItem("knowatlas_token") || ""; }
 async function ensureSession() {
   try { sessionInfo = await (await fetch("/api/session")).json(); } catch { sessionInfo = {}; }
+  syncReadonlyBadge();
   return sessionInfo;
 }
+// 局域网只读徽标（2026-10-29 工单）：write_allowed=false = 服务端没给这台设备种写 Cookie
+function syncReadonlyBadge() {
+  const badge = document.getElementById("readonly-badge");
+  if (!badge) return;
+  badge.hidden = !(sessionInfo && sessionInfo.write_allowed === false);
+}
 async function writeJSON(url, body) {
+  // 局域网只读：先要令牌，别发注定 403 的请求（令牌走既有 X-KnowAtlas-Token 头）
+  if (sessionInfo && sessionInfo.write_allowed === false && !token()) {
+    const t = await ka.prompt("这台设备是经局域网访问的，服务端默认只读。\n"
+      + "输入写令牌可临时开启（本机浏览器不用填；令牌见 serve 启动日志，指纹 "
+      + (sessionInfo.fingerprint || "—") + "）。", "", "局域网只读");
+    if (t === null) return { __aborted: true };
+    if (typeof t !== "string") return { __aborted: true };   // 取消/异常一律不写
+    if (t.trim()) localStorage.setItem("knowatlas_token", t.trim());
+  }
   if (sessionInfo && sessionInfo.configured === false) {
     const t = await ka.prompt("服务端未读到写令牌环境变量，无法写操作。\n请在启动 serve 的终端查看令牌提示。");
-    if (t === null) return { __aborted: true };
+    if (typeof t !== "string") return { __aborted: true };
     localStorage.setItem("knowatlas_token", t.trim());
   }
   const r = await fetch(url, { method: "POST",
