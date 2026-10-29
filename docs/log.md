@@ -3420,3 +3420,67 @@ baseline 147,059，effective **119.6%**（CRITICAL；19:00 已被 watcher 自动
 
 <!-- HANDOFF {"at":"2026-10-29T19:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-185x191x-r31-实施超大书分卷摄取c1","draft":false,"goal":"R31：C1 分卷摄取落地——kpe_volumes 按章装箱成 v001..、逐卷 extract+导入、卷内/卷间续跑；真数据 259 块 776,043 字 → 2 卷（457,588+318,455）；真 LLM 冒烟 2 卷 18 点、重跑零抽取；785 passed","host":"dsh","kind":"handoff","next":"① 推送本轮提交（main ahead 1，按 AGENTS.local 的 insteadOf/wincred/sslBackend 口径）；② 真库 3 本是否全量重抽需用户裁决（≈¥3–5/本，已有点导入幂等）；③ PDF 取文偏少立项（agentic-ai-guide 34%）需工单+对比数据；④ 边界对缓存（百级再做）/存量 72 对 dupe 复核","not_rerun":"全量 pytest 785/1；canary；gen_docs --check；真 LLM 冒烟（≈¥0.02，数字已记）；temp/verify_volumes_dryrun_20261029.py 彩排；temp/kpe-probe-agentic 切块（96.5s/259 块）；真库 3 本全量重抽","schema":1,"session":"session-6f945ead-be47-45d5-a12c-15cbad948899","status":"CRITICAL","tokens":175890,"verify":"uv run python -m pytest -o addopts= -q -> 785 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_kpe_volumes.py tests/test_kpe_runner.py -> 22 passed"} -->
 
+## 2026-10-29 19:2x–19:5x 推送 R31 + 「PDF 取文偏少 34%」核实（口径误判，不改代码）
+
+**开场三步**（新会话 `session-c66f78f6`）：`session_check` → `NEW_SESSION`(exit 0)，取 R31 交接块
+（`at=2026-10-29T19:12:30`，status=CRITICAL）；`context_probe` → effective **12.2%**
+（17,903 / 147,059，compactions=0，OK）。按交接块执行第 ① 步（推送），并把第 ③ 步（PDF 取文立项）
+做成只读调研。
+
+### ① 推送完成
+
+- 现场：`main...origin/main [ahead 1]`，HEAD `b4b6a21`（R31 分卷摄取）。仓库级 insteadOf 与 origin
+  URL 都是 ghproxy 形态，按 AGENTS.local 口径**两处同时**临时摘除 → `-c credential.helper=wincred
+  -c http.sslBackend=openssl` 推 `origin/main` → **`02d926a..b4b6a21` 成功**，finally 里原样恢复。
+- 网络现场与 10-27 记录不同：**本地代理 7890 已不在监听**（`Connection refused`）；`github.com` 直连
+  IPv4 **通**（`20.205.243.166`，1.6 s / 200），但不带 `-4` 时 curl 会先试 IPv6 挂到超时（12 s 000）。
+  别据此判定"网络断了"——先 `curl -4`。
+- 校验：`git ls-remote origin refs/heads/main` = `b4b6a21…` = 本地 HEAD，`git status -sb` 已同步。
+
+### ② 「PDF 取文偏少 34%」核实：口径误判，PDF 通道内容完整
+
+新增 `docs/design/调研-2026-10-29-PDF取文口径.md`（四支只读探针，零 LLM 零写库，共约 40 s）：
+
+- **正文 2,587,917 字的构成**：空白 1,331,523（51.4%）+ 连字符 353,234（13.7%）+ 管道 227,539（8.8%）
+  + **实字 672,263（26.0%）**——即 markitdown 表格填充把字数吹了 3.85 倍。
+- **三本对照（去空白/管道/破折号后）**：agentic-ai-guide PDF 实字 726,378 vs 正文 672,263 = **108.0%**；
+  AI-Agents-in-Depth 431,854 vs 414,314 = **104.2%**；Hello-Agents 611,538 vs 609,536 = **100.3%**
+  （后者正文本来就是 pdfium 产的）。CJK 逐字集合缺字 12 / 1 / 1 个（全是公式字形）。
+- **逐块**：agentic 259 个 KPE 块里只有 **1 块** 12-gram 覆盖 <50%（chunk#30「3.6 策略梯度」公式段），
+  其余 ≥50%；尾部 26 块（99,856 字）无点是 **Bibliography 参考文献**，0 点属正确结果。
+- **12-gram 双向 82–90% 的缺口 = 阅读顺序差异**（表格内容流 vs 行列），不是缺字：两个方向同时缺 4–18%。
+- 顺带查清：Hello-Agents 的 820 点 `page_start=0` / `section_path=书名`，是 2026-10-28 `_pdf_path()`
+  修 locator **之前** body dump 的产物；另两本 1,373 / 571 点带页码 + 章节，是 PDF 通道产物。
+- 文档面改动（零代码）：`docs/design/知识索引工具-TODO.md` 8.2 节补一条口径更正；新调研文档 §4 给了
+  A/B/C 三选项，**推荐 A（维持 PDF 优先，删掉「34%」口径）**。
+
+### 下一步（按序，首步可直接执行）
+
+1. **等用户裁决两处文字更正**（调研文档 §4）：`kpe_runner.py` 文档字符串第 14 行、
+   `变更工单-2026-10-24-97b-PDF解析.md` §2.1「丢了部分文本」——都要改业务代码/工单文字，按 §1 先批后改。
+2. **交接块 ② 的建议结论**（已写进调研 §5）：agentic / AI-Agents-in-Depth **不建议重抽**（同源文本、
+   覆盖完整，重抽只会产生近义重复点）；Hello-Agents 重抽能补页码/章节，但需先解决「按页段替换旧点」。
+3. 之后仍开放：边界对缓存（百级再做）、存量 72 对 dupe 全量复核。
+
+### 不要重跑
+
+- 本轮四个只读探针（`temp/probe_pdf_vs_body_v2_20261029.py`、`probe_pdf_gap_3books_20261029.py`、
+  `probe_points_gap_20261029.py`、`probe_points_origin_20261029.py`）——数字已记本节；
+- 推送（已 `02d926a..b4b6a21`，远端与本地一致）；
+- 全量 pytest **785/1**、canary、真 LLM 冒烟（R31 交接块已记，本轮未改代码所以未复跑）。
+
+### 验证命令
+
+```powershell
+uv run python temp/probe_pdf_gap_3books_20261029.py    # 三本：PDF 实字 726,378 / 431,854 / 611,538
+uv run python temp/probe_pdf_vs_body_v2_20261029.py    # 正文膨胀拆解 + 12-gram 无序覆盖
+git status -sb                                          # main...origin/main（无 ahead）
+```
+
+### 会话指纹
+
+`session-c66f78f6-fe77-4525-a374-e1d7772d84f8`，compactions=0，tokens≈43,000，
+baseline 147,059，effective≈29%（OK），2026-10-29T19:5x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T19:55:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-192x195x-推送-r31--pdf-取文偏少-34-核实口径误判不改代码","draft":false,"goal":"R31 已推送（b4b6a21）；「PDF 取文偏少 34%」核实为字符口径误判——正文 74% 是表格填充，实字口径 PDF 108%/104%，PDF 通道不丢内容；新增调研文档，零代码改动","host":"dsh","kind":"handoff","next":"① 等用户裁决两处文字更正（kpe_runner.py 文档字符串、97b 工单 §2.1）；② 真库 3 本重抽建议：agentic / AI-Agents-in-Depth 不重抽（同源、覆盖完整），Hello-Agents 需先做按页段替换；③ 边界对缓存（百级再做）/ 存量 72 对 dupe 复核","not_rerun":"四个只读探针 probe_pdf_vs_body_v2 / probe_pdf_gap_3books / probe_points_gap / probe_points_origin（数字已记本轮）；推送 02d926a..b4b6a21；全量 pytest 785/1","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"WARN","tokens":43000,"verify":"uv run python temp/probe_pdf_gap_3books_20261029.py -> agentic 726,378 vs 672,263（108.0%）；git status -sb -> main...origin/main"} -->
+

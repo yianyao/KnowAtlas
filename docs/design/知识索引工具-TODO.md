@@ -350,6 +350,7 @@ reader: 执行者（人与 agent）
 - [x] 8.2 办公文档 / PDF（**97b 已完成 2026-10-24**：`fetchers/pdf_fast.py` PDFium 逃生通道 + `file_reader._read_pdf` 双通道 + `[fetch].pdf_backend` + `clean_paged` 页边界规则 + 大文件闸门 + 扫描件判定；11 例新测 + 7 例页边界用例，全量绿）
       - 探针：真实 docx / pptx / PDF 各 1 枚入库，页眉页脚与页码不进正文 —— **PDF 已验**（厦大删 60 个页边页码 + 410 行跨页重复讲义标题；正文残留的独立数字抽样确认是 `01/03` 步骤号、公式 `6`、`0.333` 等数据）；**docx/pptx 未验**（本批无样本，Office 页眉页脚继续靠通用段的"重复行 + 周期性"规则）
       - **实测（2026-10-24）**：`Hello-Agents` 97.9 MB/720 页 25 分钟 → **3.29 s**；`厦大讲义` 51 MB/882 页 8 分钟未完 → **1.96 s**；其余 9 份 PDF 留在 markitdown（pdfium 对 `agentic-ai-guide` 只取到 30% 字符、对 `AI-Agents-in-Depth` 43%，所以 auto 阈值定在 **30 MB / 1500 页**，pdfium 只做逃生通道）
+        - **2026-10-29 复核（口径更正）**：「30% / 43%」是**字符口径**差——markitdown 正文 74% 是表格填充（空白 + `|` + `---`），去格式后的**实字** pdfium 反而是正文的 **108% / 104%**（CJK 逐字集合几乎全含，逐块比对仅 1/259 低于 50%）。结论：PDF 通道不丢内容，见 `调研-2026-10-29-PDF取文口径.md`；阈值与「PDF 原件优先」口径都不用改
       - **扫描件**：平均每页 <20 字符 → `DegradedParseError("scanned_pdf")`，不产条目正文（OCR 不在本期）
       - 遗留：`content_store` 6 行孤儿正文（反复 `--force` 重灌留下）→ 见 8.15
 - [x] 8.3 书签 + HTML 网页（`adapters/bookmark.py` 已就绪：配 `paths.edge|chrome` 后跑通；`http_simple` 接通用段清洗；导航/按钮墙/骨架不产条目）
