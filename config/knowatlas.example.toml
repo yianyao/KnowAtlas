@@ -146,7 +146,7 @@ interval_seconds = 600                   # 巡检周期（秒）
 max_entries_per_run = 10                 # 每轮总条数上限（费用护栏；0=不限）
 max_retries      = 2                     # 单条目失败重试上限，超限进 meta.ingest.dead 不再烧钱
 allow_kpe        = true                  # 允许自动走 KPE（PDF 书/超长文档）
-kpe_max_chars    = 600000                # 单本进 KPE 的正文字数上限（防 250 万字级误入）
+kpe_max_chars    = 600000                # 单卷上限（按 chunks 实际字符）：超了按章分卷 v001.. 续跑
 
 [points]                                 # 抽点阈值（KPE 与管道同源，改一处两边生效）
 max_per_chunk    = 6                     # 单块/单条最多几个点（KPE --max-points；管道 split 上限）

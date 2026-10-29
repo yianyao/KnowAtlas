@@ -4,6 +4,35 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 超大书分卷摄取 C1：按章装箱多卷 + 断点续跑（2026-10-29，R31）
+
+- **为什么**：真库 3 条正文超过 `[ingest] kpe_max_chars` 的 PDF（agentic-ai-guide 2,587,917 /
+  AI-Agents-in-Depth 1,045,082 / Hello-Agents 674,468 字）在 `run_kpe_for_entry` 里**只会硬报错**
+  （`正文 x 字超过 KPE 上限`），重抽/换模型重跑这条路是堵死的。用户裁决走 C1 分卷（不提高上限、不放弃）。
+- **判据修正（本轮关键）**：上限该量的是**真正喂给 LLM 的 chunks 字符数**，不是正文字数——
+  实测 agentic-ai-guide 599 页 PDF 只抽出 **776,043 字**（正文 2.59M），旧口径按正文判，误杀。
+- **方案**（新 `pipeline/kpe_volumes.py` + `kpe_runner` 改造）：先整本 `chunks` 一次（本地免费、幂等）；
+  `Σ块.chars ≤ 上限` → **原单卷路径，行为逐字不变**；超过 → 按「章 + 上限」贪心装箱成
+  `data/kpe/<entry>/v001..`（卷是 chunks 的连续区间，不重排/不丢块；块 id 沿用整本，页码与
+  `section_path` 不丢）→ 逐卷 `extract` + 逐卷 `import_kpe_dir` 累加入库。断点续跑：卷内靠 KPE 的
+  `done.jsonl`/`cache/`，卷间靠「该卷块全 done → 跳过 extract」（全完成时不需要 LLM key 也能收尾）；
+  某卷失败 → 已完成的卷照常入库、返回 `status=error` + `volumes_done=k`，下一轮从该卷续跑。
+- **契约**：表结构 / 字段 / `meta` 顶层键 / locator / `STATUSES` / REST / `CONFIG_SCHEMA_KEYS` **零变化**
+  （卷大小复用 `kpe_max_chars`，不加开关）；`run_kpe_for_entry` 返回**增量**加 `mode` / `volumes` /
+  `volumes_done` / `volume_stats` / `volume_plan`；`meta.ingest` 增量记 `mode`/`volumes`；
+  磁盘布局新增 `data/kpe/<entry>/vNNN/`。`kpe_max_chars` 的语义从「正文字数硬上限」改为「单卷上限」。
+- **测试**：新增 `tests/test_kpe_volumes.py`（11 例：装箱不丢块/不超限/章边界优先/单块超限独占、
+  卷完成判定、卷目录与索引结构）+ `tests/test_kpe_runner.py` 扩 6 例（单卷不变、多卷、续跑跳过 extract、
+  某卷失败保留已完成进度、dry-run 只报计划）；全量 **785 passed / 1 skipped**（原 769）；
+  canary 零漂移（无新能力）；`gen_docs --check` 三份 OK。
+- **真数据彩排（零成本）**：`temp/verify_volumes_dryrun_20261029.py` 用已切好的 259 块/776,043 字 →
+  **2 卷**（457,588 + 318,455），无丢块、无超限、零 LLM、不落卷目录。
+- **真 LLM 冒烟（库副本）**：`temp/verify_volumes_live_20261029.py`，4 块/16,523 字 → 2 卷全部完成，
+  逐卷导入 **10 + 8 = 18 点**；**重跑一次** → `llm=None`、`points=0`（零抽取、导入幂等）。
+- **已知遗留**：agentic-ai-guide 的 PDF 只有 871,299 字（正文 34%），按 PDF 分卷只能覆盖该书三成；
+  是否改成「正文更全就用正文」（会丢页码/章节路径）需另立项（用户 2026-10-29 裁决：本轮只记遗留）。
+  换 `points.chunk_chars` 后不会自动作废旧卷，需先删 `data/kpe/<entry>/`。
+
 ### 变更工单 · 点级去重误并修法：规则挑边界对 + LLM 裁定（2026-10-29，R30）
 
 - **为什么**：`dedup_points` 只看向量余弦（≥0.92），R28 人工复核已撤销 5 对「同模板不同事实」的误并；

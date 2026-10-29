@@ -3358,3 +3358,65 @@ baseline 147,059，effective **98.6%**（CRITICAL），2026-10-29T12:4x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-29T12:45:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-122x124x-r30-实施dedupe-误并修法规则挑边界对--llm-裁定","draft":false,"goal":"R30：①点分诊补全 642 条（全库 kind 5,607/5,607）；②dedupe 误并修法落地——dupe_guard 规则挑边界对 + point_dupe_judge@1.0.0 裁定，真库实跑 dupes 0 / vetoed 5（6 对误并全拦住），769 passed","host":"dsh","kind":"handoff","next":"① 超大书分卷摄取（C1，用户已裁决）：kpe_runner 按 section_path 装箱 ≤kpe_max_chars 多卷、逐卷跑、断点续跑；真库 3 条待覆盖（2.59M/1.05M/674k 字）；② 边界对缓存仅在涨到百级时做；③ 存量 72 对 dupe 全量复核（如需另立项）","not_rerun":"全量 pytest 769/1；canary；gen_docs --check；ksync --embed 全量重嵌入（56 分钟）；temp 下 4 个探针 + verify_dedup_guard_20261029.py 彩排；kpoints --triage（幂等 0 候选）","schema":1,"session":"session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08","status":"CRITICAL","tokens":144900,"verify":"uv run python -m pytest -o addopts= -q -> 769 passed, 1 skipped；uv run python -m knowatlas ksync --embed -> 去重 dupes 0 / risky 5 / vetoed 5"} --><!-- HANDOFF {"at":"2026-10-29T12:26:12.248360+08:00","compactions":0,"doc":"docs/交接/2026-10-29-1226.md","draft":true,"goal":"上下文到 HANDOFF（85.4%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08","status":"HANDOFF","tokens":125543,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 
+<!-- HANDOFF {"at":"2026-10-29T12:32:12.587125+08:00","compactions":0,"doc":"docs/交接/2026-10-29-1232.md","draft":true,"goal":"上下文到 CRITICAL（101.5%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-73f76b19-54c0-4eca-83cb-ac4c88bd8c08","status":"CRITICAL","tokens":149210,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-29T19:00:11.571706+08:00","compactions":0,"doc":"docs/交接/2026-10-29-1900.md","draft":true,"goal":"上下文到 CRITICAL（96.2%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-6f945ead-be47-45d5-a12c-15cbad948899","status":"CRITICAL","tokens":141440,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-29 18:5x–19:1x R31 实施：超大书分卷摄取（C1）
+
+**开场三步**（新会话 `session-6f945ead`）：`session_check` → `NEW_SESSION`(exit 0)，交接块取 R30
+（`at=2026-10-29T12:45`）；`context_probe` → effective **12.2%**（17,979 / 147,059，compactions=0）。
+用户批「按块级装箱方案实施」，并裁定「PDF 取文偏少」只记遗留、本轮不改。
+
+### 落地（工单 `docs/design/变更工单-2026-10-29-超大书分卷摄取.md`）
+
+1. 新增 `pipeline/kpe_volumes.py`（纯规则 + 卷目录读写）：`chapter_of` / `pack_volumes`
+   （超上限必切；章变了且装满 75% 才切；单块超限独占一卷；卷 = chunks 连续区间）/
+   `write_volumes`（`vNNN/{manifest.json,chunks.jsonl}` + `volumes.json` 索引，`book` 改写为条目标题）/
+   `volume_complete` / `volume_stats` / `total_chars`。
+2. `pipeline/kpe_runner.py`：删掉「正文超上限硬报错」；**先整本 chunks 一次**（`_chunks_ready` 比对
+   source+params 复用），`Σ块.chars ≤ kpe_max_chars` → 原单卷路径逐字不变，超过 → 逐卷 `extract`
+   （后端 failover 抽出 `_extract()` 复用）+ 逐卷 `import_kpe_dir`；**卷全 done → 跳过 extract**
+   （无 LLM key 也能收尾）；某卷失败 → 已完成卷照常入库、`status=error` + `volumes_done=k`。
+   返回增量加 `mode`/`volumes`/`volumes_done`/`volume_stats`/`volume_plan`；dry-run 只报卷计划（零切块零 LLM）。
+3. `pipeline/ingest.py`：`meta.ingest` 增量记 `mode`/`volumes`。
+4. `config.py::ingest_kpe_max_chars` 语义改为「单卷上限（按 chunks 实际字符）」；
+   `config/knowatlas.example.toml` 注释同步 → `docs/参考-配置.md` 已重新生成。
+
+### 验收（现场数字，别重跑）
+
+- 全量 `pytest -o addopts= -q` → **785 passed / 1 skipped**（769 + 16：`test_kpe_volumes.py` 11 例、
+  `test_kpe_runner.py` 新增 5 例）；canary 1 passed（无新能力，指纹不变）；`gen_docs` 三份 OK。
+- **真数据零成本彩排** `temp/verify_volumes_dryrun_20261029.py`：复用 `temp/kpe-probe-agentic`
+  已切好的 **259 块 / 776,043 字**（599 页 PDF，切块 96.5 s）→ **2 卷**（457,588 + 318,455），
+  无丢块、无超限、零 LLM、未落卷目录。
+- **真 LLM 冒烟**（库副本 `temp/c1-live/kb-copy.db`，`temp/verify_volumes_live_20261029.py`）：
+  4 块 / 16,523 字 → `mode=volumes / volumes=2 / volumes_done=2`，逐卷导入 **10 + 8 = 18 点**；
+  **重跑一次** → `llm=None`、`points=0`（零抽取、导入幂等），库内仍是 18 点。成本 ≈ ¥0.02。
+- 坑：`inline_content` 上限 4,096，长正文必须走 `content_store`（`put_content(FetchResult(...))`）。
+
+### 下一步（按序，首步可直接执行）
+
+1. **推送**：本轮提交在本地（`main` 将 ahead 1），按 AGENTS.local 的「摘 insteadOf + origin 改直连 +
+   `-c credential.helper=wincred -c http.sslBackend=openssl`」推 `origin/main`。
+2. **真库 3 本是否重抽**（费用决定，需用户点头）：agentic-ai-guide / AI-Agents-in-Depth / Hello-Agents
+   现在都能分卷跑（已有点 1,373 / 571 / 820，导入幂等），但全量重抽 ≈ ¥3–5 × 3 本。
+3. **PDF 取文偏少立项**（本轮裁决只记遗留）：agentic-ai-guide PDF 只抽 871,299 字（正文 2,587,917，
+   34%）；要覆盖全书得改「正文更全就用正文」口径，会丢页码/章节路径，需工单 + 对比数据。
+4. 边界对缓存仅在涨到百级时做；存量 72 对 dupe 全量复核（如需另立项）。
+
+### 不要重跑
+
+- 全量 pytest **785/1**、canary、`gen_docs --check`；
+- 真 LLM 冒烟（已花 ≈¥0.02，数字已记本节）与 dry-run 彩排（`temp/verify_volumes_dryrun_20261029.py`）；
+- `temp/kpe-probe-agentic` 的切块（96.5 s，259 块，已复用）；**不要**对真库 3 本做全量重抽；
+- 若只是验证代码，用 `tests/test_kpe_volumes.py` + `tests/test_kpe_runner.py`（0.2 s，零网络）。
+
+### 会话指纹
+
+`session-6f945ead-be47-45d5-a12c-15cbad948899`，compactions=0，tokens≈175,890，
+baseline 147,059，effective **119.6%**（CRITICAL；19:00 已被 watcher 自动写过一次草稿交接），
+2026-10-29T19:12+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T19:12:30+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-185x191x-r31-实施超大书分卷摄取c1","draft":false,"goal":"R31：C1 分卷摄取落地——kpe_volumes 按章装箱成 v001..、逐卷 extract+导入、卷内/卷间续跑；真数据 259 块 776,043 字 → 2 卷（457,588+318,455）；真 LLM 冒烟 2 卷 18 点、重跑零抽取；785 passed","host":"dsh","kind":"handoff","next":"① 推送本轮提交（main ahead 1，按 AGENTS.local 的 insteadOf/wincred/sslBackend 口径）；② 真库 3 本是否全量重抽需用户裁决（≈¥3–5/本，已有点导入幂等）；③ PDF 取文偏少立项（agentic-ai-guide 34%）需工单+对比数据；④ 边界对缓存（百级再做）/存量 72 对 dupe 复核","not_rerun":"全量 pytest 785/1；canary；gen_docs --check；真 LLM 冒烟（≈¥0.02，数字已记）；temp/verify_volumes_dryrun_20261029.py 彩排；temp/kpe-probe-agentic 切块（96.5s/259 块）；真库 3 本全量重抽","schema":1,"session":"session-6f945ead-be47-45d5-a12c-15cbad948899","status":"CRITICAL","tokens":175890,"verify":"uv run python -m pytest -o addopts= -q -> 785 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_kpe_volumes.py tests/test_kpe_runner.py -> 22 passed"} -->
+

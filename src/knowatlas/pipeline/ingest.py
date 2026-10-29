@@ -327,6 +327,8 @@ def run_ingest_pass(cfg: Any, dl: Any, semantics: Any = None,
                     if not dry_run:
                         _mark_meta(dl, e.id, {"route": "kpe",
                                               "reason": "pdf_book_or_large",
+                                              "mode": res.get("mode"),
+                                              "volumes": res.get("volumes"),
                                               "chunks": res.get("chunks"),
                                               "points": res.get("points"),
                                               "at": now_iso})

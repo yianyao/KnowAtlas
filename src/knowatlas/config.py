@@ -138,7 +138,11 @@ class Config:
 
     @property
     def ingest_kpe_max_chars(self) -> int:
-        """单本进 KPE 的正文字数上限（防 250 万字级误入，堵死一轮巡检）。"""
+        """单卷上限（工单 2026-10-29《超大书分卷摄取》C1）。
+
+        按 **chunks 实际字符数** 判定：超过就按章装箱成 `v001..` 多卷、逐卷抽取、断点续跑
+        （旧口径「正文字数超了硬报错」已废弃——正文 2.59M 的书 PDF 通道可能只有 776k）。
+        """
         return max(10000, int(self.get("ingest.kpe_max_chars", 600000)))
 
     # ---- 抽点阈值（KPE 与管道同源，工单 §2.1）----

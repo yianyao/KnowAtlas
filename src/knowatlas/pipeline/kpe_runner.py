@@ -8,6 +8,13 @@
 - 幂等：`out_dir` 固定为 `data/kpe/<entry_id>/`，KPE 自身用 `cache/` + `done.jsonl` 续跑；
   重复调用只会补没跑完的块（`--retry-failed` 补齐失败块，不重复花钱）。
 - 失败不抛业务异常：返回 `{"status": "error", "error": ...}`，由调用方记 `meta.ingest`。
+
+超大书（工单 2026-10-29《超大书分卷摄取》C1）：
+- **先切块、再决定单卷/多卷**。上限量的是「真正喂给 LLM 的 chunks 字符数」，不是正文字数
+  （真库 agentic-ai-guide 正文 2.59M、PDF 通道只有 776k；旧代码按正文判上限，直接堵死）；
+- `Σ块.chars <= [ingest] kpe_max_chars` → 单卷，行为与旧版逐字相同；
+- 超过 → `kpe_volumes.pack_volumes()` 按章装箱成 `v001..`，逐卷 `extract` + 逐卷导入；
+  卷内靠 `done.jsonl`、卷间靠 `volume_complete()` 断点续跑（全完成时不需要 LLM key）。
 """
 
 from __future__ import annotations
@@ -20,11 +27,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
+from .kpe_volumes import (pack_volumes, total_chars, volume_complete,
+                          volume_stats, write_volumes)
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _KPE_ROOT = _REPO_ROOT / "tools" / "kpe"
 _CHUNK_TIMEOUT = 1800     # 大 PDF 解析 + 分块
-_EXTRACT_TIMEOUT = 3600   # 全本抽取（4 并发、数百块）
+_EXTRACT_TIMEOUT = 3600   # 单卷抽取（4 并发、数百块）
 _MAX_POINTS_SUPPORTED: bool | None = None
+_IMPORT_KEYS = ("created", "linked", "skipped", "dropped_front", "empty", "offset_ok")
 
 
 def kpe_root() -> Path:
@@ -154,24 +165,157 @@ def _tail(text: str, limit: int = 300) -> str:
     return (text or "").strip()[-limit:]
 
 
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _read_chunks(out: Path) -> list[dict[str, Any]]:
+    """读整本 chunks.jsonl（坏行跳过，与 `kpe_import._read_jsonl` 同口径）。"""
+    rows: list[dict[str, Any]] = []
+    path = out / "chunks.jsonl"
+    if not path.is_file():
+        return rows
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict):
+                rows.append(obj)
+    return rows
+
+
+def _chunks_ready(out: Path, src: Path, chunk_chars: int) -> bool:
+    """整本切块是否可复用：源路径与切块参数都对得上才复用它（否则重切）。
+
+    2026-10-29 C1：切块从「每次跑」变成「先切一次、之后复用」——大 PDF 解析要 1–2 分钟，
+    而 chunks 决定卷划分与 chunk id。**换 `points.chunk_chars` 需先删 `data/kpe/<entry>/`**
+    （id 与卷划分都会变，旧卷缓存作废），这条写在变更工单里。
+    """
+    manifest = _read_json(out / "manifest.json")
+    if not isinstance(manifest, dict) or not (out / "chunks.jsonl").is_file():
+        return False
+    if str(manifest.get("source") or "") != str(src.resolve()):
+        return False
+    params = manifest.get("params") or {}
+    try:
+        return (int(params.get("target_chars") or 0) == int(chunk_chars)
+                and int(params.get("max_chars") or 0) == int(chunk_chars) + 2000)
+    except (TypeError, ValueError):
+        return False
+
+
+def _extract(out: Path, cfg: Any, max_points: int) -> tuple[str, str]:
+    """在 `out` 目录跑一次 extract；后端逐个 failover。返回 (成功的 llm 标签, 错误)。
+
+    成功时错误为空；失败时标签为空。已成功的块在 `cache/` 里，`--retry-failed` 只补失败块，
+    换后端不会重复花钱——单卷与分卷共用这条口径。
+    """
+    usable = [t for t in _llm_targets(cfg) if t[0] and t[1] and os.environ.get(t[2])]
+    if not usable:
+        return "", "LLM 未配置（base_url/model/api_key_env）——KPE 无法抽取"
+    last_error = ""
+    for base_url, model, key_env in usable:
+        extract_args = ["extract", str(out), "--base-url", base_url, "--model", model,
+                        "--api-key-env", key_env, "--workers", "2",
+                        "--retry-failed"]
+        if _supports_max_points():
+            extract_args.extend(["--max-points", str(max_points)])
+        try:
+            res = _run(extract_args, _EXTRACT_TIMEOUT)
+        except (OSError, subprocess.SubprocessError) as exc:
+            last_error = f"extract 启动失败（{model}@{base_url}）：{exc}"
+            continue
+        if res.returncode == 0:
+            return f"{model}@{base_url}", ""
+        last_error = (f"extract 失败（{res.returncode}，{model}@{base_url}）："
+                      f"{_tail(res.stderr or res.stdout)}")
+    return "", last_error
+
+
+def _acc_import(stats: dict[str, Any], imported: dict[str, Any]) -> None:
+    """把一次导入的计数并进 stats（分卷时逐卷累加；单卷只有一次）。"""
+    stats["points"] += int(imported.get("created") or 0) + int(imported.get("linked") or 0)
+    agg = stats.get("imported") or {}
+    for key in _IMPORT_KEYS:
+        if key in imported:
+            agg[key] = int(agg.get(key) or 0) + int(imported.get(key) or 0)
+    stats["imported"] = agg
+
+
+def _finish_volumes(stats: dict[str, Any], done_stats: list[dict[str, Any]],
+                    vols: list[Any], *, error: str = "") -> dict[str, Any]:
+    """收尾：记每卷现场、已完成卷数；有错或没跑完 → status=error（下轮续跑）。"""
+    stats["volume_stats"] = done_stats
+    stats["volumes_done"] = sum(1 for v in done_stats if v.get("complete"))
+    if error:
+        stats["error"] = error
+        stats["status"] = "error"
+    elif stats["volumes_done"] < len(vols):
+        stats["status"] = "error"
+        stats["error"] = f"部分卷未完成（{stats['volumes_done']}/{len(vols)}）"
+    return stats
+
+
+def _run_volumes(cfg: Any, dl: Any, entry: Any, out: Path, vols: list[Any],
+                 stats: dict[str, Any], *, import_kpe_dir: Any,
+                 max_points: int, backup: bool) -> dict[str, Any]:
+    """逐卷 extract + 导入；某卷失败就停下（已完成的卷照常入库，下轮续跑）。"""
+    done_stats: list[dict[str, Any]] = []
+    for vol in vols:
+        vdir = out / vol.dirname
+        if not volume_complete(vdir, vol.chunk_ids):
+            llm, err = _extract(vdir, cfg, max_points)
+            if err:
+                prefix = (f"{vol.dirname}（块 #{vol.summary()['first_index']}"
+                          f"..#{vol.summary()['last_index']}）：")
+                # 失败也要把该卷**已产出的点**导入：进度可见，下一轮只补没跑的块。
+                done = volume_stats(vdir)
+                if done.get("points"):
+                    try:
+                        _acc_import(stats, import_kpe_dir(
+                            cfg, dl, vdir, entry_id=entry.id, backup=backup,
+                            dry_run=False))
+                    except Exception as exc:  # noqa: BLE001 —— 导入失败不该盖掉抽取错误
+                        err += f"；导入失败：{type(exc).__name__}: {exc}"
+                done_stats.append(done)
+                return _finish_volumes(stats, done_stats, vols, error=prefix + err)
+            stats["llm"] = llm
+        try:
+            _acc_import(stats, import_kpe_dir(
+                cfg, dl, vdir, entry_id=entry.id, backup=backup, dry_run=False))
+        except Exception as exc:  # noqa: BLE001 —— 单卷导入失败不该炸整轮巡检
+            done_stats.append(volume_stats(vdir))
+            return _finish_volumes(
+                stats, done_stats, vols,
+                error=f"{vol.dirname} 导入失败：{type(exc).__name__}: {exc}")
+        done_stats.append(volume_stats(vdir))
+    return _finish_volumes(stats, done_stats, vols)
+
+
 def run_kpe_for_entry(cfg: Any, dl: Any, entry: Any, body: str, *,
                       out_root: Path | None = None, dry_run: bool = False,
                       backup: bool = False) -> dict[str, Any]:
     """对单条目跑 KPE（chunks → extract → 导入点层）；返回统计 dict。
 
-    body：条目正文（用于非 PDF 的 md dump，同时给字数上限护栏）。
+    body：条目正文（用于非 PDF 的 md dump；上限已改按 chunks 实际字符数判定）。
     """
     from .kpe_import import import_kpe_dir
 
     stats: dict[str, Any] = {"entry_id": entry.id, "title": str(entry.title)[:40],
-                             "status": "ok", "chunks": 0, "points": 0,
+                             "status": "ok", "mode": "single", "chunks": 0,
+                             "points": 0, "volumes": 0, "volumes_done": 0,
                              "dry_run": dry_run}
     if not available():
         return {**stats, "status": "error", "error": "KPE 子树不存在（tools/kpe）"}
     max_chars = int(getattr(cfg, "ingest_kpe_max_chars", 600000))
-    if len(body) > max_chars:
-        return {**stats, "status": "error",
-                "error": f"正文 {len(body):,} 字超过 KPE 上限 {max_chars:,}"}
     chunk_chars = int(getattr(cfg, "points_chunk_chars", 6000))
     max_points = int(getattr(cfg, "points_max_per_chunk", 6))
 
@@ -189,56 +333,67 @@ def run_kpe_for_entry(cfg: Any, dl: Any, entry: Any, body: str, *,
     stats["source"] = str(src)
 
     if dry_run:
+        # 试跑零成本：不切块、不调 LLM。已有整本 chunks 时按当前配置报卷计划。
+        planned = _read_chunks(out)
+        if planned:
+            total = total_chars(planned)
+            stats["chunks"] = len(planned)
+            if total > max_chars:
+                vols = pack_volumes(planned, max_chars)
+                stats.update(mode="volumes", volumes=len(vols),
+                             volume_plan=[v.summary() for v in vols])
+        else:
+            stats["would_chunk"] = True
         return {**stats, "status": "ok", "dry_run": True}
 
-    chunks_args = ["chunks", str(src), "--out", str(out),
-                   "--target-chars", str(chunk_chars),
-                   "--max-chars", str(chunk_chars + 2000),
-                   "--book-title", str(entry.title or src.stem)]
-    try:
-        res = _run(chunks_args, _CHUNK_TIMEOUT)
-    except (OSError, subprocess.SubprocessError) as exc:
-        return {**stats, "status": "error", "error": f"chunks 启动失败：{exc}"}
-    if res.returncode != 0:
-        return {**stats, "status": "error",
-                "error": f"chunks 失败（{res.returncode}）：{_tail(res.stderr or res.stdout)}"}
-
-    usable = [t for t in _llm_targets(cfg) if t[0] and t[1] and os.environ.get(t[2])]
-    if not usable:
-        return {**stats, "status": "error",
-                "error": "LLM 未配置（base_url/model/api_key_env）——KPE 无法抽取"}
-    last_error = ""
-    for base_url, model, key_env in usable:
-        extract_args = ["extract", str(out), "--base-url", base_url, "--model", model,
-                        "--api-key-env", key_env, "--workers", "2",
-                        "--retry-failed"]
-        if _supports_max_points():
-            extract_args.extend(["--max-points", str(max_points)])
+    # ---- 1) 整本切块（本地免费、幂等；决定卷划分与 chunk id）----
+    if not _chunks_ready(out, src, chunk_chars):
+        chunks_args = ["chunks", str(src), "--out", str(out),
+                       "--target-chars", str(chunk_chars),
+                       "--max-chars", str(chunk_chars + 2000),
+                       "--book-title", str(entry.title or src.stem)]
         try:
-            res = _run(extract_args, _EXTRACT_TIMEOUT)
+            res = _run(chunks_args, _CHUNK_TIMEOUT)
         except (OSError, subprocess.SubprocessError) as exc:
-            last_error = f"extract 启动失败（{model}@{base_url}）：{exc}"
-            continue
-        if res.returncode == 0:
-            stats["llm"] = f"{model}@{base_url}"
-            break
-        last_error = (f"extract 失败（{res.returncode}，{model}@{base_url}）："
-                      f"{_tail(res.stderr or res.stdout)}")
-        # 402/401/404 这类「这个后端不行」换个后端还有救；已成功的块在 cache 里，
-        # `--retry-failed` 只补失败块，不会重复花钱。
-    else:
-        return {**stats, "status": "error", "error": last_error}
+            return {**stats, "status": "error", "error": f"chunks 启动失败：{exc}"}
+        if res.returncode != 0:
+            return {**stats, "status": "error",
+                    "error": f"chunks 失败（{res.returncode}）：{_tail(res.stderr or res.stdout)}"}
+    chunks = _read_chunks(out)
+    if not chunks:
+        return {**stats, "status": "error",
+                "error": "没有分出任何块（检查源文件/目录解析）"}
+    stats["chunks"] = len(chunks)
+    total = total_chars(chunks)
 
-    try:
-        imported = import_kpe_dir(cfg, dl, out, entry_id=entry.id,
-                                  backup=backup, dry_run=False)
-    except Exception as exc:  # noqa: BLE001 —— 导入失败不该炸整轮巡检
-        return {**stats, "status": "error", "error": f"导入失败：{type(exc).__name__}: {exc}"}
-    try:
-        manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
-        stats["chunks"] = int(manifest.get("chunk_count") or 0)
-    except (OSError, ValueError):
-        stats["chunks"] = 0
-    stats["points"] = int(imported.get("created") or 0) + int(imported.get("linked") or 0)
-    stats["imported"] = imported
-    return stats
+    # ---- 2) 单卷：与旧版逐字相同（含 body 超上限的老书，只要 PDF 通道装得下）----
+    if total <= max_chars:
+        llm, err = _extract(out, cfg, max_points)
+        if err:
+            return {**stats, "status": "error", "error": err}
+        stats["llm"] = llm
+        try:
+            imported = import_kpe_dir(cfg, dl, out, entry_id=entry.id,
+                                      backup=backup, dry_run=False)
+        except Exception as exc:  # noqa: BLE001 —— 导入失败不该炸整轮巡检
+            return {**stats, "status": "error",
+                    "error": f"导入失败：{type(exc).__name__}: {exc}"}
+        stats["chunks"] = int((_read_json(out / "manifest.json") or {}).get("chunk_count")
+                              or len(chunks))
+        stats["points"] = int(imported.get("created") or 0) + int(imported.get("linked") or 0)
+        stats["imported"] = imported
+        return stats
+
+    # ---- 3) 多卷：按章装箱 → 逐卷 extract + 导入（断点续跑）----
+    manifest = _read_json(out / "manifest.json")
+    if not isinstance(manifest, dict):
+        manifest = {"book": str(entry.title or src.stem), "source": str(src.resolve()),
+                    "chunk_count": len(chunks)}
+    vols = pack_volumes(chunks, max_chars)
+    write_volumes(out, manifest, vols, book=str(entry.title or src.stem),
+                  max_chars=max_chars)
+    stats.update(mode="volumes", volumes=len(vols),
+                 volume_plan=[v.summary() for v in vols])
+    return _run_volumes(cfg, dl, entry, out, vols, stats,
+                        import_kpe_dir=import_kpe_dir, max_points=max_points,
+                        backup=backup)
