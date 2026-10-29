@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>线索库 · 知道 KnowAtlas</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#12151C">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/tokens.css">
 <style>
   :root { color-scheme: dark; }
@@ -78,6 +83,17 @@
   dialog input:focus { border-color: var(--accent); outline: none; }
   dialog .btns { display: flex; gap: 8px; justify-content: flex-end; }
   dialog button { cursor: pointer; padding: 4px 12px; }
+  /* 批 98：窄屏——左侧 300px 线索列表改上下堆叠，对话框不越界 */
+  @media (max-width: 820px) {
+    body { flex-direction: column; height: auto; min-height: 100dvh; }
+    aside { width: auto; max-height: 42vh; border-inline-end: 0;
+            border-bottom: 1px solid var(--border-1); }
+    main { padding: 12px; }
+    #recall-box { flex-wrap: wrap; }
+    #recall-input { min-width: 0; }
+    .item { flex-wrap: wrap; gap: 4px; }
+    dialog { min-width: 0; width: calc(100vw - 32px); box-sizing: border-box; }
+  }
 </style>
 <link rel="stylesheet" href="/ui.css">
 </head>
@@ -412,6 +428,12 @@ document.getElementById("recall-input").addEventListener("keydown", (e) => {
   const id = params.get("id");
   if (id) openThread(id);
 })();
+</script>
+<script>
+// PWA 壳（批 98）：SW 仅在安全上下文（localhost / https）注册；内网 http 静默跳过
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+}
 </script>
 </body>
 </html>

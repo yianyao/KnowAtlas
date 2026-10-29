@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>关系图 · 知道 KnowAtlas</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#12151C">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <script src="/vendor/echarts.min.js"></script>
 <link rel="stylesheet" href="/tokens.css">
 <style>
@@ -76,6 +81,15 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
   #fsExit:hover { border-color: var(--accent); color: var(--text-1); }
   body.fs #fsExit { display: block; }
+  /* 批 98：窄屏（手机 / 小平板）——工具栏换行收紧，反查面板与节点卡不越界 */
+  @media (max-width: 820px) {
+    body { height: 100dvh; }
+    header { padding: 6px 10px; gap: 6px; font-size: var(--fs-12); }
+    header a, header button { font-size: var(--fs-12); padding: 1px 6px; }
+    #q { width: 100%; box-sizing: border-box; }
+    #revpanel { top: 8px; right: 8px; left: 8px; width: auto; max-height: 55vh; }
+    #nodecard { width: auto; left: 8px !important; right: 8px; max-width: none; }
+  }
 </style>
 <link rel="stylesheet" href="/ui.css">
 </head>
@@ -909,6 +923,12 @@ document.addEventListener("fullscreenchange", () => {
     else tip.textContent = `深链节点 ${node} 不存在，已回退总览。`;
   }
 })();
+</script>
+<script>
+// PWA 壳（批 98）：SW 仅在安全上下文（localhost / https）注册；内网 http 静默跳过
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+}
 </script>
 </body>
 </html>

@@ -4,6 +4,37 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 移动端响应式 + PWA 壳（2026-10-29，批 98）
+
+- **为什么**：只读 UI 审计（`temp/audit_ui_20261029.mjs` / `audit_ui2_20261029.json`）确认
+  6 视图 + 8 管理子页签全部可用、0 条 console 错误；真正没做的只剩 TODO P2 两项——
+  **三页都没有 `<meta name="viewport">`**（手机按 980 px 渲染再缩，字小到不可用）、
+  布局是桌面硬宽（92+240+主区+292），以及 `static/` 里**没有 manifest / SW / 图标**（`/favicon.ico` 404）。
+- **方案（同一套 SPA + 响应式，不另写前端）**：断点 820 px / 560 px——
+  导航竖排 → 底部标签条（`fixed` 54 px）、分类树 → 左侧抽屉（`☰` + 遮罩，选完分类自动收起）、
+  预览常驻栏 → 全屏浮层、状态栏隐藏、管理页横向可滚；`thread.html` 侧栏改上下堆叠，
+  `graph.html` 工具栏换行 + `100dvh`。
+- **PWA 壳（零新增后端路由）**：`app.py` 已把 `static/` 挂在根，故 `static/sw.js` → `/sw.js`
+  （scope `/`）、`static/manifest.webmanifest` → `/manifest.webmanifest` 天然可用；
+  新增 `icon-192/512`、`apple-touch-icon`、`favicon.ico`（`temp/gen_pwa_icons_20261029.py` 生成）。
+- **SW 三策略**：只读 `GET /api/**` 网络优先 + 缓存回落（**只缓存 JSON**，上限 120 条）；
+  `/api/entries/*/file` 原文代理**不进缓存**；四张 HTML 入口网络优先 + 离线回落 + 离线说明页；
+  CSS/JS/图标 stale-while-revalidate；**非 GET 完全不拦截**（离线写必须失败得明明白白）。
+- **离线可见性**：`offline` 事件驱动顶栏「离线只读」徽标，让写操作失败有解释。
+- **契约**：表结构 / 字段 / locator scheme / `STATUSES` / REST 路由（74 条快照不变）/ `CONFIG_SCHEMA_KEYS` /
+  能力注册表 **全无变化**；新增的只是静态文件。
+- **测试**：新增 `tests/test_pwa_static.py` 27 例（manifest 字段与图标落盘、SW 三 handler 与
+  `/file` 排除、`<script>` 标签配对、三页 viewport/manifest/SW 注册守门、断点与抽屉选择器口径）；
+  全量 **831 passed / 1 skipped**（原 804，+27）；canary 零漂移；`gen_docs --check` 三份 OK。
+- **实测（headless Edge 390×844）**：`innerWidth=390`、标签条 `fixed` 54 px、抽屉 x=0 且选完自动收起、
+  预览浮层 390×746、无横向溢出；SW 注册 + 缓存 12 个外壳文件 + 8 条 API；
+  **把网络断在 SW target 上**后重载：页面照常打开、`/api/tree` 走缓存回 200、
+  未缓存的 `/api/errata/points` 回 503 `{offline:true}`；桌面 1600×900 逐项回归无变化。
+- **已知限制**：手机经 `http://<内网 IP>` 访问时浏览器**不注册 SW**（非安全上下文）——
+  manifest 仍可「添加到主屏幕」并全屏启动，但没有离线；要手机离线得先做 P2 反向代理 TLS。
+  本批排除了一个真实踩坑：移动端抽屉规则若写裸 `aside`，会把 `translateX(-102%)` 糊到
+  同样用 `<aside>` 的预览面板上（实测 x=-398，浮层不可见），必须 `#layout > aside`。
+
 ### 变更工单 · 邮件 furniture 剔除 + inline 脱敏 + 剥离率告警（2026-10-29，批 97c / 8.9）
 
 - **为什么**：`adapters/maildir.py` 把 `quote_strip` 的结果直接当 `inline_content`——**只有引用剥离，

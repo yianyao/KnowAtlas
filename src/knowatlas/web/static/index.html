@@ -2,7 +2,17 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>知道 KnowAtlas</title>
+<!-- PWA 壳（批 98）：添加到主屏 + 独立窗口；SW 只在安全上下文注册（见页尾脚本） -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#12151C">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="知道">
 <style>
   :root { color-scheme: dark; }
   body { font-family: system-ui, "Microsoft YaHei", sans-serif; margin: 0;
@@ -236,6 +246,7 @@
 </head>
 <body>
 <header id="topbar">
+  <button id="side-toggle" class="m-only" title="分类树" aria-label="打开分类树">☰</button>
   <span class="tb-drag pywebview-drag-region" id="brand">知道 KnowAtlas</span>
   <input id="search" placeholder="输入主题词，回车检索（聚合 / 线索 / 放射）" autocomplete="off">
   <button id="ingest-btn" title="同 kadd：抓正文 → 归类 → 索引">＋ 收录</button>
@@ -248,6 +259,7 @@
     </div>
   </details>
   <span class="tb-drag tb-spacer pywebview-drag-region"></span>
+  <span id="offline-badge" class="offline-badge" hidden title="离线：可读已缓存内容，写操作需要联网">离线只读</span>
   <span class="win-ctrls" id="win-ctrls" hidden>
     <button class="wc-btn" id="wc-min" title="最小化">
       <svg width="11" height="11" viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor" stroke-width="1"/></svg>
@@ -276,6 +288,7 @@
   </div>
   <div id="tree">加载中…</div>
 </aside>
+<div id="side-mask" hidden></div>
 <div class="col-split" id="side-split" title="拖动调整分类树宽度"></div>
 <main>
   <section id="view-search" class="view view-split">
@@ -2375,6 +2388,36 @@ async function refreshStatus() {
 }
 refreshStatus();
 
+// ---- 批 98：移动端抽屉 / 离线徽标 / PWA 壳注册（纯显示层，无业务副作用）----
+const _mob = window.matchMedia("(max-width: 820px)");
+function _sideDrawer(open) {
+  document.body.classList.toggle("side-open", open);
+  document.getElementById("side-mask").hidden = !open;
+}
+document.getElementById("side-toggle").onclick = () =>
+  _sideDrawer(!document.body.classList.contains("side-open"));
+document.getElementById("side-mask").onclick = () => _sideDrawer(false);
+// 手机上点分类/条目后自动收起抽屉（否则遮住结果）；分类节点的悬停操作区不触发
+document.getElementById("tree").addEventListener("click", (e) => {
+  if (_mob.matches && !e.target.closest(".ops")) _sideDrawer(false);
+});
+_mob.addEventListener("change", () => _sideDrawer(false));
+
+(function offlineBadge() {
+  const badge = document.getElementById("offline-badge");
+  if (!badge) return;
+  const sync = () => { badge.hidden = navigator.onLine; };
+  addEventListener("online", sync);
+  addEventListener("offline", sync);
+  sync();
+})();
+
+// Service Worker 只在安全上下文（localhost / https）注册：手机经
+// http://<内网 IP> 访问时浏览器直接拒绝，这里静默跳过——manifest 仍可添加到主屏。
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  addEventListener("load", () => { navigator.serviceWorker.register("/sw.js").catch(() => {}); });
+}
+
 // ---- 批次 106：页面新鲜度自检 ----
 // 症状：后端改了 index.html，浏览器（或桌面壳）端着旧 DOM，用户「看不到修复」，
 // 而服务端抓取明明是新的。做法两条：
@@ -2413,7 +2456,8 @@ function pvApply(hide) {
   document.getElementById("preview-panel").hidden = hide;
   document.getElementById("pv-split").hidden = hide;
   document.getElementById("pv-restore").hidden = !hide;
-  localStorage.setItem("knowatlas-preview", hide ? "hide" : "show");
+  // 手机上预览是浮层（点条目即覆盖、✕ 关闭），属临时动作，不覆盖桌面端常驻偏好（批 98）
+  if (!_mob.matches) localStorage.setItem("knowatlas-preview", hide ? "hide" : "show");
 }
 (function () {
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -2426,7 +2470,7 @@ function pvApply(hide) {
     document.querySelector("#layout aside").style.width = sideW + "px";
   document.getElementById("pv-close").onclick = () => pvApply(true);
   document.getElementById("pv-restore").onclick = () => pvApply(false);
-  pvApply(localStorage.getItem("knowatlas-preview") === "hide");
+  pvApply(_mob.matches ? true : localStorage.getItem("knowatlas-preview") === "hide");
 })();
 
 // 三栏宽拖拽：树栏/预览栏均可拖分隔条调整，宽度记 localStorage。拖拽期间

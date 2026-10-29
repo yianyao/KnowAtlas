@@ -429,3 +429,91 @@ body.col-resizing iframe { pointer-events: none; }   /* 防 iframe（graph/threa
 #bm-tab { font-size: var(--fs-12); background: var(--bg-2); color: var(--text-2);
           border: 1px solid var(--border-2); border-left: none; }
 #bm-dock:hover #bm-tab { color: var(--text-1); }
+
+/* ============ 批 98：移动端 / 窄屏（同一套 SPA + 响应式，不另写前端）============
+   断点 820px：导航变底部标签条、分类树变左侧抽屉、预览面板变全屏浮层。
+   桌面布局零改动——本块全部写在 @media 内（`.m-only` 是唯一的全局新增类）。
+   注意：预览面板宽度由 JS 内联 style.width 写入、分类树宽度亦然，故这里必须 !important。 */
+
+.m-only { display: none; }
+
+/* 离线徽标（批 98）：SW 离线时顶栏常亮，解释「写操作失败」不是 bug */
+.offline-badge { flex: none; font-size: var(--fs-11); color: #F0B072;
+                 background: rgba(240, 176, 114, 0.12);
+                 border: 1px solid rgba(240, 176, 114, 0.4);
+                 border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
+.offline-badge[hidden] { display: none; }
+
+#side-toggle { flex: none; width: 30px; height: 30px; align-items: center;
+               justify-content: center; font-size: 15px; color: var(--text-2);
+               background: var(--bg-2); border: 1px solid var(--border-1);
+               border-radius: var(--radius-ctrl); cursor: pointer; }
+#side-toggle:hover { color: var(--text-1); background: var(--bg-3); }
+#side-mask { position: fixed; inset: 44px 0 54px; z-index: 310;
+             background: rgba(4, 6, 10, 0.55); }
+#side-mask[hidden] { display: none; }
+
+@media (max-width: 820px) {
+  .m-only { display: inline-flex; }
+
+  html, body { height: 100%; }
+  #topbar { height: 44px; padding: 0 8px; gap: 6px; }
+  #brand { display: none; }
+  #search { max-width: none; height: 30px; margin: 0 2px; }
+  #ingest-btn { height: 28px; padding: 0 8px; }
+  #settings summary { font-size: 15px; }
+
+  /* 导航：左竖排 → 底部标签条（顺序与图标不动，只是方向） */
+  #view-tabs { position: fixed; inset: auto 0 0 0; z-index: 300;
+               width: auto; height: 54px; flex-direction: row;
+               align-items: stretch; gap: 0; padding: 0;
+               border-inline-end: 0; border-top: 1px solid var(--border-1);
+               background: var(--bg-1); padding-bottom: env(safe-area-inset-bottom); }
+  .vtab { flex: 1; flex-direction: column; justify-content: center; gap: 2px;
+          padding: 5px 0 3px; font-size: 10px; border-radius: 0; }
+  .vtab.on { background: var(--accent-soft); }
+  #layout { padding-bottom: 54px; }
+  .shell-status { display: none; }
+
+  /* 分类树：左侧抽屉（桌面 side-hide 的窄条在手机上不成立，显式还原内容）。
+     选择器必须 `#layout > aside`——页面里有两个 <aside>（分类树 + 预览面板），
+     裸 `aside` 会把抽屉的 translateX(-102%) 一起糊到预览面板上（实测 x=-398）。 */
+  #layout > aside { position: fixed; inset: 44px auto 54px 0; z-index: 320;
+          width: 86% !important; max-width: 320px; min-width: 0;
+          transform: translateX(-102%); transition: transform 0.18s ease;
+          box-shadow: 12px 0 32px rgba(0, 0, 0, 0.5); }
+  body.side-open #layout > aside { transform: none; }
+  body.side-hide #layout > aside { width: 86% !important; min-width: 0; padding: 0; }
+  body.side-hide .side-head { flex-direction: row; width: auto; }
+  body.side-hide .side-title { display: inline; }
+  body.side-hide #tree { display: block; }
+  #side-collapse { display: none; }
+  #side-split { display: none; }
+
+  /* 预览：右侧常驻栏 → 全屏浮层（内联 width 用 !important 压掉） */
+  #preview-panel { position: fixed; inset: 44px 0 54px; z-index: 330;
+                   width: auto !important; max-width: none;
+                   border-inline-start: 0; box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.5); }
+  #pv-split, #pv-restore { display: none !important; }
+  .pv-head { height: 44px; }
+
+  #search-col { padding: 8px 10px 12px; }
+  #mgmt-body { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #view-cloud, #view-timeline { padding: 0 10px; }
+  #view-graph, #view-thread { height: 100%; }
+  #graph-frame, #thread-frame { width: 100%; height: 100%; border: 0; }
+  #bulk-bar { bottom: 62px; left: 8px; right: 8px; flex-wrap: wrap; }
+  #bm-dock { bottom: 62px; }
+
+  /* 条目行在窄屏不再挤压：操作按钮换行到下一排 */
+  .entry > .ops, .entry .ops { flex-wrap: wrap; }
+}
+
+@media (max-width: 560px) {
+  #search { font-size: var(--fs-12); }
+  .vtab { font-size: 9px; }
+  .vtab svg { width: 16px; height: 16px; }
+  #topbar { gap: 4px; }
+  .hb-cats { grid-template-columns: 1fr !important; }
+  #preview-panel .pv-body, #pv-body { font-size: 13px; }
+}
