@@ -22,6 +22,10 @@ backup_keep  = 10                    # 快照轮换保留份数（超出删最�
 backup_min_interval_hours = 24
 log_level    = "INFO"                # 日志级别：DEBUG / INFO / WARNING / ERROR
 server_host  = "127.0.0.1"           # Web 服务只监听本机（安全约束，不建议改 0.0.0.0）
+# 想用手机在局域网里打开：改成 "0.0.0.0"（或 `serve --host 0.0.0.0`）。
+# Host/Origin 白名单会自动追加**本机网卡地址**（只本机 IP，不放整个内网段），
+# 手机按 http://<内网IP>:8420 访问；打不开先放行该端口的入站规则。
+# 取舍：/api/session 会给任何来访者种写 Cookie —— 挂 0.0.0.0 时同网段设备可写。
 server_port  = 8420                  # Web 服务端口
 
 [web]                                  # 本地服务安全（H5 五条约束）

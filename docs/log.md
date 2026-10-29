@@ -3766,3 +3766,91 @@ baseline 147,059，effective **131.8%**（CRITICAL，watcher 在 22:00/22:04 已
 
 <!-- HANDOFF {"at":"2026-10-29T22:30:12.283466+08:00","compactions":1,"doc":"docs/交接/2026-10-29-2230.md","draft":true,"goal":"会话已被自动压缩 #1","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-6c4a73e7-63da-44b4-872d-d1a493f6390e","status":"OK","tokens":82698,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
 
+
+## 2026-10-29 22:3x–22:4x 局域网访问白名单（P1 服务端半边，用户裁决「只做白名单」）
+
+批 98 推完后用户选了「P1 局域网访问服务端三件」。读码发现真实缺口比 TODO 写的少一项：
+**固定 token 与「页面不用手填」早就有了**——`/api/session` 会把环境变量里的令牌种成
+HttpOnly + SameSite=Strict Cookie，浏览器同源自动携带。所以只剩「绑 0.0.0.0」+「白名单」。
+
+我按 §1 报了方案，用户裁决 **「先只做白名单，不动 session 写模式」** → 本批**无契约变更**
+（不加配置键、不动路由、`/api/session` 一个字没改），因此不另开工单，只记 CHANGELOG。
+
+### 改了什么
+
+- `web/api.py`：新增 `local_addresses()`（枚举本机网卡地址；解析失败只回 loopback，不抛）、
+  `allowed_hosts(cfg)`、`allowed_origins(cfg)`、`lan_urls(port)`；
+  `install_security_middleware` 改成按 cfg 现算白名单（原来是写死 `127.0.0.1:port` 两条）。
+  **只有 `general.server_host` 不是 loopback 时才追加本机地址**——放的是「本机 IP」而不是
+  「整个内网段」，因为 Host 校验挡的是 DNS rebinding（攻击者只能带自己域名来打）。
+- `cli/cmd_ops.py`：非 loopback 启动时打印局域网 URL + 一行取舍提示 + 防火墙提示。
+- `config/knowatlas.example.toml`：`server_host` 上方补三段注释（怎么开、会放开什么、取舍）。
+- `tests/test_lan_access.py` **7 例**：loopback 默认最小白名单、绑 0.0.0.0 后本机每个地址都在、
+  陌生 Host 仍 403、外站 Origin 仍 403、`lan_urls` 排除 loopback。
+
+### 验收（现场数字）
+
+- 全量 **838 passed / 1 skipped**（原 831，+7）；canary 1 passed 零漂移；`gen_docs --check` 三份 OK
+  （`参考-配置.md` 149 行未变，因为没加键）。
+- 临时起 `serve --host 0.0.0.0 --port 8499`（**没动用户跑着的 8420**，验完 `job_kill`，8499 已关、
+  8420 仍在监听）：
+  | 请求 | 结果 |
+  |---|---|
+  | `Host: 192.168.1.242:8499` → `/api/tree` `/index.html` `/manifest.webmanifest` | 200 / 200 / 200 |
+  | `Host: evil.example.com:8499` → `/api/tree` | **403** FORBIDDEN_HOST |
+  | `Host: 192.168.1.242` + `Origin: https://evil.example.com` | **403** FORBIDDEN_ORIGIN |
+  | 直连 `http://192.168.1.242:8499/`（真网卡，不伪造 Host） | 200（首页 / api/tree / sw.js 全 200） |
+  | `/api/session` 后带 Cookie 写 `/api/entries/999999/reject` | **404**（过了守卫，条目不存在）→ 即 LAN 可写 |
+  | 不带 Cookie 写同端点 | 403 |
+- 本机地址实测：`127.0.0.1` / `192.168.1.242` / 两个 `2409:…` 公网 IPv6 / 一个 `fe80::` 链路本地。
+
+### 已知取舍（用户明示本轮不做，已记 TODO）
+
+白名单放开的同时，`/api/session` 仍对**任何来访者**种写 Cookie —— 挂 `0.0.0.0` 时同网段设备
+打开页面就能写（上表倒数第二行就是证据）。要收紧需加 `web.allow_lan_writes`（默认 false）+
+让 `/api/session` 只对 loopback 种 cookie，届时写操作回落到令牌。**这是下一批的第一顺位。**
+另外手机侧离线 PWA 仍受「内网 http 非安全上下文」限制（SW 不注册），要等 P2 反向代理 TLS。
+
+### 下一步（按序）
+
+1. **局域网写权限收紧**（TODO 新增条目，判据已写）：`web.allow_lan_writes` + `/api/session` 按来源决定。
+   ⚠️ 这条**是契约变更**（`CONFIG_SCHEMA_KEYS` +1），要先写工单再动。
+2. **用户在真机验一次**：手机同网段开 `http://192.168.1.242:8420`（当前 8420 仍绑 127.0.0.1，
+   要先用 `serve --host 0.0.0.0` 重启，或改 `config/knowatlas.toml` 的 `server_host`；
+   重启若没设固定令牌，Cookie 会失效——令牌来自 `KNOWATLAS_WEB_TOKEN` 时不受影响）。
+3. 后端队列（未变）：① 真实 maildir 验收（需目录）；② 8.8 AI 会话 97d；③ emmx 剪枝；
+   ④ 待审 132 条等裁决（写库）。
+4. P2 远程访问 TLS（手机离线 PWA 的前置）。
+
+### 不要重跑
+
+- 全量 pytest **838/1**、`test_lan_access.py` 7、canary、`gen_docs --check`；
+- 8499 临时实例的三组 curl（结果已在上表，含直连内网 IP 与 Cookie 写测）；
+- 批 98 那批的 UI/SW 验证（见上一节，数字都在）。
+
+### 推送状态（重要）
+
+批 98（`62a2af0`）已到远端；**本批 `47a1955` 还只在本地**——22:47–22:56 连试 13 次
+GitHub（`curl -4` 全部 000，直连又断了），后台重试 10 轮也没等到恢复。下个会话开场先补推：
+
+```powershell
+cd D:\sData\git\KnowAltas
+$key = "url.https://ghproxy.net/https://github.com/.insteadOf"
+$old = git config --get $key; $oldOrigin = git remote get-url origin
+if ($old) { git config --unset $key }
+git remote set-url origin https://github.com/yianyao/KnowAtlas.git
+git -c credential.helper=wincred -c http.sslBackend=openssl push origin main
+git remote set-url origin $oldOrigin; if ($old) { git config $key $old }
+```
+
+判据：`git ls-remote origin refs/heads/main` → `47a1955…`（现为 `62a2af0…`）。
+
+### 会话指纹
+
+`session-6c4a73e7-63da-44b4-872d-d1a493f6390e`，compactions=1，tokens≈119,000，
+baseline 147,059，effective **81.1%**（WARN：开始收尾），2026-10-29T22:4x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-29T22:47:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-29-223x224x-局域网访问白名单p1-服务端半边用户裁决只做白名单","draft":false,"goal":"P1 局域网访问服务端半边：Host/Origin 白名单按绑定地址派生（枚举本机网卡，不放内网段）+ serve 打印局域网 URL；838 passed（原 831）；实测 LAN Host 200 / 陌生 Host 403 / 外站 Origin 403 / 直连内网 IP 200；无契约变更","host":"dsh","kind":"handoff","next":"⓿ 先补推本地未推送的提交（GitHub 直连 22:47-22:56 全断，见本节「推送状态」）；① 局域网写权限收紧（契约变更，先写工单：web.allow_lan_writes + /api/session 按来源种 Cookie）——现状 LAN 可写是用户明示接受的取舍；② 用户在真机验：8420 需先 serve --host 0.0.0.0 重启；③ 真实 maildir 验收（需目录）；④ 8.8 AI 会话 97d；⑤ emmx 剪枝；⑥ 待审 132 条等裁决；⑦ P2 反向代理 TLS（手机离线 PWA 前置）","not_rerun":"全量 pytest 838/1；tests/test_lan_access.py 7；canary；gen_docs --check；8499 临时实例的三组 curl（Host=LAN/陌生 Host/外站 Origin/直连内网 IP/Cookie 写）；批 98 的 UI+SW 验证脚本","schema":1,"session":"session-6c4a73e7-63da-44b4-872d-d1a493f6390e","status":"WARN","tokens":119000,"verify":"uv run python -m pytest -o addopts= -q -> 838 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_lan_access.py -> 7 passed；uv run python tools/gen_docs.py --check -> 三份 OK"} -->
+
+<!-- HANDOFF {"at":"2026-10-29T23:02:00+08:00","compactions":1,"doc":"docs/log.md#2026-10-29-223x224x-局域网访问白名单p1-服务端半边用户裁决只做白名单","draft":false,"goal":"P1 局域网访问服务端半边：Host/Origin 白名单按绑定地址派生（枚举本机网卡地址，不放内网段）+ serve 打印局域网 URL；838 passed（原 831）；实测 LAN Host 200 / 陌生 Host 403 / 外站 Origin 403 / 直连内网 IP 200；无契约变更","host":"dsh","kind":"handoff","next":"⓿ 先补推本地未推送的提交（GitHub 直连 22:47-22:56 全断，推送命令见本节「推送状态」；批 98 的 62a2af0 已在远端）；① 局域网写权限收紧（契约变更，先写工单：web.allow_lan_writes + /api/session 按来源决定是否种写 Cookie）——现状 LAN 可写是用户明示接受的取舍；② 用户在真机验：8420 需先 serve --host 0.0.0.0 重启；③ 真实 maildir 验收（需目录）；④ 8.8 AI 会话 97d；⑤ emmx 剪枝；⑥ 待审 132 条等裁决（写库）；⑦ P2 反向代理 TLS（手机离线 PWA 前置）","not_rerun":"全量 pytest 838/1；tests/test_lan_access.py 7；canary；gen_docs --check；8499 临时实例的三组 curl（Host=LAN/陌生 Host/外站 Origin/直连内网 IP/Cookie 写）；批 98 的 UI+SW 验证脚本与两轮只读审计","schema":1,"session":"session-6c4a73e7-63da-44b4-872d-d1a493f6390e","status":"WARN","tokens":124643,"verify":"uv run python -m pytest -o addopts= -q -> 838 passed, 1 skipped；uv run python -m pytest -o addopts= -q tests/test_lan_access.py -> 7 passed；uv run python tools/gen_docs.py --check -> 三份 OK"} -->
+

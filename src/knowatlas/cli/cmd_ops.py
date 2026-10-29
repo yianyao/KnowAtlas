@@ -41,6 +41,18 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     print(f"KnowAtlas 服务：http://{host}:{port}")
     from ..web.api import token_fingerprint
+
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        # 局域网访问（TODO P1）：只把**本机网卡地址**加进 Host/Origin 白名单
+        # （见 web/api.py::allowed_hosts）——不放开整个内网段，Host 校验仍能挡 DNS rebinding。
+        from ..web.api import lan_urls
+
+        urls = lan_urls(port)
+        if urls:
+            print(f"局域网可达：{'  '.join(urls)}")
+            print("提示：同网段设备打开页面即自动获得写凭据（/api/session 种 Cookie），"
+                  "只想手机只读就别长期挂 0.0.0.0。")
+            print(f"手机打不开先放行端口 {port}（Windows 防火墙入站规则）。")
     if auto_generated:
         print(f"本次会话写令牌（写操作时在网页弹窗粘贴一次即可）：{token}")
         print(f"令牌指纹：{token_fingerprint(token)}（核对用）")

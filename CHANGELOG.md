@@ -4,6 +4,31 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 局域网访问：Host/Origin 白名单按绑定地址派生（2026-10-29，P1）
+
+- **为什么**：白名单原来写死 `127.0.0.1:port` / `localhost:port`，`serve --host 0.0.0.0` 后
+  手机带 `Host: 192.168.x.x:8420` 一律 `FORBIDDEN_HOST` 403——用户侧就是「手机打不开」。
+- **方案**（`web/api.py`）：新增 `local_addresses()`（枚举本机网卡地址，失败只回 loopback）、
+  `allowed_hosts(cfg)`、`allowed_origins(cfg)`；**仅当 `general.server_host` 不是 loopback 时**
+  才追加本机地址。`install_security_middleware` 改成按 cfg 现算，`_port_of` 口径不变。
+  `serve` 启动多打几行：局域网 URL 列表 + 「同网段设备会自动拿到写 Cookie」+ 防火墙提示。
+- **为什么不放整个内网段**：Host 校验挡的是 DNS rebinding——攻击者只能让浏览器带**自己域名**的
+  Host 来打，枚举本机地址既够手机用，又不会把 `192.168.0.0/16` 整段放进来（那等于关掉校验）。
+- **契约**：**无变更**（纸面加一个 `web.api` 公开函数；`CONFIG_SCHEMA_KEYS` / 路由 74 条 /
+  表结构 / 字段 / `STATUSES` / locator 全不动；`/api/session` 响应与行为也一个字没改），
+  故不另开工单，只在此记账。
+- **测试**：新增 `tests/test_lan_access.py` 7 例（loopback 默认最小白名单、绑 0.0.0.0 后
+  本机每个地址都在、陌生 Host 仍 403、外站 Origin 仍 403、`lan_urls` 排除 loopback）；
+  全量 **838 passed / 1 skipped**（原 831）；canary 零漂移；`gen_docs --check` 三份 OK。
+- **实测**（临时 `serve --host 0.0.0.0 --port 8499`，验完即关，未动用户的 8420）：
+  `Host: 192.168.1.242:8499` → `/api/tree` 200、`/index.html` 200、`/manifest.webmanifest` 200；
+  `Host: evil.example.com` → 403；外站 Origin → 403；直连 `http://192.168.1.242:8499/` → 200。
+  `/api/session` 给 LAN 域种 HttpOnly Cookie 后写端点返回 404（过了守卫，条目不存在）——
+  **即同网段设备可写**。
+- **已知取舍（用户明示本轮不做）**：写权限未收紧。要收紧就加 `web.allow_lan_writes`（默认 false）
+  并让 `/api/session` 只对 loopback（或显式开启时）种写 Cookie，届时写操作回落到令牌。
+  已记 TODO。手机侧离线 PWA 仍受「内网 http 非安全上下文」限制（见批 98）。
+
 ### 变更工单 · 移动端响应式 + PWA 壳（2026-10-29，批 98）
 
 - **为什么**：只读 UI 审计（`temp/audit_ui_20261029.mjs` / `audit_ui2_20261029.json`）确认

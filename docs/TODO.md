@@ -145,11 +145,18 @@ git status -sb                                   # 期望只有本步改动
 
 ## P2 · 服务化与多端（按架构文档 §7 推进）
 
-- [~] **P1 局域网访问**：`server_host` 放开 + 白名单加内网段 + 固定 token + 登录页存 localStorage。
+- [x] **P1 局域网访问**：`server_host` 放开 + 白名单加内网段 + 固定 token + 登录页存 localStorage。
       判据：手机同网段打开首页、检索、点详情；写操作仍被 token 拦。
-      **2026-10-29（批 98）先落了前端这一半**：820 px 断点（底部标签条 / 分类抽屉 / 预览浮层）+
-      viewport —— 手机浏览器已经能用；**剩服务端三件**（`server_host`、白名单加内网段、固定 token）。
-      注意：内网 `http://` 不是安全上下文，SW 在那条路上不注册（见下一行 PWA 的限制）。
+      **2026-10-29 落地**：前端半边在批 98（820 px 断点 + viewport）；服务端半边在本批——
+      `web/api.py` 白名单按绑定地址派生（`local_addresses()` 枚举本机网卡，**不放整个内网段**），
+      `serve --host 0.0.0.0` 打印局域网 URL。实测 `Host: 192.168.1.242:8499` 200 /
+      `Host: evil.example.com` 403 / 外站 Origin 403。固定 token 与「页面不用手填」早就有
+      （`/api/session` 种 HttpOnly+SameSite=Strict Cookie）。
+      **判据里的「写操作仍被 token 拦」本轮没做**（用户裁决「只做白名单」）→ 见下一条。
+- [ ] **局域网写权限收紧**：加 `web.allow_lan_writes`（默认 false），`/api/session` 只对
+      loopback（或显式开启时）种写 Cookie；否则写操作回落到令牌。现状是挂 `0.0.0.0` 时
+      同网段设备打开页面即可写（已知取舍，已写进 CHANGELOG 与 `config/*.example.toml` 注释）。
+      判据：`allow_lan_writes=false` 时 LAN 上写端点回 401/403，`true` 时回落到今日行为。
 - [ ] **P2 远程访问**：反向代理 TLS + 只读/可写两种 token + 限来源网段。
       判据：外网 HTTPS 可读；无 token 写操作 403。**这条也是手机离线 PWA 的前置（TLS 才有 SW）。**
 - [x] **PWA 壳**：manifest + 图标 + 离线只读缓存。判据：手机主屏启动，断网能看上次的内容。
