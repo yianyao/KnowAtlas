@@ -328,7 +328,8 @@ reader: 执行者（人与 agent）
       - 探针：裁决废弃后条目从全部视图/检索/词云/导出消失（✓ 已验，fixture）；冷却期满后物理行删除、审计链留痕、共享内容块只减计数（✓ 已验，fixture）
 - [x] 65 勘误三级（L1 只做确定性错误防误报；L2 结论必须附可核查依据否则只标疑似；L3 改正=勘误附注层原文不改写 or 废弃同 64 出口）**——批次 65a 代码部分完成（第六十四批）：L1 确定性检查（完整代码块语法验证 + 已移除 API 对照表，节选不下结论宁漏勿误）+ L2 errata_check（error 必附依据否则降 suspect，suspect 不出裁决队列）+ L3 附注层（meta.errata 并显原文不改写）+ kerrata CLI（--scan 零费用/--limit 10 试跑）；pytest 391 全绿；L2 全量核查（~600 条）等用户裁决（65b）**
       - 探针：疑似错误不到确认级不出裁决队列（✓ 已验，fixture）；改正以附注并显、原文 diff 为零（✓ 已验，fixture）
-- [ ] 并行待办（不占批次编号，按触发条件穿插）：真 MCP 协议（Phase 5 挂账）/ B站·IMA·腾讯文档三凭证源（等凭证）/ Phase 6 微信收藏+聊天记录（等导出产物）/ wheel 打包（收官后）/ bge-m3 真机冒烟·PG 真机探针 / 回归集积累 50-100 条 + 规则误判修订（Google→华为云、Agent→文学创作）/ harvester exports 目录接入 config / 词云签名缓存
+- [ ] 并行待办（不占批次编号，按触发条件穿插）：真 MCP 协议（Phase 5 挂账）/ B站·IMA·腾讯文档三凭证源（等凭证）/ Phase 6 微信收藏+聊天记录（等导出产物）/ wheel 打包（收官后）/ bge-m3 真机冒烟·PG 真机探针 / 回归集积累 50-100 条 + 规则误判修订（Google→华为云、Agent→文学创作）/ harvester exports 目录接入 config
+      — **词云签名缓存已落（2026-10-29，R32：`web/routers/discovery.py` 进程内 TTL + `datalayer/views.py::cloud_fingerprint`）**，从并行待办移出
 
 ## Phase 8 — 数据源全覆盖 + 统一清洗层（2026-10-24 用户需求澄清后新增）
 

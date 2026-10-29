@@ -178,6 +178,46 @@ class _ViewsMixin:
         ).fetchall()
         return [self._row_to_entry(r) for r in rows]
 
+    def cloud_fingerprint(self) -> str:
+        """词云数据签名（R32，词云签名缓存的失效依据；工单 2026-10-29）。
+
+        `e条目数:最新exported_at:正文总长:status分布:ec挂接数:c分类数:分类名总长:pt点段`
+
+        覆盖的变化（换键即失效）：新条目 / 补抓正文（长度变）/ 转正拒绝归档
+        （status 分布变）/ 分类挂接与重分类 / 建分类与改名 / 点重抽（点数、最新时间、
+        点文本总长）。
+
+        **点段刻意不复用 `points_fingerprint`**：那个指纹含 `point_vectors` 的
+        COUNT/MAX（真库实测 14.1 ms），而向量重建不影响词云词元（词元只吃 `points.text`）；
+        这里只对 `points` 求 3 条聚合（6.8 ms）。两者失效半径不同，别合并。
+
+        **不覆盖**：① 只改 `meta.value_flag` 这类消费面守卫键的少数条目——刻意不求和
+        全表 meta 长度（真库 368 条、目标规模万级，那是 O(n) 读）；② 点级 `aging_flag`
+        / `meta.dupe_of` 的单行改动（影响点词元是否露面的开关）。两者都由调用方的
+        TTL 兜底（`web/routers/discovery.py::_CLOUD_TTL`）。
+
+        成本：6 条聚合，真库实测 8–9 ms。
+        """
+        agg = self._conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(exported_at), '') AS m,"
+            " COALESCE(SUM(LENGTH(COALESCE(inline_content, ''))), 0) AS L"
+            " FROM entries").fetchone()
+        dist = ",".join(
+            f"{r['status']}:{r['n']}" for r in self._conn.execute(
+                "SELECT status, COUNT(*) AS n FROM entries GROUP BY status"
+                " ORDER BY status"))
+        ec = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM entry_categories").fetchone()["n"]
+        cats = self._conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(name)), 0) AS L"
+            " FROM categories").fetchone()
+        pts = self._conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(created_at), '') AS m,"
+            " COALESCE(SUM(LENGTH(text)), 0) AS L FROM points").fetchone()
+        return (f"e{agg['n']}:{agg['m']}:{agg['L']}:{dist}"
+                f":ec{ec}:c{cats['n']}:{cats['L']}"
+                f":pt{pts['n']}:{pts['m']}:{pts['L']}")
+
     # ---- 时间线视图（第四十四批：scoped timeline + 陈旧分支提醒） ----
 
     def timeline_data(self, category_id: str | None, *, granularity: str | None = None,

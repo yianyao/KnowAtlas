@@ -10,12 +10,18 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter
 
 from ...semantic.keywords import word_ok as _cloud_word_ok
 from ..ctx import AppCtx
+
+# R32：词云签名缓存的进程内上限（与 R14 主题缓存同量级：单条响应约 6–10 KB）。
+_CLOUD_TTL = 300.0
+_CLOUD_MAX = 8
 
 
 def register(ctx: AppCtx) -> APIRouter:
@@ -34,6 +40,29 @@ def register(ctx: AppCtx) -> APIRouter:
     # 词元噪音表与准入规则已移 semantic/keywords.py（第六十批知识集组头共用），
     # 本文件以 _cloud_word_ok 别名引用，行为不变。
 
+    # R32 词云签名缓存（工单 2026-10-29）：全库逐条 jieba tf-idf（72 条样本 + ≤800 点）
+    # 真库实测 2.0–2.5 s / 次，而词云是「来回看」的浏览动作——同范围重复访问必须为 0 s。
+    # 失效靠数据签名（datalayer/views.py::cloud_fingerprint：条目数/最新时间/正文总长/
+    # status 分布/分类挂接/分类名/点域指纹）；TTL 只兜「只改 meta 守卫键」这类
+    # 不进签名的少数改动。与 R14 主题缓存同一手法，不做 single-flight。
+    _cloud_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+    _cloud_lock = threading.Lock()
+
+    def _cloud_cached(key: str, compute) -> dict[str, Any]:
+        now = time.monotonic()
+        with _cloud_lock:
+            hit = _cloud_cache.get(key)
+            if hit is not None and now - hit[0] <= _CLOUD_TTL:
+                return hit[1]
+        result = compute()
+        with _cloud_lock:
+            _cloud_cache[key] = (time.monotonic(), result)
+            if len(_cloud_cache) > _CLOUD_MAX:   # 按写入时间淘汰最旧的
+                for stale in sorted(_cloud_cache,
+                                    key=lambda k: _cloud_cache[k][0])[:len(_cloud_cache) - _CLOUD_MAX]:
+                    _cloud_cache.pop(stale, None)
+        return result
+
     @router.get("/cloud")
     def cloud(category_id: str | None = None, limit: int = 60, word: str | None = None):
         """词云（第四十三批）：focus 分类子树的分类词元 + 内容词元（scoped cloud）。
@@ -45,59 +74,70 @@ def register(ctx: AppCtx) -> APIRouter:
           降序分配），前端按 √权重折算字号；
         - word=xxx（facet 模式）：追加 entries=当前范围内可消费且含该词的条目列表
           （内容词元点击 = facet 过滤当前范围）。
+
+        R32（2026-10-29，工单 `变更工单-2026-10-29-词云签名缓存.md`）：词元聚合结果
+        进进程内缓存，键 = 库路径 + category_id + limit + 数据签名（≤300 s TTL、最多
+        8 条）。**响应 JSON 与 query 参数逐字不变**；`word=` facet 每次现算，不缓存。
         """
-        data = dl.cloud_data(category_id)
-        cat_names = dl.category_names()
-        word_counts: dict[str, int] = {}
-        word_tops: dict[str, dict[str, int]] = {}
-        try:
-            import jieba.analyse  # noqa: PLC0415 惰性导入（jieba 是 main 依赖）
-        except ImportError:
-            jieba = None
-        if jieba is not None:
-            for _eid, title, body, top in data["entries"]:
-                text = f"{title}\n{body[:4000]}"
-                for kw, _w in jieba.analyse.extract_tags(text, topK=8, withWeight=True):
-                    if not _cloud_word_ok(kw):
-                        continue
-                    word_counts[kw] = word_counts.get(kw, 0) + 1
-                    if top:
-                        word_tops.setdefault(kw, {})
-                        word_tops[kw][top] = word_tops[kw].get(top, 0) + 1
-            # 点词元同池（批次 89，词云点化：点层是知识主体后词云反映知识分布）
-            # ——点 text 是提炼后的知识陈述，词频即知识分布；条目词元保留作兜底
-            # （未抽点的条目仍出词）。点文本短，topK 6。
-            point_rows = dl.cloud_point_data(category_id)
-            for ptext, ptop in point_rows:
-                for kw, _w in jieba.analyse.extract_tags(ptext, topK=6, withWeight=True):
-                    if not _cloud_word_ok(kw):
-                        continue
-                    word_counts[kw] = word_counts.get(kw, 0) + 1
-                    if ptop:
-                        word_tops.setdefault(kw, {})
-                        word_tops[kw][ptop] = word_tops[kw].get(ptop, 0) + 1
-        # 主导顶层分类：该词出现条目中最多的顶层分类；按词元总量降序分配色板槽位
-        top_total: dict[str, int] = {}
-        for kw, tops in word_tops.items():
-            for cid, n in tops.items():
-                top_total[cid] = top_total.get(cid, 0) + n
-        palette_slot = {cid: i for i, (cid, _n) in enumerate(
-            sorted(top_total.items(), key=lambda kv: (-kv[1], kv[0])))}
-        words = []
-        for kw, n in sorted(word_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
-            tops = word_tops.get(kw, {})
-            # 主导顶层分类：计数优先，并列取 id 小者（确定性）
-            top_cid = (sorted(tops.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
-                       if tops else None)
-            color = (_CLOUD_PALETTE[palette_slot[top_cid] % len(_CLOUD_PALETTE)]
-                     if top_cid else "#888")
-            words.append({"word": kw, "count": n,
-                          "top": {"id": top_cid, "name": cat_names.get(top_cid, "?")} if top_cid else None,
-                          "color": color})
-        payload: dict[str, Any] = {
-            "focus": data["focus"], "categories": data["categories"],
-            "words": words, "sampled_entries": len(data["entries"]),
-        }
+        ckey = "|".join((str(getattr(dl, "db_path", "")), str(category_id or "-"),
+                         str(int(limit)), dl.cloud_fingerprint()))
+
+        def _compute_base() -> dict[str, Any]:
+            data = dl.cloud_data(category_id)
+            cat_names = dl.category_names()
+            word_counts: dict[str, int] = {}
+            word_tops: dict[str, dict[str, int]] = {}
+            try:
+                import jieba.analyse  # noqa: PLC0415 惰性导入（jieba 是 main 依赖）
+            except ImportError:
+                jieba = None
+            if jieba is not None:
+                for _eid, title, body, top in data["entries"]:
+                    text = f"{title}\n{body[:4000]}"
+                    for kw, _w in jieba.analyse.extract_tags(text, topK=8, withWeight=True):
+                        if not _cloud_word_ok(kw):
+                            continue
+                        word_counts[kw] = word_counts.get(kw, 0) + 1
+                        if top:
+                            word_tops.setdefault(kw, {})
+                            word_tops[kw][top] = word_tops[kw].get(top, 0) + 1
+                # 点词元同池（批次 89，词云点化：点层是知识主体后词云反映知识分布）
+                # ——点 text 是提炼后的知识陈述，词频即知识分布；条目词元保留作兜底
+                # （未抽点的条目仍出词）。点文本短，topK 6。
+                point_rows = dl.cloud_point_data(category_id)
+                for ptext, ptop in point_rows:
+                    for kw, _w in jieba.analyse.extract_tags(ptext, topK=6, withWeight=True):
+                        if not _cloud_word_ok(kw):
+                            continue
+                        word_counts[kw] = word_counts.get(kw, 0) + 1
+                        if ptop:
+                            word_tops.setdefault(kw, {})
+                            word_tops[kw][ptop] = word_tops[kw].get(ptop, 0) + 1
+            # 主导顶层分类：该词出现条目中最多的顶层分类；按词元总量降序分配色板槽位
+            top_total: dict[str, int] = {}
+            for kw, tops in word_tops.items():
+                for cid, n in tops.items():
+                    top_total[cid] = top_total.get(cid, 0) + n
+            palette_slot = {cid: i for i, (cid, _n) in enumerate(
+                sorted(top_total.items(), key=lambda kv: (-kv[1], kv[0])))}
+            words = []
+            for kw, n in sorted(word_counts.items(), key=lambda kv: (-kv[1], kv[0]))[:limit]:
+                tops = word_tops.get(kw, {})
+                # 主导顶层分类：计数优先，并列取 id 小者（确定性）
+                top_cid = (sorted(tops.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+                           if tops else None)
+                color = (_CLOUD_PALETTE[palette_slot[top_cid] % len(_CLOUD_PALETTE)]
+                         if top_cid else "#888")
+                words.append({"word": kw, "count": n,
+                              "top": {"id": top_cid, "name": cat_names.get(top_cid, "?")} if top_cid else None,
+                              "color": color})
+            return {
+                "focus": data["focus"], "categories": data["categories"],
+                "words": words, "sampled_entries": len(data["entries"]),
+            }
+
+        # 浅拷贝：缓存里的 dict 是共享的，facet 分支只往副本上挂键
+        payload: dict[str, Any] = dict(_cloud_cached(ckey, _compute_base))
         if word and word.strip():
             payload["word"] = word.strip()
             # 点 facet 优先（批次 89：词云点化——点击词元出知识点而非条目，

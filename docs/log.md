@@ -3543,3 +3543,66 @@ baseline 147,059，effective≈53%（OK），2026-10-29T20:1x+08:00。
 
 
 <!-- HANDOFF {"at":"2026-10-29T20:20:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-200x-用户裁决落地三处口径更正--不重抽--docsdesign-索引","draft":false,"goal":"用户裁决已落地：kpe_runner/pdf_fast/97b 工单三处口径更正（PDF 通道不丢内容）、真库 3 本不重抽、新增 docs/design/README 索引、docs/TODO 回勾 R29/R30/R31；零行为改动，34 passed","host":"dsh","kind":"handoff","next":"① 等用户挑下一件事：待审 132 条落定（要写库，需点头）/ 8.9 邮件 97c / 8.8 AI 会话 97d / 词云签名缓存；② 边界对缓存（百级再做）；③ 存量 72 对 dupe 复核（如需）","not_rerun":"四个 PDF 口径探针；probe_todo_state_20261029.py；全量 pytest 785/1（本轮仅注释与文档）","schema":1,"session":"session-c66f78f6-fe77-4525-a374-e1d7772d84f8","status":"HANDOFF","tokens":126445,"verify":"uv run python -m pytest -o addopts= -q tests/test_kpe_runner.py tests/test_kpe_volumes.py tests/test_pdf_fast.py tests/test_canary.py -> 34 passed；git status -sb -> main...origin/main"} -->
+<!-- HANDOFF {"at":"2026-10-29T20:44:10.908133+08:00","compactions":0,"doc":"docs/交接/2026-10-29-2044.md","draft":true,"goal":"上下文到 HANDOFF（89.1%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-06304648-f2e6-48d0-8f00-9febfff78b1d","status":"HANDOFF","tokens":131025,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-29T20:54:10.971988+08:00","compactions":0,"doc":"docs/交接/2026-10-29-2054.md","draft":true,"goal":"上下文到 CRITICAL（121.3%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-06304648-f2e6-48d0-8f00-9febfff78b1d","status":"CRITICAL","tokens":178374,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-29 20:5x–21:0x R32 词云签名缓存（用户裁决「按你的建议来」）
+
+**开场三步**（新会话 `session-06304648`）：`session_check` → `NEW_SESSION`（exit 0），取
+`at=2026-10-29T20:20:00` 交接块；`context_probe` → effective **12.8%**（18,774 / 147,059，OK）。
+
+**用户裁决**：
+
+1. 待审 **132 条先不动**（选项 C）——本轮零写库，`pending` 仍 132；
+2. 代码三项按「**词云 → 8.9 邮件 → 8.8 会话**」推进（理由：词云是唯一当天能用真库验收的）。
+
+### R32 已落地（词云签名缓存）
+
+- 工单 `docs/design/变更工单-2026-10-29-词云签名缓存.md`（契约影响：REST 零变化；
+  **DataLayer 公开方法集 +1**，按 `test_datalayer_surface` 纪律同步快照）。
+- 代码两处：`datalayer/views.py::cloud_fingerprint`（6 条聚合，真库 **8–9 ms**）+
+  `web/routers/discovery.py::/cloud` 进程内缓存（`_CLOUD_TTL=300 s`、`_CLOUD_MAX=8`，
+  键 = 库路径 + `category_id` + `limit` + 签名）；`word=` facet 不缓存。
+- 签名口径：entries 数 / `MAX(exported_at)` / 正文总长 / status 分布 / 挂接数 / 分类数与名长 /
+  points 数 / 最新 `created_at` / 点文本总长。**点段不复用 `points_fingerprint`**（向量段
+  14.1 ms 且不影响词元），另立 6.8 ms 聚合——这条是实测打出来的，别"优化"回去。
+- 测试：`tests/test_cloud.py` +4 例；全量 **789 passed / 1 skipped**（原 785）；canary 零漂移；
+  `gen_docs --check` 三份 OK。
+- **真库实测**（368 条目 / 5,607 点，serve 8420 重启后）：全库 **1,937 / 1,972 ms → 19–30 ms**
+  （≈70×；首调 3.9 s 是进程内首次载入 jieba 词典）；分类「文学创作」149 → 27 ms、
+  「人工智能」284 → 27 ms；与旧代码响应**逐字相同**（探针 `temp/probe_cloud_cache_20261029.py`
+  在真库副本上跑新代码、同时打线上 8420 旧进程对比）。
+- serve 已重启载入新代码：PID 15172，日志 `temp/serve-8420.log`（env 从 HKCU 导入三条 key）。
+
+### 下一轮已核实的现状（**别重查**）
+
+- **8.9 邮件 97c**：`adapters/maildir.py` 解析/幂等/meta 已完成，`pipeline/mail_threads.py`
+  `quote_strip`（含两种中文自补头）+ `rebuild_mail_threads` 已接进 sync；缺的只有三件——
+  furniture 清单（签名块/列表页脚/手机标语/保密免责）、**redact 没盖到邮件 inline**
+  （只在 `sync/store.py::_store_bodies` 清 content_store 那份）、剥离率 >90% 告警。
+  本机**无真实 maildir**（`[sources.mail] enabled=false`、路径空；`D:\sData` 与用户目录都扫过），
+  真实验收需用户给目录；库内 `threads=0`/`conv_messages=0` 只因源从未启用。
+- **8.8 AI 会话 97d**：`adapters/session.py` 映射/线程已通，`sources.session.harvester_dirs`
+  键已存在；缺思考块剔除（`thinking` / Claude `type:"thinking"` / 豆包 `[think]`）、轮次清洗
+  （工具残留/寒暄/悬空意图句）、inline redact、pending 缓冲。**分支主干在上游已完成**——
+  harvester `adapters/official_export.py:142` 用 `current_node` 回溯重建可见线程，
+  `models.Message` 只有 role/text/timestamp/raw、**无 parent_id**；我们只记 `extra.branch_points`。
+  本机**无 harvester exports**（`C:\Users\yianyao\WorkBuddy` 下无 `export_manifest.json`）。
+- 两者都不改契约（无新 config 键/表/字段/scheme），仍按清洗层方案 §3.4/§3.5 落。
+
+### 不要重跑
+
+- 全量 pytest（**789/1**）、canary、`gen_docs --check`；
+- 真库 `/api/cloud` 计时（数字已记本节）、serve 重启（已完成，PID 15172）；
+- `temp/probe_cloud_cache_20261029.py`（141.9 MB 库副本 + 线上对比，约 15 s）；
+- 上一轮四项只读排查（maildir / session 现状与「真实数据缺失」结论已记本节）。
+
+### 会话指纹
+
+`session-06304648-f2e6-48d0-8f00-9febfff78b1d`，compactions=0，tokens≈178,000（watcher 20:54 读到
+178,374），baseline 147,059，effective **121%**（CRITICAL），2026-10-29T21:0x+08:00。
+本轮 token 主要花在四项只读排查 + 实现 + 真库对比验收，**按 85% 阈值应在交接点换会话**。
+
+<!-- HANDOFF {"at":"2026-10-29T21:06:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-29-205x210x-r32-词云签名缓存用户裁决按你的建议来","draft":false,"goal":"R32 词云签名缓存已交付并真库验收：进程内 TTL 300 s + 数据签名换键，1.94 s → 19–30 ms（≈70×，响应逐字不变）；789 passed；132 条待审按用户裁决未动（仍 pending）","host":"dsh","kind":"handoff","next":"① 8.9 邮件 97c：furniture 清单 + inline redact + 剥离率告警（需用户给 maildir 目录才能真实验收）；② 8.8 AI 会话 97d：思考块剔除 + 轮次清洗 + inline redact + pending（需 harvester exports 目录）；③ 待审 132 条等用户发话（写库，判据 pending→0；代价：未分类 0→97）","not_rerun":"全量 pytest 789/1；canary；gen_docs --check；真库 /api/cloud 计时（1,937→27 ms）；serve 重启（PID 15172）；temp/probe_cloud_cache_20261029.py；maildir/session 现状排查结论（见本节「下一轮已核实的现状」）","schema":1,"session":"session-06304648-f2e6-48d0-8f00-9febfff78b1d","status":"CRITICAL","tokens":178374,"verify":"uv run python -m pytest -o addopts= -q -> 789 passed, 1 skipped；curl http://127.0.0.1:8420/api/cloud?limit=60 三连 -> 首调≈3.9 s（jieba 载入）/ 后续 19–30 ms；git status -sb"} -->
+

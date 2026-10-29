@@ -4,6 +4,28 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 词云签名缓存：进程内 TTL + 数据签名换键（2026-10-29，R32）
+
+- **为什么**：词云是「来回看」的浏览动作，但 `/api/cloud` 每次全量重算——真库 72 条样本 + ≤800 个点
+  逐条 jieba tf-idf，实测 **1.94–2.00 s / 次**（全库）；切页签、切分类都重来一遍，而当时**一条缓存都没有**。
+- **方案**：`datalayer/views.py` 新增只读 `cloud_fingerprint()`（6 条聚合，真库 8–9 ms）；
+  `web/routers/discovery.py::/cloud` 加进程内缓存（`_CLOUD_TTL=300 s`、`_CLOUD_MAX=8`，
+  键 = 库路径 + `category_id` + `limit` + 签名）；`word=` facet **不缓存**，每次现算。
+- **签名口径**：entries 数 / `MAX(exported_at)` / 正文总长 / status 分布 / 挂接数 / 分类数与名长 /
+  points 数 / 最新 `created_at` / 点文本总长。**点段刻意不复用 `points_fingerprint`**：那个指纹含
+  `point_vectors`（14.1 ms），而向量重建不影响词元——另立 6.8 ms 的 points 聚合，失效半径更准也更便宜。
+- **契约**：表结构 / 字段 / locator scheme / `STATUSES` / REST（路径·参数·响应形状）/ `CONFIG_SCHEMA_KEYS`
+  **全无变化**；**DataLayer 公开方法集 +1**（`cloud_fingerprint`，按 `test_datalayer_surface` 的纪律
+  同步快照，工单 `变更工单-2026-10-29-词云签名缓存.md`）。
+- **实测**（真库 368 条目 / 5,607 点，serve 8420 重启后）：全库 **1,937 / 1,972 ms → 19–30 ms**
+  （≈70×；首调 3.9 s 是进程内首次载入 jieba 词典）；分类「文学创作」149 → 27 ms、
+  「人工智能」284 → 27 ms；与旧代码响应**逐字相同**
+  （`temp/probe_cloud_cache_20261029.py` 在真库副本上对比线上 8420 旧进程）。
+- **测试**：`tests/test_cloud.py` +4 例（签名失效半径、同签名第二次不重算、数据变化即重算、
+  facet 不进缓存）；全量 **789 passed / 1 skipped**（原 785）；canary 零漂移；`gen_docs --check` 三份 OK。
+- **已知取舍**：同数据同范围最多陈旧 300 s；只改 meta 守卫键 / 点级 `aging_flag`·`dupe_of` 的改动
+  等一个 TTL；进程内缓存 → 多 worker 各一份（与 R14 同前提）。
+
 ### 变更工单 · 超大书分卷摄取 C1：按章装箱多卷 + 断点续跑（2026-10-29，R31）
 
 - **为什么**：真库 3 条正文超过 `[ingest] kpe_max_chars` 的 PDF（agentic-ai-guide 2,587,917 /

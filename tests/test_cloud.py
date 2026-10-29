@@ -142,6 +142,64 @@ def test_cloud_filters_noise_tokens(client, dl):
         assert bad not in words, bad
 
 
+# ---- R32：数据签名 + 词云签名缓存（工单 2026-10-29） ----
+
+def test_cloud_fingerprint_covers_invalidation_radius(dl):
+    """签名 = 缓存失效半径：改 status / 改挂接 / 建分类必须换签名；只改 meta 守卫键不换。"""
+    g = _seed_library(dl)
+    f1 = dl.cloud_fingerprint()
+    dl.set_status([g["e4"].id], "rejected")
+    f2 = dl.cloud_fingerprint()
+    assert f1 != f2                          # status 分布进签名（转正/拒绝即失效）
+    dl.set_status([g["e4"].id], "active")
+    assert dl.cloud_fingerprint() == f1      # 回到原状态签名也回来（确定性，无时间戳混入）
+    dl.merge_meta(g["e1"].id, {"value_flag": "not_knowledge"})
+    # 已知取舍（工单 §2.1）：只改 meta 守卫键不进签名——由缓存 TTL 兜底
+    assert dl.cloud_fingerprint() == f1
+
+
+def test_cloud_api_signature_cache_reuses_computation(client, dl, monkeypatch):
+    """同签名第二次请求不再聚合：`cloud_data` 只被调一次，两次响应逐字相同。"""
+    _seed_library(dl)
+    calls = {"n": 0}
+    orig = dl.cloud_data
+
+    def counted(category_id, **kw):
+        calls["n"] += 1
+        return orig(category_id, **kw)
+
+    monkeypatch.setattr(dl, "cloud_data", counted)
+    r1 = client.get("/api/cloud")
+    r2 = client.get("/api/cloud")
+    assert r1.status_code == r2.status_code == 200
+    assert calls["n"] == 1
+    assert r1.json() == r2.json()
+
+
+def test_cloud_cache_invalidates_when_data_changes(client, dl):
+    """签名换键即重算：新增条目 + 挂分类后样本数递增（不返回陈旧结果）。"""
+    g = _seed_library(dl)
+    before = client.get("/api/cloud").json()
+    assert before["sampled_entries"] == 3
+    extra = _entry(source_key="mq:new", title="协程调度", locator="https://mq.com/new",
+                   locator_canonical="https://mq.com/new",
+                   inline_content="协程调度与事件循环的配合，任务切换的成本控制。" * 5)
+    dl.upsert_entries([extra])
+    dl.attach_category(extra.id, g["mq"].id, 0.9, "rule", "t-cloud")
+    after = client.get("/api/cloud").json()
+    assert after["sampled_entries"] == before["sampled_entries"] + 1
+
+
+def test_cloud_cache_leaves_facet_per_request(client, dl):
+    """`word=` facet 每次现算，且不把 `entries` 污染进缓存的基座。"""
+    g = _seed_library(dl)
+    client.get("/api/cloud")                       # 预热缓存
+    j = client.get("/api/cloud?word=消息").json()   # facet 分支不走缓存
+    assert j["word"] == "消息"
+    assert {e["id"] for e in j["entries"]} == {g["e1"].id, g["e2"].id}
+    assert "entries" not in client.get("/api/cloud").json()
+
+
 # ---- 前端静态探针（探针②④） ----
 
 def test_cloud_frontend_probes():
