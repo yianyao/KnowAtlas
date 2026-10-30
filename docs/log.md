@@ -4044,3 +4044,78 @@ baseline 147,059，effective **103.0%**（CRITICAL，watcher 23:16/23:20 已两�
 
 <!-- HANDOFF {"at":"2026-10-30T20:52:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-203x205x-r34-真库验收--两处环境事故smart-app-control--备份目录泄漏","draft":false,"goal":"R34 真库验收通过（条目 368→483、正文 77→127、82 归档不动、source_missing=0）+ 修 Smart App Control 拦 venv + 修 conftest 备份目录泄漏","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② ksync --full 再跑 1–2 轮补 65 条无正文；③ 裁决是否删 5 份 315KB 空快照；④ 提交并推送（conftest + 日志）；⑤ 裁决 115 条新条目是否 kauto 抽点","not_rerun":"真库 ksync --full（已跑，数字见本节）；sqlite backup API 全量备份与 kbackup --snap --no-throttle；test_backup+test_auto_dedupe+test_folders（25 passed）；serve 重启（PID 13964）","schema":1,"session":"session-0f0eb092-9f2f-42e5-8958-017a351916e8","status":"CRITICAL","tokens":145394,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；curl -s http://127.0.0.1:8420/api/session -> write_allowed=true；uv run python temp/probe_r34_state.py -> entries 483 / content_store 127 / missing 0"} -->
 
+## 2026-10-30 20:5x–21:1x 补推 + 正文快照补完（80→1）+ 自动去重首次真库生效（merge 20）
+
+**开场三步**：`session_check` → **NEW_SESSION**（exit 0，读 `at=2026-10-30T20:52:00` 交接块，
+status=CRITICAL）；`context_probe` → effective **12.8%**（18,773 / 147,059，compactions=0，OK）；
+`git status -sb` = `main...origin/main [ahead 2]`（`53ee8ae` + `a8fe2c2` 未推）。
+按交接块执行 ⓿ 补推、② 补正文快照；代码零改动（§1 无需方案确认）。
+
+### ⓿ 补推（已完成）
+
+`temp/push_retry_20261030.ps1`（20 轮重试，finally 恢复 insteadOf + origin）第 **1** 次即通：
+`1afcd4c..a8fe2c2  main -> main`，`ls-remote` = `a8fe2c2` 与 HEAD 一致。两处 URL 改写已确认恢复
+（仓库级 insteadOf = `https://github.com/`、origin = ghproxy 镜像）。
+
+### ② 正文快照补完（两轮 `ksync --full`，各 1 分钟左右）
+
+| 轮 | run_id | snapshot candidates/fetched | dedupe merge | content_store |
+|---|---|---|---|---|
+| 2 | `971649d725a74df1` | 50 / 50（failed 0） | 18 | 127 → 159 |
+| 3 | `54f8545246b54c17` | 29 / 29（failed 0） | 2 | 159 → 186 |
+
+- active folder 无正文：**80 → 1**；剩的 1 条是 `file://agentic-design-patterns-main/chapters/Index of Terms.md`
+  （`meta.value_flag=not_knowledge`，价值守门按设计终止重试，不是抓取失败）。
+- 条目总数 483、archived 82、`source_missing=0` 三轮前后不变（无归档复活、无误判源消失）。
+- `content_fts` 186 行 == `content_store` 186 行：快照正文都进了 FTS，无悬挂行。
+- `backup.status=skipped(min_interval)`，最近快照仍是 20:41 的 `knowledge-20261030-204107.db`。
+
+### 自动去重（R34 C 面首次在真库生效）
+
+两轮共 merge **20** 条，全部 `reason=content_hit`。抽查 3 对（`collect/视角.md` ↔ `小说要素/分类/视角.md`、
+`核心原理`、`文笔`）：**content_hash 完全相同**、标题相同、仅目录不同 —— 是同一文档的两份副本，合并正确。
+`dedupe_master` 20 条、master 各不同、无自指；检索只出主条目（`/api/search?q=视角` 复核）。
+
+### 发现：正文快照目前不进「条目区」检索（设计如此，非 bug）
+
+`/api/search` 的条目区 = 命中点溯源条目 + `search_entries_direct`（标题/路径直击），**正文级全文命中
+刻意不单独出条目卡**（批次 92 裁决）。实测 `非常道`（只存在于新快照正文、该条目尚无点）→ `hits:[]`，
+而 DB 层 `entries_fts MATCH "非常道"` 命中 1 条。**含义**：快照解决「源删了仍可看原文、以后能抽点」，
+要让新条目出现在搜索/词云/关系图里，仍需 `kauto` 抽点（交接块 ⑤）。
+
+### 验证与现场（serve 未重启，PID 13964）
+
+- `/api/session` 200、`/api/tree` 200、`/api/search` 200；
+- `/api/entries/dca88a07e91ff99b/file` **200 / 287,541 B**（新快照正文可取回，原文代理正常）。
+
+### 下一步（按序，首步可直接执行）
+
+1. 用户 Ctrl+F5 验收（8420 在听，`--host 0.0.0.0`）。
+2. 裁决：115 条新条目是否 `kauto` 抽点（花钱；不抽则只能靠标题/路径被找到）。
+3. 裁决：5 份 315 KB 空快照（2026-10-24/26/27/28/29）是否删除。
+4. 后端队列不变：真实 maildir 验收（需目录）、8.8 AI 会话 97d、emmx 剪枝、待审 132 条裁决（写库）。
+
+### 不要重跑
+
+- 两轮 `ksync --full`（run_id 见上表，`task_log` 可查）；
+- `temp/push_retry_20261030.ps1`（已成功；推送前两处 URL 改写已恢复）；
+- 全量 pytest 851/1、canary、`gen_docs --check`（本轮零代码变更）；
+- 20:40 的 sqlite backup API 全量备份与 `kbackup --snap`。
+
+### 验证命令
+
+```powershell
+uv run --with zstandard python tools/session_check.py          # 新会话应 NEW_SESSION
+uv run python temp/probe_r34_state.py                           # entries 483 / content_store 186 / missing 0
+uv run python temp/probe_folder_content.py                      # active folder 无正文 = 1（not_knowledge）
+curl.exe -s http://127.0.0.1:8420/api/session -o NUL -w "%{http_code}"   # 200
+git status -sb                                                  # main...origin/main（无 ahead）
+```
+
+### 会话指纹
+
+`session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74`，compactions=0，tokens≈69,700，
+baseline 147,059，effective **47.4%**（OK），2026-10-30T21:1x+08:00。
+
+<!-- HANDOFF {"at":"2026-10-30T21:12:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-205x211x-补推--正文快照补完801--自动去重首次真库生效merge-20","draft":false,"goal":"补推 a8fe2c2（1afcd4c..a8fe2c2）+ 两轮 ksync --full 补完正文快照（content_store 127→186，active folder 无正文 80→1；剩 1 条 value_flag=not_knowledge 属设计）+ 自动去重首次真库生效 merge 20 条 content_hit（抽查哈希全同）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② 裁决 115 条新条目是否 kauto 抽点（不抽则正文不入搜索/词云）；③ 裁决是否删 5 份 315KB 空快照；④ 后端队列：真实 maildir 验收、8.8 AI 会话 97d、emmx 剪枝、待审 132 条裁决","not_rerun":"两轮 ksync --full（run_id 971649d725a74df1 / 54f8545246b54c17）；temp/push_retry_20261030.ps1；全量 pytest 851/1；canary；gen_docs --check；20:40 全量备份与 kbackup --snap","schema":1,"session":"session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74","status":"OK","tokens":69700,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python temp/probe_r34_state.py -> entries 483 / content_store 186 / source_state ok 483；uv run python temp/probe_folder_content.py -> active folder no content 1；git status -sb -> 无 ahead"} -->
+
