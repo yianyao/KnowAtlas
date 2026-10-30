@@ -40,7 +40,14 @@ def _reset_embed_failure_gate():
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
     data = {
-        "general": {"db_path": str(tmp_path / "test.db"), "log_level": "WARNING"},
+        "general": {
+            "db_path": str(tmp_path / "test.db"),
+            # 备份目录必须跟着临时库走：默认 "data/backups" 是相对 cwd 的，
+            # 用例里 run_sync 会顺带快照，就会把测试库写进真实备份目录，
+            # 还会按 backup_keep 轮换掉真快照（2026-10-30 实证）。
+            "backup_dir": str(tmp_path / "backups"),
+            "log_level": "WARNING",
+        },
         "web": {"token_env": "KNOWATLAS_TEST_TOKEN"},
         "fetch": {
             "default_backend": "simple", "fallback_backend": "",

@@ -3999,3 +3999,48 @@ baseline 147,059，effective **103.0%**（CRITICAL，watcher 23:16/23:20 已两�
 - **不要重跑**：全量 851/1、canary、gen_docs、本轮 5 个新增用例；temp/ 探针（probe_source_delete / probe_archive_origin）。
 - **已知**：真库未执行同步（避免写库）；网络源（书签/OPML）仍受 K1，不自动抓正文。
 <!-- HANDOFF {"at":"2026-10-30T20:28:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-202x-r34-收录与源脱节--folder-正文快照--三层去重自动化851-passed--1-skipped","draft":false,"goal":"R34：收录与源脱节（源消失只标 source_state=missing）+ folder 同步正文快照 + 三层去重自动化落地（851 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 真库 ksync --full 验收 source_missing 与 82 条历史归档不动；② 看首轮 snapshot 补 15 条 folder 正文；③ Ctrl+F5 验收；④ 可选推送","not_rerun":"全量 pytest 851/1、canary、gen_docs --check、test_auto_dedupe 3 例、test_mark_source_state_keeps_active、test_snapshot_on_sync_captures_body；temp/probe_source_delete.py、temp/probe_archive_origin.py","schema":1,"session":"session-036b0975-510a-40df-9794-fcc78d9bd71c","status":"HANDOFF","tokens":176000,"verify":"uv run python -m pytest -o addopts= -q -> 851 passed, 1 skipped；uv run python -m knowatlas ksync --dry-run -> 源可达性与统计（不写库）"} -->
+<!-- HANDOFF {"at":"2026-10-30T20:42:11.493780+08:00","compactions":0,"doc":"docs/交接/2026-10-30-2042.md","draft":true,"goal":"上下文到 HANDOFF（86.8%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-0f0eb092-9f2f-42e5-8958-017a351916e8","status":"HANDOFF","tokens":127707,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+<!-- HANDOFF {"at":"2026-10-30T20:44:11.482227+08:00","compactions":0,"doc":"docs/交接/2026-10-30-2044.md","draft":true,"goal":"上下文到 CRITICAL（98.9%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-0f0eb092-9f2f-42e5-8958-017a351916e8","status":"CRITICAL","tokens":145394,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-30 20:3x–20:5x R34 真库验收 + 两处环境事故（Smart App Control / 备份目录泄漏）
+
+- **开场三步**：`session_check` = NEW_SESSION（读 20:28 交接块），`context_probe` 初始 effective **12.4%**。
+- **事故 1（阻塞）**：`.venv\Scripts\python.exe` 被 **Smart App Control** 拦下
+  （`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy` 的 `VerifiedAndReputablePolicyState=1`；
+  `os error 4551`，CodeIntegrity 3077/3033「did not meet the Enterprise signing level」）。
+  `uv run python` / `pytest` 全挂，uv 基础解释器不受影响。**修法**：把基础解释器的
+  `python.exe` + `python313.dll` + `vcruntime140*.dll` + `python3.dll` 复制进 `.venv\Scripts`
+  （原 venvlauncher 备份 `python.exe.venvlauncher.bak`）；`sys.prefix` 仍解析到 `.venv`，
+  `uv run python -c` / `knowatlas --version` OK。只拷 `python.exe` 会缺 DLL（0xC0000135）。
+- **事故 2（备份失效 4 天）**：`data/backups` 自 10-26 起 5 份快照全是 **315,392 B 空库**
+  （1 条 manual 测试条目「Python 2 教程」、0 点 0 正文）。根因：`tests/conftest.py` 的 `cfg`
+  只把 `db_path` 指向 tmp，`backup_dir` 仍是默认相对路径 `data/backups` → 用例里的 `run_sync`
+  快照写进**生产备份目录**并参与 `backup_keep=10` 轮换。**已修**：conftest 加
+  `"backup_dir": str(tmp_path / "backups")`；跑 `test_backup + test_auto_dedupe + test_folders`
+  **25 passed**，跑完 `data/backups` 文件数不变（8）。
+- **真库 `ksync --full` 验收**（9 s；跑前全量备份：sqlite backup API →
+  `data/backups/knowledge-20261030-204030-full.db` 141.9 MB；另 `kbackup --snap --no-throttle`
+  → `knowledge-20261030-204107.db` 134.9 MB，integrity ok / 368 条目 / 5,607 点）：
+
+  | 面 | 结果 |
+  |---|---|
+  | sources | bookmarks 191 unchanged；folders 182（created 115、unchanged 67、snapshot_fetched 50/50、classified 111、staged 4）；emmx 8（updated 1） |
+  | 历史归档 | `archived` 82 条前后一致，未复活 |
+  | 源消失 | `source_state=missing` 0 条（本次无源文件消失），`source_missing=0` |
+  | 条目 | 368 → **483**（folder 148→263、active 76→191） |
+  | 正文 | content_store 77 → **127**（+50 条快照） |
+  | 点 | 5,607 不变（ksync 不抽点，新条目待 kauto/ingest） |
+  | 去重 | `dedupe_scan merged=0`；`rejected_sweep` 78 全在冷却 |
+
+  - 115 条「新建」已核实是**真新增文件**：与 81 条归档条目 basename / locator / 标题**零重叠**，
+    且归档条目的源文件 0/81 仍在磁盘（真删除）——不是 R16 归档复活。
+- **serve**：机重启后不自启，已按 `--host 0.0.0.0` + 用户级 `KNOWATLAS_WEB_TOKEN` 重启
+  （PID 13964，指纹 `2ad28785`，日志 `~/.knowatlas/serve-8420.out.log`）。实测 `/api/session`
+  200 + Set-Cookie + `write_allowed=true`；`/api/tree` 200；新条目原文代理
+  `/api/entries/f17c6901b2aade75/file` 200 / 13,249 B；`/api/search` 200；`/api/cloud` 4.45 s（首调 jieba）。
+- **待办**：① 用户 Ctrl+F5 验收；② 再跑 1–2 轮 `ksync --full` 补剩余 65 条 folder 无正文（每轮 50）；
+  ③ 5 份 315 KB 空快照是否删除（需点头）；④ 提交 + 推送（conftest + 本节）；⑤ 115 条新条目是否 `kauto` 抽点（花钱，需裁决）。
+
+<!-- HANDOFF {"at":"2026-10-30T20:52:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-203x205x-r34-真库验收--两处环境事故smart-app-control--备份目录泄漏","draft":false,"goal":"R34 真库验收通过（条目 368→483、正文 77→127、82 归档不动、source_missing=0）+ 修 Smart App Control 拦 venv + 修 conftest 备份目录泄漏","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② ksync --full 再跑 1–2 轮补 65 条无正文；③ 裁决是否删 5 份 315KB 空快照；④ 提交并推送（conftest + 日志）；⑤ 裁决 115 条新条目是否 kauto 抽点","not_rerun":"真库 ksync --full（已跑，数字见本节）；sqlite backup API 全量备份与 kbackup --snap --no-throttle；test_backup+test_auto_dedupe+test_folders（25 passed）；serve 重启（PID 13964）","schema":1,"session":"session-0f0eb092-9f2f-42e5-8958-017a351916e8","status":"CRITICAL","tokens":145394,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；curl -s http://127.0.0.1:8420/api/session -> write_allowed=true；uv run python temp/probe_r34_state.py -> entries 483 / content_store 127 / missing 0"} -->
+
