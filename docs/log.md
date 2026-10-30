@@ -4119,3 +4119,53 @@ baseline 147,059，effective **47.4%**（OK），2026-10-30T21:1x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-30T21:12:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-205x211x-补推--正文快照补完801--自动去重首次真库生效merge-20","draft":false,"goal":"补推 a8fe2c2（1afcd4c..a8fe2c2）+ 两轮 ksync --full 补完正文快照（content_store 127→186，active folder 无正文 80→1；剩 1 条 value_flag=not_knowledge 属设计）+ 自动去重首次真库生效 merge 20 条 content_hit（抽查哈希全同）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② 裁决 115 条新条目是否 kauto 抽点（不抽则正文不入搜索/词云）；③ 裁决是否删 5 份 315KB 空快照；④ 后端队列：真实 maildir 验收、8.8 AI 会话 97d、emmx 剪枝、待审 132 条裁决","not_rerun":"两轮 ksync --full（run_id 971649d725a74df1 / 54f8545246b54c17）；temp/push_retry_20261030.ps1；全量 pytest 851/1；canary；gen_docs --check；20:40 全量备份与 kbackup --snap","schema":1,"session":"session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74","status":"OK","tokens":69700,"verify":"uv run --with zstandard python tools/session_check.py -> NEW_SESSION；uv run python temp/probe_r34_state.py -> entries 483 / content_store 186 / source_state ok 483；uv run python temp/probe_folder_content.py -> active folder no content 1；git status -sb -> 无 ahead"} -->
 
+## 2026-10-30 21:5x 空快照清理 + kauto 试跑 10 条（+111 点）
+
+用户裁决（本轮询问）：「先抽 10 条试跑」+「删除这 5 份空快照」。
+
+### 空快照清理（已完成）
+
+删前逐份只读核验：5 份 315,392 B 文件全是 `entries=1 / points=0 / contents=0`（conftest 污染产物，
+见上一节事故 2），确认后删除 `2026-10-24 / 26 / 27 / 28 / 29` 五份。`data/backups` 现剩 **3 份**：
+`knowledge-20261025-180058.db`(99.7 MB)、`knowledge-20261030-204030-full.db`(141.9 MB)、
+`knowledge-20261030-204107.db`(134.9 MB)。探针 `temp/probe_empty_snapshots.py`（只读）。
+
+### kauto 试跑（10 条，刻意不带激活/老化）
+
+- 命令：`kauto --limit 10 --no-activate --no-aging`，run_id `efb6518426144c55`。
+- **为什么带 `--no-activate`**：默认 `kauto` 会顺带跑待审激活，dry-run 显示 `activated=97 / rejected=35`
+  （`portal_homepage` 19、`index_subdir` 16）——那是「待审 132 条裁决」这一独立议题，超出本次
+  「只抽 10 条」的授权，故拆开。待审仍是 **132** 条。
+- 结果：`points_created=111`（5,607 → **5,718**），出点条目 6 个——`雪花写作法.ocr` **90**、
+  `Chapter 3_ Parallelization` 6、`Chapter 4_ Reflection` 6、`Chapter 1_ Prompt Chaining` 4、
+  `Chapter 2_ Routing` 3、`Chapter 20_ Prioritization` 2；`points_rejected=0`；`fetch=1`
+  （content_store 186 → 187）；整轮约 **2 分钟**。
+- **1 条失败**：`d94d56e31725688d`（Chapter 21_ Exploration and Discovery）`JSON 解析失败`——
+  LLM 输出在 `points[0].text` 中途被截断（疑似 max_tokens 不足），该条 0 点，下轮重试；
+  属已知失败形态，不是数据损坏。
+- 质量抽检（`point_sources` 联查）：5 个点的 `anchor` 与源文一致，`char_offset` 有值；
+  `雪花写作法.ocr` 的 anchor 有 OCR 乱码（如「则有以下要素 ． 3 ． 决定」），是**源质量**不是抽取问题。
+- 检索复核：`/api/search?q=被动型场景` / `主动型场景` 均命中新点，`sources` 正确指回
+  `file://雪花写作法.ocr.md`。
+
+### 全量成本口径（供裁决）
+
+10 条 ≈ 2 分钟 / 111 点；剩余 **105** 条按同比例约 **15–25 分钟 / ~1,100 点**（大头是整本 OCR 书，
+单本 90 点）。要不要跑完、以及是否先修那个 JSON 截断（属代码改动，需方案确认）由用户裁决。
+
+### 下一步（按序）
+
+1. 用户 Ctrl+F5 验收（8420 在听）。
+2. 裁决：剩余 105 条是否继续 kauto 抽点；是否先提高抽取的 max_tokens / 缩小分块以消除 JSON 截断。
+3. 裁决：待审 132 条是否跑激活（`kauto --activate-only`，dry-run 预期 97 转正 / 35 拒绝）。
+4. 后端队列不变：真实 maildir、8.8 AI 会话 97d、emmx 剪枝。
+
+### 不要重跑
+
+- `kauto --limit 10 --no-activate --no-aging`（run_id `efb6518426144c55`）；两次 dry-run
+  （`c9159a395e724aea` 带激活、`91887165a273479f` 不带）；
+- 5 份空快照已删（删前已核验，无需再查）；
+- 两轮 `ksync --full`、补推脚本、全量 pytest 851/1（本节零代码改动）。
+
+<!-- HANDOFF {"at":"2026-10-30T21:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-215x-空快照清理--kauto-试跑-10-条111-点","draft":false,"goal":"按用户裁决删 5 份 315KB 空快照（data/backups 剩 3 份）+ kauto 试跑 10 条（--no-activate --no-aging，points 5,607→5,718，+111 点，6 条目出点，1 条 JSON 截断失败，约 2 分钟）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② 裁决剩余 105 条是否继续抽点（≈15–25 分钟 / ~1,100 点）与是否先修 JSON 截断（改 max_tokens/分块，需方案）；③ 裁决待审 132 条是否 kauto --activate-only（dry-run：97 转正 / 35 拒绝）；④ 后端队列：真实 maildir、8.8 AI 会话 97d、emmx 剪枝","not_rerun":"kauto 试跑 run_id efb6518426144c55；dry-run c9159a395e724aea / 91887165a273479f；5 份空快照删除（已核验）；两轮 ksync --full；补推脚本；全量 pytest 851/1","schema":1,"session":"session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74","status":"OK","tokens":95000,"verify":"uv run python temp/probe_r34_state.py -> entries 483 / active 191 / pending 132 / points 5718 / content_store 187；uv run python temp/probe_folder_content.py -> active folder no content 1；curl.exe -s http://127.0.0.1:8420/api/search?q=被动型场景 -> points 含 51f66f560aced73a"} -->
+
