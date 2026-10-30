@@ -69,6 +69,7 @@
 | `变更工单-2026-10-29-邮件furniture与inline脱敏.md` | 97c：四类尾部家具剔除 + inline 脱敏 + 剥后近空告警 | 已落地（真实 maildir 验收待） |
 | `变更工单-2026-10-29-响应式与PWA壳.md` | 批 98：820 px 断点（底部标签条 / 分类抽屉 / 预览浮层）+ manifest / SW / 图标 / 离线只读 | 已落地（局域网 http 下 SW 不注册，见 §6） |
 | `变更工单-2026-10-29-局域网写权限收紧.md` | `web.allow_lan_writes` + `/api/session` 按**客户端地址**种 Cookie + 403 `FORBIDDEN_READONLY` + 只读徽标/令牌兜底 | 已落地（反代场景的 `X-Forwarded-For` 随 P2） |
+| `变更工单-2026-10-30-收录与源脱节.md` | 源消失只记 `meta.source_state=missing`（不再自动归档）+ folder 同步正文快照 + 三层去重自动化 | 已落地 |
 
 ## 3. 调研 / 方案 / 架构 / ADR
 

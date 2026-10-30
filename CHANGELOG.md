@@ -4,6 +4,28 @@
 
 ## [0.2.0] - 2026-10-23
 
+### 变更工单 · 收录与源脱节 + 本地源正文快照 + 三层去重自动化（2026-10-30）
+
+- **为什么**：源侧删除（书签失效、邮件/聊天记录清理、文件被删）是外部常态；旧行为 `ksync --full`
+  把源里没见到的条目置 `archived`，而 `archived` 直接退出检索/词云/图谱——等于源一删，收录的知识就「消失」。
+- **口径（用户裁决）**：收录与源脱节。源消失只记 `meta.source_state=missing`（消费面不加过滤），
+  `archived` 只由用户或显式 `--prune-missing` 产生；本地 folder 源同步即抓正文；存量 82 条历史归档不复活。
+- **A 状态脱节**：新增 `DataLayer.mark_source_state`（批量写 meta、只动 active、`task_log` 留痕）；
+  `run_sync` 默认不再调 `archive_missing`，新增 `prune_missing` 参数与 `ksync --prune-missing`（旧行为可回退）。
+- **B 正文快照**：`[sources.folders] snapshot_on_sync=true`（默认）/ `snapshot_max_per_run=50`；
+  在分类之前补抓（backfill 每轮推进、本轮新建优先），源文件删了正文仍在 `content_store`。
+- **C 自动去重**：`run_sync` 尾部自动 `scan_and_merge`（存量 canonical/hash 合并）；pending 转正后
+  （`kauto` 的 `activate_pending` 与 Web 批量转正）补跑 `dedupe_entries`。语义去重仍只在 `ksync --embed`。
+- **契约**：`status` 语义（archived 不再自动产生）；`entries.meta` +2 键（`source_state` / `source_missing_at`）；
+  DataLayer 公开方法 **127 → 128**；`run_sync` +1 参数；CLI +1 开关；源级配置 +2 子键
+  （`CONFIG_SCHEMA_KEYS` 不变）。表结构 / `STATUSES` / `SCHEMES` / `SOURCE_TYPES` / 路由集合零变更；canary 零漂移。
+- **测试**：新增 `tests/test_auto_dedupe.py` 3 例、`test_mark_source_state_keeps_active`、
+  `test_snapshot_on_sync_captures_body`；改 `test_folders` / `test_bookmarks` / `test_entry_targeted` 的归档断言、
+  `test_cli_surface` 与 `test_datalayer_surface` 快照。全量 **851 passed / 1 skipped**（原 846）；
+  canary 1 passed；`gen_docs --check` 三份 OK。
+- **边界**：网络源（书签/OPML）默认仍不抓正文（K1 不变，可在转正后由 `[ingest]` 巡检补抓）；
+  文件内容变化不自动重读；82 条历史 `archived` 不迁移（按用户裁决保持归档）。
+
 ### 变更工单 · 局域网写权限收紧（2026-10-29，`web.allow_lan_writes`）
 
 - **为什么**：上一批（`110c55c`）放开白名单后，`/api/session` 仍对**任何来访者**种写 Cookie——

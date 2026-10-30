@@ -67,7 +67,8 @@ def _cmd_ksync(args: argparse.Namespace) -> int:
                          freshness_scan=args.freshness_scan,
                          errata_scan=args.errata_scan,
                          purge_source=args.purge_source,
-                         purge_reason=args.purge_reason)
+                         purge_reason=args.purge_reason,
+                         prune_missing=args.prune_missing)
     finally:
         dl.close()
     for name, src_stats in (stats.get("sources") or {}).items():

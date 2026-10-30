@@ -153,16 +153,18 @@ def test_sync_bookmarks_end_to_end(cfg, dl, registries, tmp_path, bookmarks_json
     src2 = stats2["sources"]["bookmarks"]
     assert src2["created"] == 0 and src2["unchanged"] == 5 and src2["archived"] == 0
 
-    # 删除检测：书签文件里移除一条后 full 同步 → archived
+    # 删除检测默认只标 missing（2026-10-30 工单《收录与源脱节》），不再归档
     data = json.loads(json.dumps(bookmarks_json))
     bar_children = data["roots"]["bookmark_bar"]["children"]
     bar_children[:] = [c for c in bar_children if c.get("id") != "13"]
     _enable(cfg, _write(tmp_path, data))
     stats3 = run_sync(cfg, dl, locators, semantics, full=True)
-    assert stats3["sources"]["bookmarks"]["archived"] == 1
-    # 归档条目不物理删除（被移除的是 id=13 副本；canonical 相同的主条目仍 active）
+    assert stats3["sources"]["bookmarks"]["archived"] == 0
+    assert stats3["sources"]["bookmarks"]["source_missing"] == 1
+    # 条目不物理删除、也不退出消费面（被移除的是 id=13 副本；canonical 相同的主条目仍 active）
     removed = dl.find_by_locator("https://sqlite.org/docs.html#top")
-    assert removed and removed[0].status == "archived"
+    assert removed and removed[0].status == "active"
+    assert removed[0].meta["source_state"] == "missing"
     kept = dl.find_by_canonical("https://sqlite.org/docs.html")
     assert kept is not None and kept.status == "active"
 
@@ -222,16 +224,17 @@ def test_sync_updated_entry_reclassify(cfg, dl, registries, tmp_path, bookmarks_
 
 
 def test_sync_revives_archived_entry(cfg, dl, registries, tmp_path, bookmarks_json):
-    """老化后复活：归档条目重新出现在源里 → full 同步恢复 active。"""
+    """老化后复活：--prune-missing 归档的条目重新出现在源里 → full 同步恢复 active。"""
     _enable(cfg, _write(tmp_path, bookmarks_json))
     locators, semantics = registries
     run_sync(cfg, dl, locators, semantics)  # 首次入库（含 id=13）
-    # 删除 id=13 → archived
+    # 删除 id=13 → 显式 prune 归档
     data = json.loads(json.dumps(bookmarks_json))
     bar = data["roots"]["bookmark_bar"]["children"]
     bar[:] = [c for c in bar if c.get("id") != "13"]
     _enable(cfg, _write(tmp_path, data))
-    run_sync(cfg, dl, locators, semantics, full=True)
+    stats = run_sync(cfg, dl, locators, semantics, full=True, prune_missing=True)
+    assert stats["sources"]["bookmarks"]["archived"] == 1
     removed = dl.find_by_locator("https://sqlite.org/docs.html#top")
     assert removed and removed[0].status == "archived"
     # 重新出现 → 恢复 active

@@ -3984,3 +3984,18 @@ baseline 147,059，effective **103.0%**（CRITICAL，watcher 23:16/23:20 已两�
 手机验收：同网段开 `http://192.168.1.242:8420`，预期只读 + 顶栏「只读」徽标 + 写操作先弹令牌。
 要手机可写：`[web] allow_lan_writes = true` 后重启（等同放开写库，公共网络别开）。
 机器重启后**不会自启**（只有 watcher 计划任务，没有 serve 的），需重跑同一条命令。
+<!-- HANDOFF {"at":"2026-10-30T20:12:11.278852+08:00","compactions":0,"doc":"docs/交接/2026-10-30-2012.md","draft":true,"goal":"上下文到 CRITICAL（109.7%）","host":"dsh","kind":"handoff","next":"","not_rerun":"","schema":1,"session":"session-036b0975-510a-40df-9794-fcc78d9bd71c","status":"CRITICAL","tokens":161276,"verify":"session-guard check --workspace \"D:\\sData\\git\\KnowAltas\""} -->
+
+## 2026-10-30 20:2x R34 收录与源脱节 + folder 正文快照 + 三层去重自动化（851 passed / 1 skipped）
+
+- **目标（用户 2026-10-30 裁决）**：删除数据源内容不影响 KnowAtlas 本身；被收录的内容与源脱节；三层去重全自动。
+- **已完成**：
+  - A 状态脱节：`DataLayer.mark_source_state`（meta.source_state=missing，只动 active）；`run_sync` 默认不再 `archive_missing`，`prune_missing` / `ksync --prune-missing` 保留旧行为；
+  - B 本地源正文快照：`[sources.folders] snapshot_on_sync=true`（默认）+ `snapshot_max_per_run=50`，分类前补抓、新建优先、按 value_flag 终止重试；
+  - C 自动去重：`run_sync` 尾部 `scan_and_merge`；`activate_pending` 与 Web 批量转正后补跑 `dedupe_entries`；语义去重仍只在 `ksync --embed`；
+  - 文档：新工单 `docs/design/变更工单-2026-10-30-收录与源脱节.md`、使用手册状态机与 fetch 口径、CHANGELOG、design README 索引；三份参考已再生成。
+- **测试**：全量 **851 passed / 1 skipped**（原 846，+5：自动去重 3、mark_source_state 1、snapshot 1）；canary 1 passed 零漂移；`gen_docs --check` 三份 OK；`git diff --check` 干净。
+- **下一步**：① 真库跑 `uv run python -m knowatlas ksync --full` 验收（82 条历史 archived 不动；源消失条目应只多 meta.source_state=missing）；② 看首轮 snapshot 是否把 folder 缺正文的 15 条补进 content_store；③ Ctrl+F5 验收；④ 需要时推送。
+- **不要重跑**：全量 851/1、canary、gen_docs、本轮 5 个新增用例；temp/ 探针（probe_source_delete / probe_archive_origin）。
+- **已知**：真库未执行同步（避免写库）；网络源（书签/OPML）仍受 K1，不自动抓正文。
+<!-- HANDOFF {"at":"2026-10-30T20:28:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-202x-r34-收录与源脱节--folder-正文快照--三层去重自动化851-passed--1-skipped","draft":false,"goal":"R34：收录与源脱节（源消失只标 source_state=missing）+ folder 同步正文快照 + 三层去重自动化落地（851 passed / 1 skipped）","host":"dsh","kind":"handoff","next":"① 真库 ksync --full 验收 source_missing 与 82 条历史归档不动；② 看首轮 snapshot 补 15 条 folder 正文；③ Ctrl+F5 验收；④ 可选推送","not_rerun":"全量 pytest 851/1、canary、gen_docs --check、test_auto_dedupe 3 例、test_mark_source_state_keeps_active、test_snapshot_on_sync_captures_body；temp/probe_source_delete.py、temp/probe_archive_origin.py","schema":1,"session":"session-036b0975-510a-40df-9794-fcc78d9bd71c","status":"HANDOFF","tokens":176000,"verify":"uv run python -m pytest -o addopts= -q -> 851 passed, 1 skipped；uv run python -m knowatlas ksync --dry-run -> 源可达性与统计（不写库）"} -->

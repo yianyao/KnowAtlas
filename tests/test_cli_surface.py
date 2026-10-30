@@ -44,8 +44,8 @@ EXPECTED: dict[str, list[str]] = {
     "ksync": [
         "--cluster-report", "--dedupe-scan", "--dry-run", "--embed", "--embed-force", "--entry",
         "--errata-scan", "--expand", "--expand-limit", "--fetch-limit", "--freshness-scan",
-        "--full", "--help", "--incremental", "--limit", "--purge-reason", "--purge-source",
-        "--reclassify", "--source", "--value-scan", "-h",
+        "--full", "--help", "--incremental", "--limit", "--prune-missing", "--purge-reason",
+        "--purge-source", "--reclassify", "--source", "--value-scan", "-h",
     ],
     "ktest": [
         "--dry-run", "--help", "--seed-from-log", "-h", "what",

@@ -2,7 +2,8 @@
 
 
 # 对外入口保持 knowatlas.pipeline.sync 不变（测试/ingest 按名取用，勿改）
-from .fetch import _clear_stale_fetch_flags, _fetch_candidates, _fetch_missing, _is_timeout
+from .fetch import (_clear_stale_fetch_flags, _fetch_candidates, _fetch_missing,
+                    _is_timeout, _snapshot_backlog)
 from .store import _apply_content, _clean_options, _ingest_content, _store_bodies
 from .enrich import _categorize, _freshness_scan, _reclassify_all, _value_scan
 from .flags import _flag_value, _now_iso
@@ -24,7 +25,8 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
              dedupe_scan: bool = False,
              freshness_scan: bool = False, errata_scan: bool = False,
              purge_source: str | None = None,
-             purge_reason: str = "reingest") -> dict[str, Any]:
+             purge_reason: str = "reingest",
+             prune_missing: bool = False) -> dict[str, Any]:
     """同步入口。返回统计 dict（各源 created/updated/unchanged/archived/分类分布）。
 
     reclassify=True 时跳过源收集，只对库中全部 active 条目重跑分类。
@@ -37,6 +39,9 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
     entry_ids（变更工单-2026-10-27-fetch候选口径与定向补抓 §2.2）：定向模式，只处理
     点名条目（顺序按命令行，不看 status，用户点名即抓）；**不归档**（定向 ≠ 全量遍历，
     即使带 full 也跳过 archive_missing），默认触发补抓（受 fetch_limit 上限约束）。
+    prune_missing（2026-10-30 工单《收录与源脱节》）：默认 False——`--full` 不再把
+    「源里没见到」的条目置 archived，只记 `meta.source_state=missing`（消费面不受影响）；
+    显式 True 才走旧的删除检测（`datalayer.archive_missing`，只标不删）。
     """
     run_id = uuid.uuid4().hex[:16]
     kind = "sync_full" if full else "sync_incremental"
@@ -214,6 +219,25 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             dl.log_task(now, "sync", "auto_activate", ",".join(ok_ids),
                         {"count": len(ok_ids),
                          "source_type": _SOURCE_TYPE_BY_NAME.get(name, name)})
+        # 正文快照（2026-10-30 工单《收录与源脱节》§2.2）：本地文件源在分类之前把
+        # 正文读进 content_store——收录即自足，源文件以后被删也不影响检索/抽点。
+        # 只补「active 且无正文」的条目（本轮新建优先），pending 不抓（批次 68）；
+        # 每轮上限 snapshot_max_per_run，防首次全库读爆（断点续跑，下轮继续）。
+        snapshot_stats: dict[str, Any] = {}
+        if bool(sec.get("snapshot_on_sync", name == "folders")):
+            budget = int(sec.get("snapshot_max_per_run",
+                                 cfg.get("fetch.max_fetch_per_run", 50)))
+            backlog = _snapshot_backlog(dl, _SOURCE_TYPE_BY_NAME.get(name, name),
+                                        new_ids, pending_ids, budget)
+            snapshot_stats["snapshot_candidates"] = len(backlog)
+            if backlog:
+                fstats = _fetch_missing(cfg, dl, locators, backlog, len(backlog), run_id)
+                fetched_ids = fstats.pop("fetched_ids")
+                snapshot_stats.update({f"snapshot_{k}": v for k, v in fstats.items()})
+                if fetched_ids:
+                    # 用刷新后的条目进分类：正文先到，避免「空正文分类一次、抓到再分类」
+                    fresh = {eid: dl.get_entry(eid) for eid in fetched_ids}
+                    entries = [fresh.get(e.id) or e for e in entries]
         cat = _categorize(dl, semantics, cfg, entries, new_ids, updated_ids, run_id,
                           pending_ids=pending_ids)
         # 跨源判重（第三十八批）：新建/更新条目 canonical/hash 命中已有可消费
@@ -225,15 +249,23 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
             "entries": len(entries),
             "created": result.created, "updated": result.updated,
             "unchanged": result.unchanged, "deduped": deduped, **mail_stats,
-            **cat, **out.stats,
+            **cat, **out.stats, **snapshot_stats,
         }
-        if full and not entry_ids:
-            # 定向模式不归档（定向 ≠ 全量遍历）：只处理点名条目时「没出现」不代表
-            # 源里删了东西——照 full 口径会把整源其余条目错误归档。
-            archived = dl.archive_missing(
-                source_type=_SOURCE_TYPE_BY_NAME.get(name, name),
-                seen_ids={e.id for e in entries}, run_id=run_id)
-            src_stats["archived"] = len(archived)
+        stype = _SOURCE_TYPE_BY_NAME.get(name, name)
+        src_stats["archived"] = 0
+        if full and not entry_ids and limit is None:
+            # 2026-10-30 工单《收录与源脱节》：默认不再「源里没见到 → archived」——
+            # 源侧删除是外部常态（书签失效、邮件/文件被删），收录的条目不应跟着消失。
+            # 只记 meta.source_state=missing（消费面不加过滤）；要旧行为显式 --prune-missing。
+            if prune_missing:
+                archived = dl.archive_missing(
+                    source_type=stype,
+                    seen_ids={e.id for e in entries}, run_id=run_id)
+                src_stats["archived"] = len(archived)
+            else:
+                state = dl.mark_source_state(stype, {e.id for e in entries}, run_id)
+                src_stats["source_missing"] = state["missing"]
+                src_stats["source_cleared"] = state["cleared"]
         if fetch_limit or entry_ids:
             # 候选口径（工单 §2.1）：默认只取 active 且刚转正的排最前；定向模式按点名
             # 顺序不看 status。pending 由此天然排除（status 过滤），不再单列 pending_ids。
@@ -265,6 +297,11 @@ def run_sync(cfg: Any, dl: Any, locators: Any, semantics: Any, *,
         stats["targeted"] = {"requested": len(entry_ids),
                              "matched": len(entry_ids) - len(targeted_missing),
                              "missing_ids": sorted(targeted_missing)}
+
+    # 三层去重自动化（2026-10-30 工单《收录与源脱节》§2.3）：新条目本来就在入库时判重，
+    # 这里把**存量** canonical/content_hash 合并也变成每轮顺手跑（只标不删、可逆、幂等；
+    # dry_run 只出报告）。语义去重（点层 embedding + LLM）不在此列，仍在 `ksync --embed`。
+    stats["dedupe_scan"] = scan_and_merge(dl, dry_run=dry_run)
 
     # 老化删除出口（第六十三批，方案 §7.5）：ksync 顺手执行——冷却期满（30 天）
     # 的 rejected 条目物理删除（人裁过的才进冷却；引用计数回收 + 审计留痕）。

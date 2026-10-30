@@ -120,6 +120,13 @@ def register(ctx: AppCtx) -> APIRouter:
             dl.log_task(_now_iso(), "web", f"bulk_{action}", eid,
                         {"old_status": entry.status, "cooling_days": REJECT_COOLING_DAYS})
             done.append(eid)
+        if action == "activate" and done:
+            # 转正后补跑判重（2026-10-30 工单《收录与源脱节》§2.3）：pending 期间不参与
+            # 消费面合并，转正即归位；只标不删、幂等。
+            from ...pipeline.dedupe import dedupe_entries
+
+            live = [dl.get_entry(eid) for eid in done]
+            dedupe_entries(dl, [e for e in live if e is not None])
         return {"done": done, "missing": missing, "status": status,
                 "cooling_days": REJECT_COOLING_DAYS if action == "reject" else None}
 

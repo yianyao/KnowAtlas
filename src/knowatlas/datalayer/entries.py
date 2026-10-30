@@ -334,6 +334,60 @@ class _EntriesMixin:
                 )
         return missing
 
+    def mark_source_state(self, source_type: str, seen_ids: set[str],
+                          run_id: str) -> dict[str, int]:
+        """源存在性标记（2026-10-30 工单《收录与源脱节》）：只写 meta，**不碰 status**。
+
+        为什么不再用 `archive_missing`：源侧删除（书签失效、邮件/聊天记录清理、文件删除）
+        是外部世界的常态，不该让库里已收录的条目退出消费面。`archived` 从此只由用户
+        或显式 `ksync --prune-missing` 产生。
+
+        口径：
+        - 本次全量遍历未见且 `status='active'` → `meta.source_state="missing"` +
+          `meta.source_missing_at`（消费面不加过滤，仅 UI 可读）；
+        - 重新出现 → `json_remove` 两键（回到「源在」的默认态）；
+        - 只动 active：pending/rejected/archived 不参与，避免冲掉人工结论；
+        - 写一条 `task_log(action="source_missing")` 审计（有变化才写）。
+        """
+        now = _now()
+        scanned = missing_total = newly_marked = cleared = 0
+        with self.transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, meta FROM entries WHERE source_type=? AND status='active'",
+                (source_type,),
+            ).fetchall()
+            scanned = len(rows)
+            for r in rows:
+                meta = json.loads(r["meta"] or "{}")
+                if r["id"] not in seen_ids:
+                    missing_total += 1
+                    if meta.get("source_state") != "missing":
+                        conn.execute(
+                            "UPDATE entries SET meta=json_set(COALESCE(meta,'{}'),"
+                            "'$.source_state','missing','$.source_missing_at',?)"
+                            " WHERE id=?",
+                            (now, r["id"]),
+                        )
+                        newly_marked += 1
+                elif "source_state" in meta:
+                    conn.execute(
+                        "UPDATE entries SET meta=json_remove(COALESCE(meta,'{}'),"
+                        "'$.source_state','$.source_missing_at') WHERE id=?",
+                        (r["id"],),
+                    )
+                    cleared += 1
+            if newly_marked or cleared:
+                conn.execute(
+                    "INSERT INTO task_log (at, task_name, action, target, detail)"
+                    " VALUES (?,?,?,?,?)",
+                    (now, "ksync", "source_missing", source_type,
+                     json.dumps({"missing": missing_total, "newly_marked": newly_marked,
+                                 "cleared": cleared, "run_id": run_id},
+                                ensure_ascii=False)),
+                )
+        return {"scanned": scanned, "missing": missing_total,
+                "newly_marked": newly_marked, "cleared": cleared}
+
     def sweep_expired_rejections(self, cooling_days: int = REJECT_COOLING_DAYS, *,
                                  dry_run: bool = False,
                                  now: datetime | None = None) -> dict[str, Any]:

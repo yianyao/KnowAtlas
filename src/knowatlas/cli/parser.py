@@ -22,6 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     ksync = sub.add_parser("ksync", help="同步编排：书签等批量源 → 幂等入库 → 分类")
     ksync.add_argument("--full", action="store_true", help="全量遍历型源全量拉取")
+    ksync.add_argument("--prune-missing", action="store_true",
+                       help="旧删除检测（需配合 --full）：源里本次未见的 active 条目置 archived，"
+                            "只标不删；默认不做——源消失只记 meta.source_state=missing，"
+                            "收录的条目照常检索（2026-10-30 工单《收录与源脱节》）")
     ksync.add_argument("--incremental", action="store_true", help="游标型源增量")
     ksync.add_argument("--source", help="只同步指定源")
     ksync.add_argument("--dry-run", action="store_true", help="只探测源可达性，不写库")

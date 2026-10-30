@@ -106,7 +106,9 @@ timeout_seconds   = 20
 min_content_chars = 200
 rate_limit_qps    = 4
 max_retries       = 3
-on_sync           = false               # K1：同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
+# K1：网络源同步默认不抓正文；抓取只发生在 kadd / --fetch-limit
+# （本地 folder 源例外：snapshot_on_sync 默认 true，见 [sources.folders]）
+on_sync           = false
 max_fetch_per_run = 50
 # PDF 解析通道（0.2.0 批 97b）。实测：Hello-Agents（97.9 MB / 720 页）
 #   markitdown(pdfplumber) 25 分钟 vs PDFium 2.2 秒；厦大讲义（51 MB / 882 页）8 分钟未完 vs 1.2 秒。
@@ -197,6 +199,11 @@ paths = { edge = "", chrome = "" }      # 本机 Bookmarks 文件路径，填好
 # max_entries = 5000        # 单次采集条目上限（缺省 2000；<=0 表示不限）
 #   注意：撞上限会被静默截断，且未采集到的旧条目可能被误判为"源已删除"——
 #   收录大目录（如整块数据盘）时务必调大或置 0，并在同步报告里看 truncated 数
+# 正文快照（2026-10-30 工单《收录与源脱节》）：本地文件读一遍几乎零成本，
+# 同步时就把正文读进 content_store——源文件以后被删/移走也不影响检索与抽点。
+# 默认 true；每轮最多补 snapshot_max_per_run 条（首次大库可分多轮跑完，<=0=不限）。
+# snapshot_on_sync = true
+# snapshot_max_per_run = 50
 enabled = false
 roots = []                              # file:// 相对这些根
 

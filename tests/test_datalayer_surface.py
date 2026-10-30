@@ -37,7 +37,7 @@ EXPECTED = frozenset({
     "list_by_errata_flag", "list_by_freshness_flag", "list_by_link_status", "list_by_value_flag",
     "list_conv_messages", "list_entries", "list_points", "list_regress_cases",
     "list_task_log_actions", "list_threads", "log_task", "manual_category_paths",
-    "merge_categories", "merge_entries", "merge_meta", "merge_meta_of_point", "move_category",
+    "mark_source_state", "merge_categories", "merge_entries", "merge_meta", "merge_meta_of_point", "move_category",
     "move_thread_item", "point_kind_counts", "point_source_entry_ids", "point_source_map",
     "point_sources_of", "points_fact_check_counts", "points_fingerprint", "points_of_entries",
     "points_of_kind", "points_without_kind", "points_wrong_queue",

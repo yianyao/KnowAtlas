@@ -80,7 +80,7 @@ def test_collect_filters(cfg, folder_tree, tmp_path):
 
 
 def test_sync_folders_end_to_end(cfg, dl, registries, tmp_path, folder_tree):
-    """首跑入库 + 分类；二跑幂等；full 删除检测（文件删除 → archived）。"""
+    """首跑入库 + 分类；二跑幂等；full 默认只标 source_missing（不归档）。"""
     _enable(cfg, folder_tree)
     locators, semantics = registries
     stats = run_sync(cfg, dl, locators, semantics, full=True)
@@ -89,17 +89,42 @@ def test_sync_folders_end_to_end(cfg, dl, registries, tmp_path, folder_tree):
     # 二跑幂等
     stats2 = run_sync(cfg, dl, locators, semantics, full=True)
     assert stats2["sources"]["folders"]["unchanged"] == 5
-    # 删除一个文件 → full 同步归档
+    # 删除一个文件 → full 同步只标 missing，条目仍 active（2026-10-30 工单）
     (folder_tree / "ERP" / "进销存.xlsx").unlink()
     stats3 = run_sync(cfg, dl, locators, semantics, full=True)
-    assert stats3["sources"]["folders"]["archived"] == 1
+    src3 = stats3["sources"]["folders"]
+    assert src3["archived"] == 0 and src3["source_missing"] == 1
     gone = dl.find_by_locator("file://ERP/进销存.xlsx")
-    assert gone and gone[0].status == "archived"
+    assert gone and gone[0].status == "active"
+    assert gone[0].meta["source_state"] == "missing"
+    # 旧行为要显式 --prune-missing（只标不删）
+    stats4 = run_sync(cfg, dl, locators, semantics, full=True, prune_missing=True)
+    assert stats4["sources"]["folders"]["archived"] == 1
+    assert dl.get_entry(gone[0].id).status == "archived"
+
+
+def test_snapshot_on_sync_captures_body(cfg, dl, registries, tmp_path):
+    """folder 默认同步即抓正文（2026-10-30 工单 §2.2）：不传 --fetch-limit 也有全文。"""
+    root = tmp_path / "快照样本"
+    root.mkdir()
+    (root / "甲.md").write_text("# 甲\n\n这是甲的正文，够长以便入库。", encoding="utf-8", newline="\n")
+    (root / "乙.md").write_text("# 乙\n\n这是乙的正文，够长以便入库。", encoding="utf-8", newline="\n")
+    _enable(cfg, root)
+    locators, semantics = registries
+    stats = run_sync(cfg, dl, locators, semantics)
+    src = stats["sources"]["folders"]
+    assert src["snapshot_candidates"] == 2 and src["snapshot_fetched"] == 2
+    e = dl.get_entry(dl.find_by_locator("file://甲.md")[0].id)
+    assert e.content_hash and "这是甲的正文" in dl.get_content(e.content_hash)
+    # 二跑不重读（已抓过的不进 backlog）
+    stats2 = run_sync(cfg, dl, locators, semantics)
+    assert stats2["sources"]["folders"]["snapshot_candidates"] == 0
 
 
 def test_fetch_limit_reads_file_content(cfg, dl, registries, tmp_path, folder_tree):
     """--fetch-limit 对 file:// 条目生效：txt 直读正文入 content_store 并参与分类。"""
     _enable(cfg, folder_tree)
+    cfg._data["sources"]["folders"]["snapshot_on_sync"] = False  # 关闭自动快照，专测显式补抓
     locators, semantics = registries
     run_sync(cfg, dl, locators, semantics)
     stats = run_sync(cfg, dl, locators, semantics, fetch_limit=5)

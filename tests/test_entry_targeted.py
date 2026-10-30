@@ -117,6 +117,7 @@ def test_fetch_limit_budget_skips_rejected(cfg, dl, registries, folder_tree):
     fetch_status 一个没写——预算被老 rejected 吃掉。
     """
     _enable(cfg, folder_tree)
+    cfg._data["sources"]["folders"]["snapshot_on_sync"] = False  # 专测 --fetch-limit 预算口径
     locators, semantics = registries
     run_sync(cfg, dl, locators, semantics, full=True)
     junk = dl.find_by_locator("file://a-丢弃.txt")[0]
@@ -144,7 +145,8 @@ def test_sync_targeted_only_named_and_no_archive(cfg, dl, registries, folder_tre
 
     stats = run_sync(cfg, dl, locators, semantics, full=True, entry_ids=[keep.id])
     src = stats["sources"]["folders"]
-    assert src["entries"] == 1 and "archived" not in src
+    assert src["entries"] == 1 and src["archived"] == 0
+    assert "source_missing" not in src      # 定向 ≠ 全量遍历：不判源缺失
     assert stats["targeted"] == {"requested": 1, "matched": 1, "missing_ids": []}
     assert dl.get_entry(junk.id).status == "active"            # 未被错误归档
     assert dl.get_entry(keep.id).content_hash                   # 定向默认补抓

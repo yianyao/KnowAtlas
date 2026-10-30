@@ -240,6 +240,30 @@ def test_archive_missing(dl):
                and x["detail"].get("reason") == "missing_in_source" for x in logs)
 
 
+def test_mark_source_state_keeps_active(dl):
+    """2026-10-30 工单《收录与源脱节》：源消失只写 meta，不碰 status（消费面照旧）。"""
+    e1 = make_entry(source_key="https://e.com/1", locator="https://e.com/1")
+    e2 = make_entry(source_key="https://e.com/2", locator="https://e.com/2")
+    dl.upsert_entries([e1, e2])
+    st = dl.mark_source_state("manual", {e1.id}, "run0000000000010")
+    assert st["missing"] == 1 and st["newly_marked"] == 1
+    gone = dl.get_entry(e2.id)
+    assert gone.status == "active"                       # 不再 archived
+    assert gone.meta["source_state"] == "missing"
+    assert gone.meta.get("source_missing_at")
+    logs = dl.get_task_log()
+    assert any(x["action"] == "source_missing" and x["target"] == "manual" for x in logs)
+    # 重新出现 → 清键
+    st2 = dl.mark_source_state("manual", {e1.id, e2.id}, "run0000000000011")
+    assert st2["cleared"] == 1
+    back = dl.get_entry(e2.id)
+    assert "source_state" not in back.meta and "source_missing_at" not in back.meta
+    # 只动 active：archived 不参与标记
+    dl.set_status([e1.id], "archived")
+    st3 = dl.mark_source_state("manual", set(), "run0000000000012")
+    assert dl.get_entry(e1.id).meta.get("source_state") is None
+
+
 # ---- 契约校验 ----
 
 def test_rejects_unknown_source_type(dl):

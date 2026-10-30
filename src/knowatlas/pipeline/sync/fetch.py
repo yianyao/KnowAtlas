@@ -40,6 +40,29 @@ def _fetch_candidates(dl: Any, entries: list[Entry], *,
                           "fetch_promoted_first": len(first)}
 
 
+def _snapshot_backlog(dl: Any, source_type: str, new_ids: set[str],
+                      pending_ids: set[str] | frozenset[str],
+                      budget: int) -> list[Entry]:
+    """本地源正文快照的候选（2026-10-30 工单《收录与源脱节》§2.2）。
+
+    口径：该源 `status='active'` 且**没有 content_hash** 的条目（已抓过的不重读，
+    避免每轮全库重解析）；`pending` 不抓（批次 68：待审不烧抓取/LLM 费用）。
+    本轮新建的排最前——否则老 backlog 会吃光预算，新条目空正文进分类。
+    `budget<=0` 视为不限。
+    """
+    out: list[Entry] = []
+    for e in dl.list_entries(status="active", limit=10000):
+        if e.source_type != source_type or e.id in pending_ids:
+            continue
+        if e.content_hash:
+            continue
+        if (e.meta or {}).get("value_flag") == "not_knowledge":
+            continue  # 已判非知识/解析失败：别再每轮重试（用户否决 value_flag=ok 时自然会回来）
+        out.append(e)
+    out.sort(key=lambda e: e.id not in new_ids)  # 稳定排序：new 在前，其余保持 rowid 序
+    return out if budget <= 0 else out[:budget]
+
+
 def _fetch_missing(cfg: Any, dl: Any, locators: Any, entries: list[Entry],
                    limit: int, run_id: str) -> dict[str, int]:
     """K1 显式补抓：对缺正文的 http(s)/file 条目抓取，最多尝试 limit 次；失败计数不中断。

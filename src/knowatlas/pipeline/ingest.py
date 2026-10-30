@@ -102,6 +102,12 @@ def activate_pending(cfg: Any, dl: Any, *, dry_run: bool = False,
         dl.set_status(to_activate, "active")
         for eid in to_activate:
             dl.merge_meta(eid, {"auto_activated_at": now})
+        # 转正后补跑判重（2026-10-30 工单《收录与源脱节》§2.3）：pending 期间不参与
+        # 消费面合并，转正即归位；只标不删、幂等，命中已有主条目就挂上去。
+        from .dedupe import dedupe_entries
+
+        live = [dl.get_entry(eid) for eid in to_activate]
+        dedupe_entries(dl, [e for e in live if e is not None])
         dl.log_task(now, TASK, "auto_activate", ",".join(to_activate[:50]),
                     {"count": len(to_activate)})
     return stats
