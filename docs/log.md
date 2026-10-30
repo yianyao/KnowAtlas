@@ -4169,3 +4169,64 @@ baseline 147,059，effective **47.4%**（OK），2026-10-30T21:1x+08:00。
 
 <!-- HANDOFF {"at":"2026-10-30T21:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-215x-空快照清理--kauto-试跑-10-条111-点","draft":false,"goal":"按用户裁决删 5 份 315KB 空快照（data/backups 剩 3 份）+ kauto 试跑 10 条（--no-activate --no-aging，points 5,607→5,718，+111 点，6 条目出点，1 条 JSON 截断失败，约 2 分钟）","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② 裁决剩余 105 条是否继续抽点（≈15–25 分钟 / ~1,100 点）与是否先修 JSON 截断（改 max_tokens/分块，需方案）；③ 裁决待审 132 条是否 kauto --activate-only（dry-run：97 转正 / 35 拒绝）；④ 后端队列：真实 maildir、8.8 AI 会话 97d、emmx 剪枝","not_rerun":"kauto 试跑 run_id efb6518426144c55；dry-run c9159a395e724aea / 91887165a273479f；5 份空快照删除（已核验）；两轮 ksync --full；补推脚本；全量 pytest 851/1","schema":1,"session":"session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74","status":"OK","tokens":95000,"verify":"uv run python temp/probe_r34_state.py -> entries 483 / active 191 / pending 132 / points 5718 / content_store 187；uv run python temp/probe_folder_content.py -> active folder no content 1；curl.exe -s http://127.0.0.1:8420/api/search?q=被动型场景 -> points 含 51f66f560aced73a"} -->
 
+## 2026-10-30 22:0x–22:5x 抽点 6 批（+2,411 点）+ 待审 132 条激活（97/35）
+
+用户裁决：先「继续抽完剩余 105 条」，跑到一半看到真实体量后改为「先停在这里」；同时「现在跑激活」。
+
+### 抽点（6 批，全部 `--no-activate --no-aging`）
+
+每批 `kauto --limit 21`：预算优先留 1 个 KPE 名额给整本书，余 20 条走管道。
+
+| 批 | run_id | points | 备注 |
+|---|---|---|---|
+| 试跑 | `efb6518426144c55` | 111 | — |
+| 1 | `9bf857ec48c742db` | 423 | 1 条 JSON 截断 |
+| 2 | `a75055a4e5244a2b` | 298 | — |
+| 3 | `16525b76f994465e` | 215 | rejected 2 |
+| 4 | `1175007ff626477a` | 498 | — |
+| 5 | `4aaa76250c274bf1` | 310 | — |
+| 6 | `eba5d9f1b4b5464b` | 557 | rejected 1 |
+
+- 合计 **points 5,607 → 8,018（+2,411）**；status 全程只剩 active/archived/rejected（pending 未动，
+  直到最后的激活步）。
+- **2 条 JSON 截断失败**（同一形态，LLM 输出在 `points[]` 中途被切断）：`d94d56e31725688d`
+  （Chapter 21_ Exploration and Discovery）、`73551fd32266c5af`（如何用雪花写作法创作动人场景）。
+  两条各 0 点，靠 `_mark_failure` 留待重试；**根因待修（见下「待办 2」）**。
+
+### 为什么停下：剩余 KPE 是整本书
+
+dry-run 显示剩余 **7 条管道 + 19 条 KPE**；`temp/probe_remaining_route.py` 实测 19 条 KPE
+共 **5,049,124 字、约 833 个抽取块**（`心理学与生活` 127 块、`庄子集释` 117、`女性描写辞典` 106、
+`庄子今注今译` 83、`庄子注疏` 65…），与我先前「15–25 分钟 / ~1,100 点」的估算差一个量级。
+用户裁决 **先停**，19 本未跑（点层没有它们的任何半成品）。
+
+### 待审激活（已完成，用户点名「现在跑」）
+
+`kauto --activate-only`：candidates 132 → **activated 97 / rejected 35**
+（`portal_homepage` 19、`index_subdir` 16）。状态：active 191 → **288**、pending **0**、
+rejected 78 → **113**、archived 82 不变、entries 483 不变。
+
+- **副作用提醒**：这 97 条网页书签现在都是 active 且无点，**下一轮默认 `kauto` 会去抓这 97 个网页**
+  （网络 + LLM）；不想抓就先 `--no-activate` 也没用（已激活），要控制就显式 `--limit`。
+
+### 现场
+
+- `content_store` 187、`points` 8,018、`entries` 483（active 288 / archived 82 / rejected 113）。
+- serve（PID 13964）：`/api/session` 200、`/api/tree` 200、`/api/cloud` 200（首调 8.2 s，签名缓存重建）。
+
+### 待办（按序）
+
+1. 用户 Ctrl+F5 验收（点/词云/树都会变多）。
+2. **修 JSON 截断**（属业务代码改动，§1 先给方案）：候选做法 —— 调大抽取的 `max_tokens`、
+   或把单块字符数调小（`points.chunk_chars` 6000）、或在解析失败时把该块二分重试。
+3. 剩余 **19 本 KPE**（833 块）+ 7 条管道：等第 1–2 步之后再决定跑不跑。
+4. 后端队列不变：真实 maildir、8.8 AI 会话 97d、emmx 剪枝。
+
+### 不要重跑
+
+- 6 批抽点与试跑（run_id 见上表）；`kauto --activate-only`（已执行，pending 已清空）；
+- dry-run `c6ebc92c2d494b5d` / `dca5172b759b43b3` / `9700c7496ffb4b46`；
+- 两轮 `ksync --full`、5 份空快照删除、补推脚本、全量 pytest 851/1（本节零代码改动）。
+
+<!-- HANDOFF {"at":"2026-10-30T22:58:00+08:00","compactions":0,"doc":"docs/log.md#2026-10-30-220x225x-抽点-6-批2411-点--待审-132-条激活9735","draft":false,"goal":"6 批 kauto 抽点（--no-activate --no-aging，points 5,607→8,018，+2,411；2 条 JSON 截断失败）+ 待审激活 132→97 转正 / 35 拒绝（active 191→288，pending 0）；剩余 19 本 KPE（5.05M 字 / ~833 块）按用户裁决暂停","host":"dsh","kind":"handoff","next":"① 用户 Ctrl+F5 验收；② 修 JSON 截断（改 max_tokens/分块/失败二分重试）——业务代码改动，先给方案等确认；③ 剩余 19 本 KPE（833 块）与 7 条管道待裁决；④ 注意：97 条新 active 网页条目会在下一轮默认 kauto 被抓取；⑤ 后端队列：真实 maildir、8.8 AI 会话 97d、emmx 剪枝","not_rerun":"6 批 kauto + 试跑（run_id 9bf857ec48c742db/a75055a4e5244a2b/16525b76f994465e/1175007ff626477a/4aaa76250c274bf1/eba5d9f1b4b5464b/efb6518426144c55）；kauto --activate-only；dry-run c6ebc92c2d494b5d / dca5172b759b43b3 / 9700c7496ffb4b46；两轮 ksync --full；空快照删除；全量 pytest 851/1","schema":1,"session":"session-0eeb2d02-5eb8-4366-b9cf-43827f42ad74","status":"OK","tokens":120000,"verify":"uv run python temp/probe_r34_state.py -> entries 483 / active 288 / pending 0 / rejected 113 / points 8018 / content_store 187；uv run python temp/probe_remaining_route.py -> kpe books 19（833 块）/ pipeline 7；curl.exe -s -o NUL -w \"%{http_code}\" http://127.0.0.1:8420/api/tree -> 200"} -->
+
